@@ -13,13 +13,13 @@ def configure_runtime() -> None:
     vendor_dir = backend_dir / "vendor"
     if vendor_dir.exists():
         vendor_path = str(vendor_dir)
-        # Keep the bundled runtime deterministic. Mixing vendored torch with a
-        # host torchvision/site-package installation causes binary ABI failures.
-        sys.path[:] = [
-            path
-            for path in sys.path
-            if "site-packages" not in path or Path(path).resolve() == vendor_dir.resolve()
-        ]
+        # Keep the bundled runtime deterministic when frozen.
+        if getattr(sys, "frozen", False):
+            sys.path[:] = [
+                path
+                for path in sys.path
+                if "site-packages" not in path or Path(path).resolve() == vendor_dir.resolve()
+            ]
         if vendor_path in sys.path:
             sys.path.remove(vendor_path)
         sys.path.insert(0, vendor_path)
@@ -39,3 +39,21 @@ def configure_runtime() -> None:
         "NUMEXPR_NUM_THREADS",
     ):
         os.environ.setdefault(name, "1")
+
+    # Prevent transformers runtime version-check crashes caused by vendored huggingface_hub
+    import types
+    if "transformers.dependency_versions_check" not in sys.modules:
+        m = types.ModuleType("transformers.dependency_versions_check")
+        m.dep_version_check = lambda *args, **kwargs: None
+        m.require_version = lambda *args, **kwargs: None
+        m.require_version_core = lambda *args, **kwargs: None
+        sys.modules["transformers.dependency_versions_check"] = m
+
+    # Prevent torchvision ABI conflicts with torch from breaking transformers model loading
+    try:
+        import torchvision  # noqa: F401
+    except Exception:
+        sys.modules["torchvision"] = None
+        sys.modules["torchvision.transforms"] = None
+
+

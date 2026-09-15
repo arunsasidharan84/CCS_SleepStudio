@@ -893,4 +893,14 @@ def algorithm_availability() -> dict[str, dict[str, str | bool]]:
             results[key] = {"available": True, "message": "Ready"}
         except Exception as exc:
             results[key] = {"available": False, "message": str(exc)}
+    try:
+        if __package__:
+            from .scorer import check_sleepgpt_available
+        else:
+            from scorer import check_sleepgpt_available
+        check_sleepgpt_available()
+        results["sleepgpt"] = {"available": True, "message": "Ready"}
+    except Exception as exc:
+        results["sleepgpt"] = {"available": False, "message": str(exc)}
     return results
+

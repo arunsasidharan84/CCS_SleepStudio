@@ -69,6 +69,9 @@ jobs:
             --collect-all safetensors \
             --collect-all transformers \
             --collect-all usleep_api \
+            --hidden-import transformers.models.gpt2 \
+            --hidden-import transformers.models.gpt2.modeling_gpt2 \
+            --hidden-import transformers.models.gpt2.configuration_gpt2 \
             --add-data "backend/vendor/physioex/train/models/checkpoints:physioex/train/models/checkpoints" \
             --add-data "backend/models:backend/models" \
             --add-data "backend/sleepgpt-main:sleepgpt-main" \
@@ -227,6 +230,9 @@ jobs:
             --collect-all safetensors `
             --collect-all transformers `
             --collect-all usleep_api `
+            --hidden-import transformers.models.gpt2 `
+            --hidden-import transformers.models.gpt2.modeling_gpt2 `
+            --hidden-import transformers.models.gpt2.configuration_gpt2 `
             --add-data "backend/vendor/physioex/train/models/checkpoints;physioex/train/models/checkpoints" `
             --add-data "backend/models;backend/models" `
             --add-data "backend/sleepgpt-main;sleepgpt-main" `
@@ -380,6 +386,9 @@ jobs:
             --collect-all safetensors \
             --collect-all transformers \
             --collect-all usleep_api \
+            --hidden-import transformers.models.gpt2 \
+            --hidden-import transformers.models.gpt2.modeling_gpt2 \
+            --hidden-import transformers.models.gpt2.configuration_gpt2 \
             --add-data "backend/vendor/physioex/train/models/checkpoints:physioex/train/models/checkpoints" \
             --add-data "backend/models:backend/models" \
             --add-data "backend/sleepgpt-main:sleepgpt-main" \

@@ -22,6 +22,7 @@ import json
 import re
 import time
 import traceback
+import types
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -521,14 +522,7 @@ def stages_from_probabilities(prob: pd.DataFrame) -> list[str]:
     return [STAGE_BY_INDEX[int(index)] for index in ypred]
 
 
-def run_sleepgpt_correction(
-    prob: pd.DataFrame,
-    alpha: float = 0.1,
-    ngram: int = 30,
-    max_runtime_sec: float | None = 180.0,
-    log: LogFn = log_noop,
-) -> list[str] | None:
-    """Apply the local SleepGPT language-model correction if available."""
+def resolve_sleepgpt_paths() -> tuple[Path, Path, Path]:
     if getattr(sys, "frozen", False):
         sleepgpt_dir = Path(sys._MEIPASS) / "sleepgpt-main"
     else:
@@ -542,6 +536,57 @@ def run_sleepgpt_correction(
             sleepgpt_dir = workspace_root.parent / "CCS_SleepEEGAnalysis" / "sleepgpt-main"
     checkpoint = sleepgpt_dir / "output" / "gpt_shhs_pretrained" / "90_48_3_6.pth.tar"
     model_file = sleepgpt_dir / "models" / "gpt_transformers.py"
+    return sleepgpt_dir, checkpoint, model_file
+
+
+def _prepare_transformers_env() -> None:
+    # 1. Bypass transformers runtime version check (avoids failure when huggingface_hub is vendored)
+    if "transformers.dependency_versions_check" not in sys.modules:
+        m = types.ModuleType("transformers.dependency_versions_check")
+        m.dep_version_check = lambda *args, **kwargs: None
+        m.require_version = lambda *args, **kwargs: None
+        m.require_version_core = lambda *args, **kwargs: None
+        sys.modules["transformers.dependency_versions_check"] = m
+
+    # 2. Prevent torchvision C++ ABI mismatch from breaking vision-checking in transformers
+    try:
+        import torchvision  # noqa: F401
+    except Exception:
+        sys.modules["torchvision"] = None
+        sys.modules["torchvision.transforms"] = None
+
+
+
+
+def check_sleepgpt_available() -> None:
+    """Verify SleepGPT model files, dependencies, and checkpoint loading."""
+    sleepgpt_dir, checkpoint, model_file = resolve_sleepgpt_paths()
+    if not checkpoint.exists():
+        raise RuntimeError(f"SleepGPT checkpoint not found at {checkpoint}")
+    if not model_file.exists():
+        raise RuntimeError(f"SleepGPT model file not found at {model_file}")
+
+    if str(sleepgpt_dir) not in sys.path:
+        sys.path.insert(0, str(sleepgpt_dir))
+
+    _prepare_transformers_env()
+    import torch
+    import torchutils as utils
+    from models.gpt_transformers import GPTLM
+
+    model = GPTLM(vocab_size=6, max_seqlen=90, embed_dim=48, num_layers=3, num_heads=6)
+    utils.load_checkpoint(str(checkpoint), model, strict=False)
+
+
+def run_sleepgpt_correction(
+    prob: pd.DataFrame,
+    alpha: float = 0.1,
+    ngram: int = 30,
+    max_runtime_sec: float | None = 180.0,
+    log: LogFn = log_noop,
+) -> list[str] | None:
+    """Apply the local SleepGPT language-model correction if available."""
+    sleepgpt_dir, checkpoint, model_file = resolve_sleepgpt_paths()
 
     if not checkpoint.exists() or not model_file.exists():
         log("SleepGPT files were not found; keeping YASA consensus stages.")
@@ -551,13 +596,16 @@ def run_sleepgpt_correction(
         sys.path.insert(0, str(sleepgpt_dir))
 
     try:
+        _prepare_transformers_env()
         import torch
         torch.set_num_threads(1)
         import torch.nn.functional as F
         import torchutils as utils
         from models.gpt_transformers import GPTLM
     except Exception as exc:
-        log(f"Could not import SleepGPT dependencies: {exc}")
+        cause = getattr(exc, "__cause__", None)
+        detail = f"{exc} (caused by {cause})" if cause else str(exc)
+        log(f"Could not import SleepGPT dependencies: {detail}")
         return None
 
     try:

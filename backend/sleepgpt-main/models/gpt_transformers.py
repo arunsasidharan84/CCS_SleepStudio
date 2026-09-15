@@ -1,10 +1,18 @@
 
 import torch
 import torch.nn.functional as F
-from transformers import GPT2Config
-from transformers import GPT2Model
-from transformers import GPT2LMHeadModel
-from transformers import GPT2ForSequenceClassification
+try:
+    from transformers.models.gpt2.configuration_gpt2 import GPT2Config
+    from transformers.models.gpt2.modeling_gpt2 import (
+        GPT2Model,
+        GPT2LMHeadModel,
+        GPT2ForSequenceClassification,
+    )
+except (ImportError, ModuleNotFoundError):
+    from transformers import GPT2Config
+    from transformers import GPT2Model
+    from transformers import GPT2LMHeadModel
+    from transformers import GPT2ForSequenceClassification
 
 
 class GPT(GPT2Model):

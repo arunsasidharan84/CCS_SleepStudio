@@ -172,11 +172,11 @@ class UpdateChecker {
         if (redirectLoc != null) {
           final redirectReq = await client.getUrl(Uri.parse(redirectLoc));
           final redirectRes = await redirectReq.close();
-          return _saveDownloadStream(redirectRes, asset, onProgress);
+          return await _saveDownloadStream(redirectRes, asset, onProgress);
         }
       }
 
-      return _saveDownloadStream(response, asset, onProgress);
+      return await _saveDownloadStream(response, asset, onProgress);
     } finally {
       client.close();
     }

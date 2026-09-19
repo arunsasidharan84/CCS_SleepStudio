@@ -56,4 +56,42 @@ def configure_runtime() -> None:
         sys.modules["torchvision"] = None
         sys.modules["torchvision.transforms"] = None
 
+    # ── numpy / scipy compatibility shims ─────────────────────────────────────
+    # Must run before any algorithm code is imported so that packages
+    # built against older numpy/scipy APIs work without modification.
+    try:
+        import numpy as np
+        if not hasattr(np, "trapz"):
+            np.trapz = np.trapezoid  # type: ignore[attr-defined]
+        if not hasattr(np, "in1d"):
+            np.in1d = np.isin  # type: ignore[attr-defined]
+        for _alias in ("bool", "int", "float", "complex", "object", "str"):
+            if not hasattr(np, _alias):
+                _bi = __builtins__ if isinstance(__builtins__, dict) else vars(__builtins__)
+                setattr(np, _alias, _bi.get(_alias))
+    except Exception:
+        pass
 
+    try:
+        import scipy.integrate as _si
+        if not hasattr(_si, "simps"):
+            _si.simps = _si.simpson  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    # ── ccstools path discovery ───────────────────────────────────────────────
+    # Finds the ccstools submodule in both frozen (PyInstaller) and dev contexts.
+    backend_dir = Path(__file__).resolve().parent
+    _ccstools_candidates = [
+        # PyInstaller bundle: ccstools data is unpacked into _MEIPASS
+        Path(getattr(sys, "_MEIPASS", "")),
+        # Dev: submodule at repo-root/vendor/ccstools
+        backend_dir.parent / "vendor" / "ccstools",
+        backend_dir / "vendor" / "ccstools",
+    ]
+    for _cc in _ccstools_candidates:
+        if _cc and (_cc / "ccstools" / "__init__.py").exists():
+            _cc_str = str(_cc.resolve())
+            if _cc_str not in sys.path:
+                sys.path.insert(0, _cc_str)
+            break

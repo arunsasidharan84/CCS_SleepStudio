@@ -3,7 +3,7 @@ pandas
 scipy
 scikit-learn
 lightgbm
-mne
+mne>=1.6.0
 yasa
 antropy
 joblib
@@ -15,3 +15,9 @@ gssc
 physioex
 braindecode
 lunapi
+lspopt
+mne-bids
+mne-icalabel
+autoreject
+pyedflib
+mne-connectivity

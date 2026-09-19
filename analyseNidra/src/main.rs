@@ -12,15 +12,20 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::time::Instant;
 
+const VERSION: &str = "0.1.0";
+
 const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
 [core.json|-] [pac.json|-] [slow-waves.json|-] [spindles.json|-] [regional.csv|-] \
-[--channels F3,F4,C3,C4,O1,O2] [--references M1,M2] [--lights-off-sec SEC] [--lights-on-sec SEC]";
+[--out-dir <path>] [--channels F3,F4,C3,C4,O1,O2] [--references M1,M2] \
+[--lights-off-sec SEC] [--lights-on-sec SEC] [--version]";
 
 #[derive(Debug)]
 struct Cli {
     edf_path: PathBuf,
     scoring_path: PathBuf,
+    /// Positional output paths; length is always 5 after parsing (may be None).
     outputs: Vec<Option<PathBuf>>,
+    out_dir: Option<PathBuf>,
     channels: Vec<String>,
     references: Vec<String>,
     lights_off_seconds: Option<f64>,
@@ -77,9 +82,13 @@ fn parse_cli(arguments: impl IntoIterator<Item = OsString>) -> Result<Cli> {
     let mut references = None;
     let mut lights_off_seconds = None;
     let mut lights_on_seconds = None;
+    let mut out_dir: Option<PathBuf> = None;
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
-        if argument == "--channels" {
+        if argument == "--version" {
+            println!("analyse-nidra {VERSION}");
+            std::process::exit(0);
+        } else if argument == "--channels" {
             let value = arguments
                 .next()
                 .context("--channels requires a comma-separated value")?;
@@ -99,6 +108,11 @@ fn parse_cli(arguments: impl IntoIterator<Item = OsString>) -> Result<Cli> {
                 .next()
                 .context("--lights-on-sec requires a value")?;
             lights_on_seconds = Some(parse_seconds(value, "--lights-on-sec")?);
+        } else if argument == "--out-dir" {
+            let value = arguments
+                .next()
+                .context("--out-dir requires a path argument")?;
+            out_dir = Some(PathBuf::from(value));
         } else if let Some(value) = argument
             .to_str()
             .and_then(|value| value.strip_prefix("--channels="))
@@ -119,6 +133,11 @@ fn parse_cli(arguments: impl IntoIterator<Item = OsString>) -> Result<Cli> {
             .and_then(|value| value.strip_prefix("--lights-on-sec="))
         {
             lights_on_seconds = Some(parse_seconds(value.into(), "--lights-on-sec")?);
+        } else if let Some(value) = argument
+            .to_str()
+            .and_then(|value| value.strip_prefix("--out-dir="))
+        {
+            out_dir = Some(PathBuf::from(value));
         } else if argument.to_string_lossy().starts_with("--") {
             bail!("unknown option: {}", argument.to_string_lossy());
         } else {
@@ -128,6 +147,16 @@ fn parse_cli(arguments: impl IntoIterator<Item = OsString>) -> Result<Cli> {
     if !(2..=7).contains(&positionals.len()) {
         bail!(USAGE);
     }
+
+    // Friendly hint when no output paths have been given.
+    if positionals.len() == 2 && out_dir.is_none() {
+        eprintln!(
+            "note: no output files specified and --out-dir not set; \
+pass output paths after the scoring file or use --out-dir <path> \
+to write results automatically"
+        );
+    }
+
     let edf_path = PathBuf::from(positionals.remove(0));
     let scoring_path = PathBuf::from(positionals.remove(0));
     let optional_path = |value: OsString| (value != "-").then(|| PathBuf::from(value));
@@ -136,10 +165,35 @@ fn parse_cli(arguments: impl IntoIterator<Item = OsString>) -> Result<Cli> {
         .map(optional_path)
         .collect::<Vec<_>>();
     outputs.resize_with(5, || None);
+
+    // Apply --out-dir defaults for any output slot that was not explicitly provided.
+    if let Some(ref dir) = out_dir {
+        let stem = edf_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("recording");
+
+        // (slot index, name suffix, extension)
+        let slots: &[(usize, &str, &str)] = &[
+            (0, "core", "json"),
+            (1, "pac", "json"),
+            (2, "slow_waves", "json"),
+            (3, "spindles", "json"),
+            (4, "regional", "csv"),
+        ];
+
+        for &(idx, name, ext) in slots {
+            if outputs[idx].is_none() {
+                outputs[idx] = Some(dir.join(format!("{stem}_analyse_{name}.{ext}")));
+            }
+        }
+    }
+
     Ok(Cli {
         edf_path,
         scoring_path,
         outputs,
+        out_dir,
         channels: channels.unwrap_or_else(|| {
             analyse_nidra::DEFAULT_CHANNELS
                 .iter()
@@ -167,6 +221,17 @@ fn main() -> Result<()> {
     let slow_wave_output_path = outputs.next().flatten();
     let spindle_output_path = outputs.next().flatten();
     let regional_output_path = outputs.next().flatten();
+
+    // Create --out-dir if it was supplied and does not yet exist.
+    if let Some(ref dir) = cli.out_dir {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("creating output directory {}", dir.display()))?;
+    }
+
+    // Validate scoring file up-front with a clear error message.
+    if !scoring_path.exists() {
+        bail!("scoring file not found: {}", scoring_path.display());
+    }
 
     let started = Instant::now();
     let recording = pipeline::load(
@@ -369,5 +434,63 @@ mod tests {
         .unwrap();
         assert_eq!(cli.lights_off_seconds, Some(120.5));
         assert_eq!(cli.lights_on_seconds, Some(3600.0));
+    }
+
+    /// --out-dir sets all 5 output slots when no positional output paths are given.
+    #[test]
+    fn cli_out_dir_overrides_defaults() {
+        let cli = parse_cli(
+            [
+                "my_recording.edf",
+                "scoring.json",
+                "--out-dir",
+                "/tmp/out",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap();
+
+        let expected = [
+            "/tmp/out/my_recording_analyse_core.json",
+            "/tmp/out/my_recording_analyse_pac.json",
+            "/tmp/out/my_recording_analyse_slow_waves.json",
+            "/tmp/out/my_recording_analyse_spindles.json",
+            "/tmp/out/my_recording_analyse_regional.csv",
+        ];
+
+        for (slot, exp) in cli.outputs.iter().zip(expected.iter()) {
+            assert_eq!(
+                slot.as_deref(),
+                Some(std::path::Path::new(exp)),
+                "mismatch for expected path {exp}"
+            );
+        }
+    }
+
+    /// A positional output path beats --out-dir for the same slot.
+    #[test]
+    fn cli_positional_wins_over_out_dir() {
+        let cli = parse_cli(
+            [
+                "my_recording.edf",
+                "scoring.json",
+                "explicit_core.json", // slot 0 — should NOT be overridden
+                "--out-dir",
+                "/tmp/out",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap();
+
+        // Slot 0: explicit positional wins.
+        assert_eq!(
+            cli.outputs[0].as_deref(),
+            Some(std::path::Path::new("explicit_core.json"))
+        );
+        // Slot 1: falls back to --out-dir.
+        assert_eq!(
+            cli.outputs[1].as_deref(),
+            Some(std::path::Path::new("/tmp/out/my_recording_analyse_pac.json"))
+        );
     }
 }

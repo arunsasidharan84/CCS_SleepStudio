@@ -4418,6 +4418,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         const PlatformProvidedMenuItem(type: PlatformProvidedMenuItemType.about)
       else
         const PlatformMenuItem(label: 'About CCS Sleep Studio'),
+      PlatformMenuItem(
+        label: 'Check for Updates…',
+        onSelected: _checkForUpdates,
+      ),
       if (PlatformProvidedMenuItem.hasMenu(PlatformProvidedMenuItemType.quit))
         const PlatformProvidedMenuItem(type: PlatformProvidedMenuItemType.quit),
     ];
@@ -4611,6 +4615,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             onSelected: _openEdfUtilitiesDialog,
           ),
           PlatformMenuItem(
+            label: 'Epoch-Level Preprocessing (ccstools / GEDAI)…',
+            onSelected: _openPreprocessDialog,
+          ),
+          PlatformMenuItem(
             label: 'Export Sleep Report (PDF)',
             onSelected: _exportSleepReport,
           ),
@@ -4728,6 +4736,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       PlatformMenu(
         label: 'Help',
         menus: [
+          PlatformMenuItem(
+            label: 'Check for Updates…',
+            onSelected: _checkForUpdates,
+          ),
           PlatformMenuItem(
             label: 'Signal selection box  [Ctrl+H]',
             onSelected: _showSelectionHelp,
@@ -6285,6 +6297,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                         onToggleWavelet: _toggleWavelet,
                         onOverlayChanged: _setHypnogramOverlayMode,
                         onOpenMarkers: _openMarkersDialog,
+                        onPreprocess: _openPreprocessDialog,
                         onToggleVideo: () {
                           if (_videoController == null) {
                             _openVideoFile();
@@ -6550,6 +6563,7 @@ class _Toolbar extends StatefulWidget {
     required this.onToggleWavelet,
     this.onOverlayChanged,
     this.onOpenMarkers,
+    this.onPreprocess,
     this.onToggleVideo,
     this.onTimeUnitChanged,
     this.videoLoaded = false,
@@ -6557,6 +6571,7 @@ class _Toolbar extends StatefulWidget {
   });
 
   final EegViewport? viewport;
+  final VoidCallback? onPreprocess;
   final void Function(int, [bool]) onJump;
   final ValueChanged<bool>? onFocusChanged;
   final VoidCallback onPrevious;
@@ -6980,6 +6995,12 @@ class _ToolbarState extends State<_Toolbar> {
                 tooltip: 'Open Markers & Annotations Manager [M]',
                 enabled: enabled,
                 onPressed: widget.onOpenMarkers ?? () {},
+              ),
+              _ToolButton(
+                label: 'preprocess',
+                tooltip: 'Epoch-Level Preprocessing (ccstools / GEDAI)…',
+                enabled: true,
+                onPressed: widget.onPreprocess ?? () {},
               ),
               _ToolButton(
                 label: widget.videoLoaded

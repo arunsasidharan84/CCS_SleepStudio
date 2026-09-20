@@ -2,7 +2,7 @@
 [Setup]
 AppId={{D1A39B10-E24F-465B-B91C-7B9F01194F66}
 AppName=CCS Sleep Studio Lite
-AppVersion=1.13.1
+AppVersion=1.14.0
 DefaultDirName={userappdata}\CCSSleepStudio-lite
 DefaultGroupName=CCS Sleep Studio Lite
 OutputDir=..\dist

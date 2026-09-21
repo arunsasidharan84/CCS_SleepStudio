@@ -104,14 +104,15 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   final List<Map<String, String>> _batchAnalysePairs = [];
   final List<Map<String, String>> _batchComparisonPairs = [];
   final TextEditingController _batchAnalyseEegController =
-      TextEditingController(text: 'AF7,AF8');
+      TextEditingController(text: '');
   final TextEditingController _batchAnalyseRefController =
-      TextEditingController(text: 'PPG');
+      TextEditingController(text: '');
   final TextEditingController _batchScoringPostfixController =
       TextEditingController(text: '_scoring');
   final TextEditingController _batchAnalyseOutDirController =
       TextEditingController();
   List<String> _lastAnalyseRegionalFiles = const [];
+  List<String> _batchAnalyseAvailableChannels = const [];
 
   // Video Sync State
   String? _videoPath;
@@ -1907,6 +1908,184 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   Future<void> _runAnalyseNidraBatch() async {
     _tabController.animateTo(1);
+  }
+
+  Future<void> _autoInspectBatchAnalyseChannels() async {
+    final validEeg = _batchAnalysePairs
+        .map((p) => p['eegPath'] ?? '')
+        .firstWhere((p) => p.isNotEmpty, orElse: () => '');
+    if (validEeg.isEmpty) return;
+
+    final channels = await extractRecordingChannels(validEeg);
+    if (channels.isEmpty || !mounted) return;
+
+    setState(() {
+      _batchAnalyseAvailableChannels = channels;
+      // If EEG channel field is empty, populate with detected EEG channels from 1st file
+      final currentEeg = _batchAnalyseEegController.text.trim();
+      if (currentEeg.isEmpty || currentEeg == 'AF7,AF8') {
+        final eegs = channels.where(isLikelyEegChannel).toList();
+        if (eegs.isNotEmpty) {
+          _batchAnalyseEegController.text = eegs.join(',');
+        } else {
+          _batchAnalyseEegController.text = channels.take(6).join(',');
+        }
+      }
+      // If Reference channel field is empty or old default 'PPG', check if PPG or M1/M2 or A1/A2 is in channels
+      final currentRef = _batchAnalyseRefController.text.trim();
+      if (currentRef.isEmpty || currentRef == 'PPG') {
+        final lowerChans = channels.map((c) => c.toLowerCase()).toList();
+        if (lowerChans.contains('ppg')) {
+          _batchAnalyseRefController.text = channels[lowerChans.indexOf('ppg')];
+        } else if (lowerChans.contains('m1') && lowerChans.contains('m2')) {
+          _batchAnalyseRefController.text = 'M1,M2';
+        } else if (lowerChans.contains('a1') && lowerChans.contains('a2')) {
+          _batchAnalyseRefController.text = 'A1,A2';
+        } else if (currentRef == 'PPG') {
+          _batchAnalyseRefController.text = '';
+        }
+      }
+    });
+  }
+
+  Future<void> _openBatchAnalyseChannelSelector() async {
+    final validEeg = _batchAnalysePairs
+        .map((p) => p['eegPath'] ?? '')
+        .firstWhere((p) => p.isNotEmpty, orElse: () => '');
+    if (validEeg.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please add EEG files first to extract available channels from the 1st recording.'),
+        ),
+      );
+      return;
+    }
+
+    List<String> available = _batchAnalyseAvailableChannels;
+    if (available.isEmpty) {
+      available = await extractRecordingChannels(validEeg);
+      if (mounted && available.isNotEmpty) {
+        setState(() => _batchAnalyseAvailableChannels = available);
+      }
+    }
+
+    if (available.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not read channel labels from ${_basename(validEeg)}. You can type channels manually.'),
+          ),
+        );
+      }
+      return;
+    }
+
+    final currentSelected = _batchAnalyseEegController.text
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+
+    if (!mounted) return;
+    final selected = await showChannelSelectionDialog(
+      context: context,
+      title: 'Select EEG Channels for AnalyseNidra',
+      recordingPath: validEeg,
+      availableChannels: available,
+      initialSelectedChannels: currentSelected,
+    );
+
+    if (selected != null && mounted) {
+      setState(() {
+        _batchAnalyseEegController.text = selected.join(',');
+      });
+    }
+  }
+
+  Future<void> _openBatchAnalyseRefSelector() async {
+    final validEeg = _batchAnalysePairs
+        .map((p) => p['eegPath'] ?? '')
+        .firstWhere((p) => p.isNotEmpty, orElse: () => '');
+    if (validEeg.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please add EEG files first to extract available channels.'),
+        ),
+      );
+      return;
+    }
+
+    List<String> available = _batchAnalyseAvailableChannels;
+    if (available.isEmpty) {
+      available = await extractRecordingChannels(validEeg);
+      if (mounted && available.isNotEmpty) {
+        setState(() => _batchAnalyseAvailableChannels = available);
+      }
+    }
+
+    if (available.isEmpty) return;
+
+    final currentSelected = _batchAnalyseRefController.text
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+
+    if (!mounted) return;
+    final selected = await showChannelSelectionDialog(
+      context: context,
+      title: 'Select Reference Channel(s) for AnalyseNidra',
+      recordingPath: validEeg,
+      availableChannels: available,
+      initialSelectedChannels: currentSelected,
+    );
+
+    if (selected != null && mounted) {
+      setState(() {
+        _batchAnalyseRefController.text = selected.join(',');
+      });
+    }
+  }
+
+  Future<void> _openBatchAutoscoreChannelSelector() async {
+    if (_batchStagingFiles.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please add recording files first to extract channels from the 1st recording.'),
+        ),
+      );
+      return;
+    }
+    final firstFile = _batchStagingFiles.first;
+    final available = await extractRecordingChannels(firstFile);
+    if (available.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not extract channels from ${_basename(firstFile)}. You can type channels manually.'),
+          ),
+        );
+      }
+      return;
+    }
+    final currentSelected = _batchStagingEegController.text
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    if (!mounted) return;
+    final selected = await showChannelSelectionDialog(
+      context: context,
+      title: 'Select EEG Channels for AutoscoreNidra',
+      recordingPath: firstFile,
+      availableChannels: available,
+      initialSelectedChannels: currentSelected,
+    );
+    if (selected != null && mounted) {
+      setState(() {
+        _batchStagingEegController.text = selected.join(',');
+      });
+    }
   }
 
   void _runAnalyseNidraJobs(
@@ -5405,15 +5584,39 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                               style: TextStyle(fontWeight: FontWeight.bold),
                             ),
                             const SizedBox(height: 8),
-                            TextFormField(
-                              key: const Key('batch-autoscore-eeg-channels'),
-                              controller: _batchStagingEegController,
-                              decoration: const InputDecoration(
-                                labelText: 'EEG Channels (comma-separated)',
-                                hintText: 'e.g. AF7,AF8 or F3,F4',
-                                isDense: true,
-                                border: OutlineInputBorder(),
-                              ),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextFormField(
+                                    key: const Key('batch-autoscore-eeg-channels'),
+                                    controller: _batchStagingEegController,
+                                    decoration: InputDecoration(
+                                      labelText: 'EEG Channels (comma-separated)',
+                                      hintText: 'e.g. AF7,AF8 or F3,F4',
+                                      isDense: true,
+                                      border: const OutlineInputBorder(),
+                                      suffixIcon: IconButton(
+                                        icon: const Icon(Icons.playlist_add_check),
+                                        tooltip: 'Select channels from first recording…',
+                                        onPressed: _openBatchAutoscoreChannelSelector,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                if (_batchStagingFiles.isNotEmpty) ...[
+                                  const SizedBox(width: 8),
+                                  ElevatedButton.icon(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.purple.shade600,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+                                    ),
+                                    icon: const Icon(Icons.tune, size: 18),
+                                    label: const Text('Select from 1st File…'),
+                                    onPressed: _openBatchAutoscoreChannelSelector,
+                                  ),
+                                ],
+                              ],
                             ),
                             const SizedBox(height: 8),
                             TextFormField(
@@ -5670,6 +5873,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                         'scoringPath': '',
                                       });
                                     });
+                                    _autoInspectBatchAnalyseChannels();
                                   }
                                 },
                               ),
@@ -5740,6 +5944,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                           });
                                         }
                                       });
+                                      _autoInspectBatchAnalyseChannels();
                                     }
                                   }
                                 },
@@ -5820,6 +6025,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                             }
                                           }
                                         });
+                                        _autoInspectBatchAnalyseChannels();
                                       }
                                     }
                                   }
@@ -5853,6 +6059,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                     : () {
                                         setState(() {
                                           _batchAnalysePairs.clear();
+                                          _batchAnalyseAvailableChannels = const [];
                                         });
                                       },
                               ),
@@ -5869,27 +6076,124 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                             ),
                           ),
                           const SizedBox(height: 16),
-                          TextFormField(
-                            controller: _batchAnalyseEegController,
-                            decoration: const InputDecoration(
-                              labelText:
-                                  'EEG Channels for analysis (comma-separated)',
-                              hintText: 'e.g. AF7,AF8',
-                              isDense: true,
-                              border: OutlineInputBorder(),
-                            ),
+                          // EEG Channels
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: TextFormField(
+                                  controller: _batchAnalyseEegController,
+                                  decoration: InputDecoration(
+                                    labelText: 'EEG Channels for analysis (comma-separated)',
+                                    hintText: 'e.g. F3,F4,C3,C4 (or click Select from 1st File)',
+                                    isDense: true,
+                                    border: const OutlineInputBorder(),
+                                    suffixIcon: IconButton(
+                                      icon: const Icon(Icons.playlist_add_check),
+                                      tooltip: 'Select channels from first recording…',
+                                      onPressed: _openBatchAnalyseChannelSelector,
+                                    ),
+                                  ),
+                                  onChanged: (_) => setState(() {}),
+                                ),
+                              ),
+                              if (_batchAnalysePairs.isNotEmpty) ...[
+                                const SizedBox(width: 8),
+                                ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.blue.shade600,
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+                                  ),
+                                  icon: const Icon(Icons.tune, size: 18),
+                                  label: const Text('Select from 1st File…'),
+                                  onPressed: _openBatchAnalyseChannelSelector,
+                                ),
+                              ],
+                            ],
                           ),
+                          if (_batchAnalysePairs.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              'Available channels will come from 1st recording: ${_basename(_batchAnalysePairs.first['eegPath'] ?? '')}',
+                              style: TextStyle(fontSize: 11, color: Colors.grey.shade600, fontStyle: FontStyle.italic),
+                            ),
+                          ],
+                          if (_batchAnalyseEegController.text.trim().isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 4,
+                              children: _batchAnalyseEegController.text
+                                  .split(',')
+                                  .map((s) => s.trim())
+                                  .where((s) => s.isNotEmpty)
+                                  .map((ch) => Chip(
+                                        label: Text(ch, style: const TextStyle(fontSize: 12)),
+                                        visualDensity: VisualDensity.compact,
+                                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                                        deleteIconColor: Colors.red.shade400,
+                                        onDeleted: () {
+                                          setState(() {
+                                            final updated = _batchAnalyseEegController.text
+                                                .split(',')
+                                                .map((s) => s.trim())
+                                                .where((s) => s.isNotEmpty && s != ch)
+                                                .toList();
+                                            _batchAnalyseEegController.text = updated.join(',');
+                                          });
+                                        },
+                                      ))
+                                  .toList(),
+                            ),
+                          ],
                           const SizedBox(height: 16),
+                          // Reference Channels
                           TextFormField(
                             controller: _batchAnalyseRefController,
-                            decoration: const InputDecoration(
-                              labelText:
-                                  'Reference Channels for analysis (comma-separated)',
-                              hintText: 'e.g. PPG',
+                            decoration: InputDecoration(
+                              labelText: 'Reference Channels for analysis (comma-separated, optional)',
+                              hintText: 'e.g. PPG or M1,M2 (leave blank if none)',
                               isDense: true,
-                              border: OutlineInputBorder(),
+                              border: const OutlineInputBorder(),
+                              suffixIcon: IconButton(
+                                icon: const Icon(Icons.playlist_add_check),
+                                tooltip: 'Select reference channel from first recording…',
+                                onPressed: _openBatchAnalyseRefSelector,
+                              ),
                             ),
+                            onChanged: (_) => setState(() {}),
                           ),
+                          if (_batchAnalyseRefController.text.trim().isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 4,
+                              children: _batchAnalyseRefController.text
+                                  .split(',')
+                                  .map((s) => s.trim())
+                                  .where((s) => s.isNotEmpty)
+                                  .map((ch) => Chip(
+                                        label: Text(ch, style: const TextStyle(fontSize: 12)),
+                                        visualDensity: VisualDensity.compact,
+                                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                                        deleteIconColor: Colors.red.shade400,
+                                        onDeleted: () {
+                                          setState(() {
+                                            final updated = _batchAnalyseRefController.text
+                                                .split(',')
+                                                .map((s) => s.trim())
+                                                .where((s) => s.isNotEmpty && s != ch)
+                                                .toList();
+                                            _batchAnalyseRefController.text = updated.join(',');
+                                          });
+                                        },
+                                      ))
+                                  .toList(),
+                            ),
+                          ],
                           const SizedBox(height: 16),
                           Row(
                             children: [
@@ -5958,21 +6262,28 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                         );
                                       }).toList();
 
-                                      final chans = _batchAnalyseEegController
-                                          .text
-                                          .split(',')
-                                          .map((e) => e.trim())
-                                          .where((e) => e.isNotEmpty)
-                                          .toList();
-                                      final refs = _batchAnalyseRefController
-                                          .text
-                                          .split(',')
-                                          .map((e) => e.trim())
-                                          .where((e) => e.isNotEmpty)
-                                          .toList();
-                                      final outDir = _batchAnalyseOutDirController.text.trim().isEmpty
-                                          ? null
-                                          : _batchAnalyseOutDirController.text.trim();
+                                       final chans = _batchAnalyseEegController
+                                           .text
+                                           .split(',')
+                                           .map((e) => e.trim())
+                                           .where((e) => e.isNotEmpty)
+                                           .toList();
+                                       if (chans.isEmpty) {
+                                         _setStatus(
+                                           'Please select or specify at least one EEG channel for analysis.',
+                                         );
+                                         _openBatchAnalyseChannelSelector();
+                                         return;
+                                       }
+                                       final refs = _batchAnalyseRefController
+                                           .text
+                                           .split(',')
+                                           .map((e) => e.trim())
+                                           .where((e) => e.isNotEmpty)
+                                           .toList();
+                                       final outDir = _batchAnalyseOutDirController.text.trim().isEmpty
+                                           ? null
+                                           : _batchAnalyseOutDirController.text.trim();
 
                                       _runAnalyseNidraJobs(jobs, chans, refs, outputDir: outDir);
                                     },

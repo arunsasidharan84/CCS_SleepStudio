@@ -14,6 +14,13 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
+
+warnings.filterwarnings("ignore", message="DataFrame is highly fragmented")
+warnings.filterwarnings("ignore", message="Using padding='same'")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 if __package__:
     from .runtime_bootstrap import configure_runtime
@@ -26,19 +33,30 @@ import argparse
 import json
 import re
 import traceback
-import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
 import mne
 
-warnings.filterwarnings("ignore", message="DataFrame is highly fragmented")
-warnings.filterwarnings("ignore", message="Using padding='same'")
-
 # ---------------------------------------------------------------------------
 # ccstools import — optional so we can give a friendly error message
 # ---------------------------------------------------------------------------
+# Stub optional external dependencies from ccstools.eegfeatures (like fooof,
+# pycatch22, etc.) if they are not installed in the runtime environment.
+# Preprocessing only requires MNE, autoreject, and GEDAI, so missing spectral
+# feature extraction packages must not prevent importing ccstools.
+from unittest.mock import MagicMock
+
+for _pkg in (
+    "fooof",
+    "fooof.analysis",
+    "fooof.analysis.error",
+    "pycatch22",
+):
+    if _pkg not in sys.modules:
+        sys.modules[_pkg] = MagicMock()
+
 try:
     from ccstools.ccs_eeg.pipeline import run_ccs_pipeline  # type: ignore[import]
 

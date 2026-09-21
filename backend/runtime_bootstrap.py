@@ -65,10 +65,12 @@ def configure_runtime() -> None:
             np.trapz = np.trapezoid  # type: ignore[attr-defined]
         if not hasattr(np, "in1d"):
             np.in1d = np.isin  # type: ignore[attr-defined]
-        for _alias in ("bool", "int", "float", "complex", "object", "str"):
-            if not hasattr(np, _alias):
-                _bi = __builtins__ if isinstance(__builtins__, dict) else vars(__builtins__)
-                setattr(np, _alias, _bi.get(_alias))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", (FutureWarning, UserWarning, DeprecationWarning))
+            for _alias in ("bool", "int", "float", "complex", "object", "str"):
+                if not hasattr(np, _alias):
+                    _bi = __builtins__ if isinstance(__builtins__, dict) else vars(__builtins__)
+                    setattr(np, _alias, _bi.get(_alias))
     except Exception:
         pass
 

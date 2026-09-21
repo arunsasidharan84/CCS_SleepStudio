@@ -21,3 +21,5 @@ mne-icalabel
 autoreject
 pyedflib
 mne-connectivity
+fooof
+

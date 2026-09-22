@@ -127,3 +127,32 @@ AutoscoreInvocation resolveAutoscoreInvocation({
     'place autoscore-backend beside the application executable.',
   );
 }
+
+String detectAnalyseNidraExecutable() {
+  final executableDir = File(Platform.resolvedExecutable).parent.path;
+  final currentDir = Directory.current.path;
+  final candidates = [
+    if (Platform.isWindows) '$executableDir\\analyse-nidra.exe',
+    if (Platform.isWindows)
+      '$executableDir\\data\\flutter_assets\\analyse-nidra.exe',
+    if (!Platform.isWindows) '$executableDir/analyse-nidra',
+    if (Platform.isMacOS) '$executableDir/../Resources/analyse-nidra',
+    if (Platform.isLinux) '$executableDir/lib/analyse-nidra',
+    '$currentDir/../analyseNidra/target/release/analyse-nidra',
+    '$currentDir/analyseNidra/target/release/analyse-nidra',
+    if (Platform.isWindows)
+      '$currentDir/analyseNidra/target/release/analyse-nidra.exe',
+    if (Platform.isWindows)
+      '$currentDir/../analyseNidra/target/release/analyse-nidra.exe',
+  ];
+  for (final candidate in candidates) {
+    if (File(candidate).existsSync()) return candidate;
+  }
+  return Platform.isWindows ? 'analyse-nidra.exe' : 'analyse-nidra';
+}
+
+bool isAnalyseNidraAvailable() {
+  final exe = detectAnalyseNidraExecutable();
+  return File(exe).existsSync();
+}
+

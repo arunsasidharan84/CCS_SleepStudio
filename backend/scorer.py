@@ -144,8 +144,6 @@ def apply_sleepgpt_to_scoring_file(
     scoring_json = Path(scoring_json)
     with scoring_json.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
-    if not isinstance(payload, list) or not payload or not isinstance(payload[0], list):
-        raise ValueError("Scoring file must use ScoringNidra/ScoringHero [stages, annotations] JSON format.")
 
     stage_records = payload[0]
     annotations = payload[1] if len(payload) > 1 and isinstance(payload[1], list) else []

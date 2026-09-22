@@ -272,7 +272,7 @@ class _AppUpdateDialogState extends State<AppUpdateDialog> {
     }
   }
 
-  void _launchInstaller(File file) {
+  Future<void> _launchInstaller(File file) async {
     try {
       if (Platform.isWindows) {
         Process.start(file.path, [], mode: ProcessStartMode.detached);
@@ -280,10 +280,7 @@ class _AppUpdateDialogState extends State<AppUpdateDialog> {
           _statusMessage = 'Installer launched. Please follow the setup wizard.';
         });
       } else if (Platform.isMacOS) {
-        Process.run('open', ['-R', file.path]);
-        setState(() {
-          _statusMessage = 'Downloaded archive opened in Finder. Replace existing application to update.';
-        });
+        await _installMacOsUpdate(file);
       } else if (Platform.isLinux) {
         Process.run('xdg-open', [file.path]);
         setState(() {
@@ -293,6 +290,125 @@ class _AppUpdateDialogState extends State<AppUpdateDialog> {
     } catch (e) {
       setState(() {
         _statusMessage = 'Error launching installer: $e';
+      });
+    }
+  }
+
+  String? _findCurrentMacAppBundle() {
+    try {
+      var dir = File(Platform.resolvedExecutable).parent;
+      while (dir.path != dir.parent.path) {
+        if (dir.path.endsWith('.app')) {
+          return dir.path;
+        }
+        dir = dir.parent;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _installMacOsUpdate(File zipFile) async {
+    final currentApp = _findCurrentMacAppBundle();
+    if (currentApp == null) {
+      // Running in development/debug mode outside an .app bundle; open Finder
+      Process.run('open', ['-R', zipFile.path]);
+      setState(() {
+        _statusMessage = 'Downloaded archive opened in Finder (debug mode detected: replace app manually).';
+      });
+      return;
+    }
+
+    setState(() {
+      _statusMessage = 'Extracting update package…';
+    });
+
+    final tempDir = Directory(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}ccs_update_${DateTime.now().millisecondsSinceEpoch}',
+    );
+    if (!tempDir.existsSync()) {
+      tempDir.createSync(recursive: true);
+    }
+
+    try {
+      // Extract with ditto to preserve permissions, symlinks, and code signatures
+      var res = await Process.run('ditto', ['-x', '-k', zipFile.path, tempDir.path]);
+      if (res.exitCode != 0) {
+        // Fallback to unzip
+        res = await Process.run('unzip', ['-q', '-o', zipFile.path, '-d', tempDir.path]);
+      }
+
+      // Find extracted .app bundle
+      String? extractedApp;
+      for (final entity in tempDir.listSync()) {
+        if (entity is Directory && entity.path.endsWith('.app')) {
+          extractedApp = entity.path;
+          break;
+        }
+      }
+      if (extractedApp == null) {
+        for (final entity in tempDir.listSync(recursive: true)) {
+          if (entity is Directory && entity.path.endsWith('.app')) {
+            extractedApp = entity.path;
+            break;
+          }
+        }
+      }
+
+      if (extractedApp == null) {
+        Process.run('open', ['-R', zipFile.path]);
+        setState(() {
+          _statusMessage = 'Downloaded archive opened in Finder. Replace existing application to update.';
+        });
+        return;
+      }
+
+      setState(() {
+        _statusMessage = 'Installing update and restarting application…';
+      });
+
+      // Write helper detached script to replace .app and relaunch
+      final helperScript = File('${tempDir.path}${Platform.pathSeparator}update_in_place.sh');
+      final scriptContent = '''#!/bin/bash
+PID="\$1"
+TARGET_APP="\$2"
+NEW_APP="\$3"
+CLEANUP_DIR="\$4"
+
+# 1. Wait for current app PID to terminate
+while kill -0 "\$PID" 2>/dev/null; do
+  sleep 0.3
+done
+sleep 0.5
+
+# 2. Clear quarantine attribute
+xattr -rd com.apple.quarantine "\$NEW_APP" 2>/dev/null || true
+
+# 3. Replace app bundle
+rm -rf "\$TARGET_APP"
+if cp -R "\$NEW_APP" "\$TARGET_APP"; then
+  open -a "\$TARGET_APP" 2>/dev/null || open "\$TARGET_APP"
+  rm -rf "\$CLEANUP_DIR"
+else
+  # Fallback to opening extracted app in Finder if permissions denied
+  open -R "\$NEW_APP"
+fi
+''';
+      await helperScript.writeAsString(scriptContent);
+      await Process.run('chmod', ['+x', helperScript.path]);
+
+      // Launch helper detached and exit cleanly
+      await Process.start(
+        '/bin/bash',
+        [helperScript.path, pid.toString(), currentApp, extractedApp, tempDir.path],
+        mode: ProcessStartMode.detached,
+      );
+
+      await Future.delayed(const Duration(milliseconds: 600));
+      exit(0);
+    } catch (e) {
+      Process.run('open', ['-R', zipFile.path]);
+      setState(() {
+        _statusMessage = 'Automatic update failed ($e). Archive opened in Finder.';
       });
     }
   }

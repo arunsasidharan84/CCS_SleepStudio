@@ -88,36 +88,19 @@ fn load_custom_channel_map(path: &Path) -> HashMap<usize, String> {
     map
 }
 
-pub fn read_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
-    if requested.is_empty() {
-        bail!("at least one EDF channel must be selected");
-    }
-    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-    if ext == "vhdr" {
-        return read_vhdr_selected(path, requested);
-    }
-    let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let mut fixed = [0_u8; 256];
-    file.read_exact(&mut fixed)?;
-    let header_bytes = parse_usize(&fixed[184..192], "header bytes")?;
-    let num_records = parse_usize(&fixed[236..244], "number of records")?;
-    let record_duration = parse_f64(&fixed[244..252], "record duration")?;
-    let num_signals = parse_usize(&fixed[252..256], "number of signals")?;
-
-    let labels = read_field_matrix(&mut file, num_signals, 16)?;
-    let _transducer = read_field_matrix(&mut file, num_signals, 80)?;
-    let _units = read_field_matrix(&mut file, num_signals, 8)?;
-    let physical_min = read_field_matrix(&mut file, num_signals, 8)?;
-    let physical_max = read_field_matrix(&mut file, num_signals, 8)?;
-    let digital_min = read_field_matrix(&mut file, num_signals, 8)?;
-    let digital_max = read_field_matrix(&mut file, num_signals, 8)?;
-    let _prefilter = read_field_matrix(&mut file, num_signals, 80)?;
-    let samples_per_record = read_field_matrix(&mut file, num_signals, 8)?;
-    let _reserved = read_field_matrix(&mut file, num_signals, 32)?;
-    file.seek(SeekFrom::Start(header_bytes as u64))?;
+fn read_edf_headers(file: &mut File, path: &Path, num_signals: usize) -> Result<Vec<SignalHeader>> {
+    let labels = read_field_matrix(file, num_signals, 16)?;
+    let _transducer = read_field_matrix(file, num_signals, 80)?;
+    let _units = read_field_matrix(file, num_signals, 8)?;
+    let physical_min = read_field_matrix(file, num_signals, 8)?;
+    let physical_max = read_field_matrix(file, num_signals, 8)?;
+    let digital_min = read_field_matrix(file, num_signals, 8)?;
+    let digital_max = read_field_matrix(file, num_signals, 8)?;
+    let _prefilter = read_field_matrix(file, num_signals, 80)?;
+    let samples_per_record = read_field_matrix(file, num_signals, 8)?;
+    let _reserved = read_field_matrix(file, num_signals, 32)?;
 
     let custom_map = load_custom_channel_map(path);
-
     let mut headers = Vec::with_capacity(num_signals);
     for index in 0..num_signals {
         let label = if let Some(custom_name) = custom_map.get(&index) {
@@ -134,6 +117,77 @@ pub fn read_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
             samples_per_record: parse_usize(&samples_per_record[index], "samples per record")?,
         });
     }
+    Ok(headers)
+}
+
+pub fn read_channel_labels(path: &Path) -> Result<Vec<String>> {
+    let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut fixed = [0_u8; 256];
+    file.read_exact(&mut fixed)?;
+    let num_signals = parse_usize(&fixed[252..256], "number of signals")?;
+    let headers = read_edf_headers(&mut file, path, num_signals)?;
+    Ok(headers.into_iter().map(|h| h.label).collect())
+}
+
+pub fn read_all_channels(path: &Path) -> Result<EdfData> {
+    let labels = read_channel_labels(path)?;
+    read_selected(path, &labels)
+}
+
+pub fn read_eeg_channels(path: &Path) -> Result<EdfData> {
+    let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut fixed = [0_u8; 256];
+    file.read_exact(&mut fixed)?;
+    let num_signals = parse_usize(&fixed[252..256], "number of signals")?;
+    let headers = read_edf_headers(&mut file, path, num_signals)?;
+    let montage = crate::cleaning::montage::standard_1020_montage();
+
+    let mut eeg_candidates = Vec::new();
+    let mut spr_counts: HashMap<usize, usize> = HashMap::new();
+
+    for h in &headers {
+        if crate::cleaning::montage::lookup_electrode_pos(&montage, &h.label).is_some() {
+            eeg_candidates.push((h.label.clone(), h.samples_per_record));
+            *spr_counts.entry(h.samples_per_record).or_insert(0) += 1;
+        }
+    }
+
+    let best_spr = spr_counts
+        .into_iter()
+        .max_by_key(|&(_, count)| count)
+        .map(|(spr, _)| spr);
+
+    let picked: Vec<String> = if let Some(target_spr) = best_spr {
+        eeg_candidates
+            .into_iter()
+            .filter(|&(_, spr)| spr == target_spr)
+            .map(|(label, _)| label)
+            .collect()
+    } else {
+        crate::DEFAULT_CHANNELS.iter().map(|s| s.to_string()).collect()
+    };
+
+    read_selected(path, &picked)
+}
+
+pub fn read_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
+    if requested.is_empty() {
+        bail!("at least one EDF channel must be selected");
+    }
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    if ext == "vhdr" {
+        return read_vhdr_selected(path, requested);
+    }
+    let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut fixed = [0_u8; 256];
+    file.read_exact(&mut fixed)?;
+    let header_bytes = parse_usize(&fixed[184..192], "header bytes")?;
+    let num_records = parse_usize(&fixed[236..244], "number of records")?;
+    let record_duration = parse_f64(&fixed[244..252], "record duration")?;
+    let num_signals = parse_usize(&fixed[252..256], "number of signals")?;
+
+    let headers = read_edf_headers(&mut file, path, num_signals)?;
+    file.seek(SeekFrom::Start(header_bytes as u64))?;
 
     let by_name: HashMap<String, usize> = headers
         .iter()

@@ -29,6 +29,8 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
   late TextEditingController _notchController;
   late TextEditingController _suffixController;
 
+  String _engine = 'rust';
+
   bool _stepDownsample = false;
   bool _stepFilter = true;
   bool _stepBadChannel = true;
@@ -44,6 +46,7 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
   @override
   void initState() {
     super.initState();
+    _engine = isAnalyseNidraAvailable() ? 'rust' : 'python';
     _channelsController = TextEditingController(text: widget.initialChannels.join(', '));
     _outDirController = TextEditingController(text: File(widget.inputFilePath).parent.path);
     _downsampleController = TextEditingController(text: '250');
@@ -79,6 +82,10 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
       }
       if (line.startsWith('OUTPUT_EDF ')) {
         _outputEdfPath = line.substring('OUTPUT_EDF '.length).trim();
+        // Strip quotes if present
+        if (_outputEdfPath!.startsWith('"') && _outputEdfPath!.endsWith('"')) {
+          _outputEdfPath = _outputEdfPath!.substring(1, _outputEdfPath!.length - 1);
+        }
       }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -108,19 +115,6 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
       setState(() => _isProcessing = false);
       return;
     }
-
-    AutoscoreInvocation invocation;
-    try {
-      invocation = resolveAutoscoreInvocation();
-    } catch (e) {
-      _addLog('ERROR: Failed to resolve backend runtime: $e');
-      setState(() => _isProcessing = false);
-      return;
-    }
-
-    // Resolve script path or backend executable
-    String executable = invocation.executable;
-    List<String> commandArgs = [];
 
     final rawArgs = <String>[
       widget.inputFilePath,
@@ -159,21 +153,39 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
       if (notch != null) rawArgs.addAll(['--notch-hz', notch.toString()]);
     }
 
-    // Check if running from source python script or standalone compiled binary
-    if (invocation.argumentPrefix.isNotEmpty) {
-      // In development mode, find preprocess.py in the same folder as cli.py
-      final scriptDir = File(invocation.argumentPrefix.last).parent;
-      final preprocessScript = File('${scriptDir.path}${Platform.pathSeparator}preprocess.py');
-      if (preprocessScript.existsSync()) {
-        commandArgs = [preprocessScript.path, ...rawArgs];
+    final bool isRust = _engine == 'rust';
+    String executable;
+    List<String> commandArgs = [];
+
+    if (isRust) {
+      executable = detectAnalyseNidraExecutable();
+      commandArgs = ['--preprocess', ...rawArgs];
+    } else {
+      AutoscoreInvocation invocation;
+      try {
+        invocation = resolveAutoscoreInvocation();
+      } catch (e) {
+        _addLog('ERROR: Failed to resolve Python backend runtime: $e');
+        setState(() => _isProcessing = false);
+        return;
+      }
+
+      executable = invocation.executable;
+      if (invocation.argumentPrefix.isNotEmpty) {
+        // In development mode, find preprocess.py in the same folder as cli.py
+        final scriptDir = File(invocation.argumentPrefix.last).parent;
+        final preprocessScript = File('${scriptDir.path}${Platform.pathSeparator}preprocess.py');
+        if (preprocessScript.existsSync()) {
+          commandArgs = [preprocessScript.path, ...rawArgs];
+        } else {
+          commandArgs = invocation.argumentsFor(['--preprocess', ...rawArgs]);
+        }
       } else {
         commandArgs = invocation.argumentsFor(['--preprocess', ...rawArgs]);
       }
-    } else {
-      commandArgs = invocation.argumentsFor(['--preprocess', ...rawArgs]);
     }
 
-    _addLog('Starting EEG preprocessing pipeline...');
+    _addLog('Starting EEG preprocessing pipeline (${isRust ? "Native Rust / Zero-Python" : "Python ccstools"})...');
     _addLog('Source: ${widget.inputFilePath}');
     _addLog('Steps: ${steps.join(" -> ")}');
 
@@ -235,6 +247,34 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    const Text('Preprocessing Engine:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                    const SizedBox(height: 4),
+                    DropdownButtonFormField<String>(
+                      value: _engine,
+                      isDense: true,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'rust',
+                          child: Text(
+                            'Native Rust (Zero-Python, Fast)',
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DropdownMenuItem(
+                          value: 'python',
+                          child: Text(
+                            'Python Runtime (ccstools)',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                        ),
+                      ],
+                      onChanged: _isProcessing ? null : (v) => setState(() => _engine = v ?? 'rust'),
+                    ),
+                    const SizedBox(height: 12),
                     const Text('EEG Channels to Clean:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                     const SizedBox(height: 4),
                     TextFormField(

@@ -307,9 +307,9 @@ String _buildMicrostructurePage(
       fill: ((629 - y) ~/ 18).isEven ? _white : _offWhite,
     );
     p.text(row['Chan'] ?? '-', 52, y, bold: true, size: 7.5);
-    p.text(_metric(row, 'sp_all_Count', decimals: 0), 122, y, size: 7.5);
-    p.text(_metric(row, 'sp_all_density'), 182, y, size: 7.5);
-    p.text(_metric(row, 'sp_all_Frequency'), 252, y, size: 7.5);
+    p.text(_metric(row, 'sp_Count', decimals: 0), 122, y, size: 7.5);
+    p.text(_metric(row, 'sp_density'), 182, y, size: 7.5);
+    p.text(_metric(row, 'sp_Frequency'), 252, y, size: 7.5);
     p.text(_metric(row, 'sw_all_Count', decimals: 0), 322, y, size: 7.5);
     p.text(_metric(row, 'sw_all_PTP'), 390, y, size: 7.5);
     p.text(_metric(row, 'sw_all_Slope'), 462, y, size: 7.5);
@@ -837,7 +837,7 @@ String _microstructureInterpretation(
   List<Map<String, String>> rows,
   Map<String, String> architecture,
 ) {
-  final spindleDensity = _rowMean(rows, 'sp_all_density');
+  final spindleDensity = _rowMean(rows, 'sp_density');
   final nremMinutes = _number(architecture, 'NREM_duration');
   final slowWaveDensity =
       _rowMean(rows, 'sw_all_density_calc') ??
@@ -904,7 +904,7 @@ String _complexityInterpretation(List<Map<String, String>> rows) {
 }
 
 bool _hasMicrostructure(List<Map<String, String>> rows) {
-  return _rowMean(rows, 'sp_all_density') != null ||
+  return _rowMean(rows, 'sp_density') != null ||
       _rowMean(rows, 'sw_all_density_calc') != null ||
       _rowMean(rows, 'sw_all_Count') != null ||
       _rowMean(rows, 'pac_all_max_MI') != null ||
@@ -1461,7 +1461,12 @@ double? _regionalMeanAny(List<Map<String, String>> rows, List<String> keys) {
 }
 
 double? _number(Map<String, String> row, String key) {
-  final raw = row[key]?.trim();
+  var raw = row[key]?.trim();
+  if ((raw == null || raw.isEmpty) && key.startsWith('sp_')) {
+    raw = row['sp_all_${key.substring(3)}']?.trim();
+  } else if ((raw == null || raw.isEmpty) && key.startsWith('sp_all_')) {
+    raw = row['sp_${key.substring(7)}']?.trim();
+  }
   if (raw == null || raw.isEmpty || raw.toLowerCase() == 'nan') return null;
   final value = double.tryParse(raw);
   return value != null && value.isFinite ? value : null;

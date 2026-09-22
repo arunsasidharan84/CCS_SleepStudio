@@ -113,6 +113,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       TextEditingController();
   List<String> _lastAnalyseRegionalFiles = const [];
   List<String> _batchAnalyseAvailableChannels = const [];
+  bool _batchAnalysePerChannel = false;
+  Map<String, String> _batchAnalyseCustomRegionMap = {};
 
   // Video Sync State
   String? _videoPath;
@@ -375,7 +377,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final result = await FilePicker.pickFiles(
       dialogTitle: 'Select Synchronized Video File',
       type: FileType.custom,
-      allowedExtensions: ['mp4', 'mkv', 'avi', 'mov', 'webm', 'MP4', 'MKV', 'AVI', 'MOV'],
+      allowedExtensions: [
+        'mp4', 'mkv', 'avi', 'mov', 'webm', 'm2t', 'ts', 'mts', 'm2ts',
+        'MP4', 'MKV', 'AVI', 'MOV', 'WEBM', 'M2T', 'TS', 'MTS', 'M2TS',
+      ],
     );
     final p = result?.files.single.path;
     if (p != null) {
@@ -467,7 +472,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   Future<void> _tryAutoDetectCompanionVideo(String eegPath) async {
     final dotIdx = eegPath.lastIndexOf('.');
     final base = dotIdx >= 0 ? eegPath.substring(0, dotIdx) : eegPath;
-    final exts = ['mp4', 'MP4', 'mkv', 'MKV', 'avi', 'AVI', 'mov', 'MOV', 'webm'];
+    final exts = [
+      'mp4', 'MP4', 'mkv', 'MKV', 'avi', 'AVI', 'mov', 'MOV', 'webm', 'WEBM',
+      'm2t', 'M2T', 'ts', 'TS', 'mts', 'MTS', 'm2ts', 'M2TS',
+    ];
     for (final ext in exts) {
       final cand = '$base.$ext';
       if (File(cand).existsSync()) {
@@ -1222,50 +1230,91 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     if (v == null || eeg == null || path == null) return;
 
     final navigator = Navigator.of(context);
-    late final AutoscoreInvocation invocation;
-    try {
-      invocation = resolveAutoscoreInvocation();
-    } on StateError catch (error) {
-      _setStatus(error.message);
-      if (mounted) {
-        _showTextDialog('AutoscoreNidra unavailable', error.message);
-      }
-      return;
-    }
-
-    final args = <String>[path];
-
     final algorithm = settings['algorithm'] as String;
-    args.addAll(['--algorithm', algorithm]);
+    final rustSupportedAlgorithms = {
+      'tinysleepnet_rust',
+      'tinysleepnet',
+      'yasa',
+      'usleep',
+      'seqsleepnet',
+      'sleeptransformer',
+      'gssc',
+    };
+    final bool isRustStaging = isAnalyseNidraAvailable() && rustSupportedAlgorithms.contains(algorithm);
 
-    final correction = settings['sequence_correction'] as String;
-    args.addAll(['--sequence-correction', correction]);
+    late final String executable;
+    late final List<String> commandArgs;
 
-    final eegChans = settings['eeg'] as List<String>;
-    if (eegChans.isNotEmpty) {
-      args.addAll(['--eeg', eegChans.join(',')]);
-    }
+    if (isRustStaging) {
+      executable = detectAnalyseNidraExecutable();
+      final algoFlag = algorithm == 'tinysleepnet_rust' ? 'tinysleepnet' : algorithm;
+      final args = <String>['--stage', path, '--algorithm', algoFlag];
+      final correction = settings['sequence_correction'] as String?;
+      if (correction != null && correction.isNotEmpty && correction != 'none') {
+        args.addAll(['--sequence-correction', correction]);
+        if (correction == 'sleepgpt') {
+          final alpha = settings['sleepgpt_alpha'];
+          if (alpha != null) args.addAll(['--sleepgpt-alpha', alpha.toString()]);
+          final ngram = settings['sleepgpt_ngram'];
+          if (ngram != null) args.addAll(['--sleepgpt-ngram', ngram.toString()]);
+        }
+      }
+      final eegChans = (settings['eeg'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+      if (eegChans.isNotEmpty) {
+        args.addAll(['--channel', eegChans.first]);
+      }
+      final refChans = (settings['ref'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+      if (refChans.isNotEmpty) {
+        args.addAll(['--ref', refChans.first]);
+      }
+      commandArgs = args;
+    } else {
+      late final AutoscoreInvocation invocation;
+      try {
+        invocation = resolveAutoscoreInvocation();
+      } on StateError catch (error) {
+        _setStatus(error.message);
+        if (mounted) {
+          _showTextDialog('AutoscoreNidra unavailable', error.message);
+        }
+        return;
+      }
 
-    final refChans = settings['ref'] as List<String>;
-    if (refChans.isNotEmpty) {
-      args.addAll(['--ref', refChans.join(',')]);
-    }
+      final args = <String>[path];
+      args.addAll(['--algorithm', algorithm]);
 
-    final eogChans = settings['eog'] as List<String>;
-    if (eogChans.isNotEmpty) {
-      args.addAll(['--eog', eogChans.join(',')]);
-    }
+      final correction = settings['sequence_correction'] as String;
+      args.addAll(['--sequence-correction', correction]);
 
-    final emgChans = settings['emg'] as List<String>;
-    if (emgChans.isNotEmpty) {
-      args.addAll(['--emg', emgChans.join(',')]);
-    }
+      final eegChans = (settings['eeg'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+      if (eegChans.isNotEmpty) {
+        args.addAll(['--eeg', eegChans.join(',')]);
+      }
 
-    if (correction == 'sleepgpt') {
-      final alpha = settings['sleepgpt_alpha'] as double;
-      args.addAll(['--sleepgpt-alpha', alpha.toString()]);
-      final ngram = settings['sleepgpt_ngram'] as int;
-      args.addAll(['--sleepgpt-ngram', ngram.toString()]);
+      final refChans = (settings['ref'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+      if (refChans.isNotEmpty) {
+        args.addAll(['--ref', refChans.join(',')]);
+      }
+
+      final eogChans = (settings['eog'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+      if (eogChans.isNotEmpty) {
+        args.addAll(['--eog', eogChans.join(',')]);
+      }
+
+      final emgChans = (settings['emg'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+      if (emgChans.isNotEmpty) {
+        args.addAll(['--emg', emgChans.join(',')]);
+      }
+
+      if (correction == 'sleepgpt') {
+        final alpha = settings['sleepgpt_alpha'] as double;
+        args.addAll(['--sleepgpt-alpha', alpha.toString()]);
+        final ngram = settings['sleepgpt_ngram'] as int;
+        args.addAll(['--sleepgpt-ngram', ngram.toString()]);
+      }
+
+      executable = invocation.executable;
+      commandArgs = invocation.argumentsFor(args);
     }
 
     final logsController = StreamController<String>();
@@ -1273,7 +1322,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final scrollController = ScrollController();
     var isDone = false;
     var progress = 0.0;
-    var progressLabel = 'Starting scoring backend...';
+    var progressLabel = isRustStaging ? 'Starting native Rust TinySleepNet engine...' : 'Starting scoring backend...';
     String? outputJsonPath;
     StateSetter? setStateDialogRef;
     var dialogActive = true;
@@ -1372,14 +1421,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         startupTimer?.cancel();
         return;
       }
-      progressLabel =
-          'Launching packaged model runtime... '
-          '(${startupStopwatch.elapsed.inSeconds}s elapsed)';
+      progressLabel = isRustStaging
+          ? 'Scoring with native Rust TinySleepNet (${startupStopwatch.elapsed.inSeconds}s elapsed)'
+          : 'Launching packaged model runtime... (${startupStopwatch.elapsed.inSeconds}s elapsed)';
       setStateDialogRef?.call(() {});
     });
 
     Future.microtask(() async {
-      _setStatus('Starting AutoscoreNidra backend…');
+      _setStatus(isRustStaging ? 'Starting native Rust TinySleepNet…' : 'Starting AutoscoreNidra backend…');
       try {
         void onLine(String line) {
           final update = _scoringProgressFromLine(line);
@@ -1401,10 +1450,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           });
         }
 
-        onLine('Backend launched. Loading model dependencies…');
+        onLine(isRustStaging
+            ? 'Native Rust TinySleepNet engine launched. Running ONNX inference...'
+            : 'Backend launched. Loading model dependencies…');
         final exitCode = await _backend.runCommandStreamAsync(
-          executable: invocation.executable,
-          arguments: invocation.argumentsFor(args),
+          executable: executable,
+          arguments: commandArgs,
           onLine: onLine,
         );
         isDone = true;
@@ -1889,7 +1940,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             ? _config.channels.map((c) => c.name).toList()
             : eeg.channelLabels,
         batchCount: 1,
-        onRun: (channels, references) {
+        onRun: (channels, references, {bool perChannel = false, String? regionMapJson}) {
           _runAnalyseNidraJobs(
             [
               _AnalyseNidraJob(
@@ -1900,6 +1951,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             ],
             channels,
             references,
+            perChannel: perChannel,
+            regionMapJson: regionMapJson,
           );
         },
       ),
@@ -2093,6 +2146,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     List<String> channels,
     List<String> references, {
     String? outputDir,
+    bool perChannel = false,
+    String? regionMapJson,
   }) {
     // Validate that all scoring files exist before starting
     for (final job in jobs) {
@@ -2149,6 +2204,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                     ? _config.lightsOnSeconds
                     : null,
                 outputDir: outputDir,
+                perChannel: perChannel,
+                regionMapJson: regionMapJson,
               ),
             ),
         ],
@@ -4026,13 +4083,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         if (alternate) p.drawRgbRect(50, ry - 5, 512, 21, 0.97, 0.98, 0.99);
         p.drawText(row['Chan'] ?? '-', 58, ry, bold: true, size: 8.5);
         p.drawText(
-          _csvMetric(row, 'sp_all_Count', decimals: 0),
+          _csvMetric(row, 'sp_Count', decimals: 0),
           145,
           ry,
           size: 8.5,
         );
         p.drawText(
-          _csvMetric(row, 'sp_all_density', decimals: 2),
+          _csvMetric(row, 'sp_density', decimals: 2),
           215,
           ry,
           size: 8.5,
@@ -6225,6 +6282,66 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                               ),
                             ],
                           ),
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade50,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: Row(
+                              children: [
+                                Checkbox(
+                                  value: _batchAnalysePerChannel,
+                                  onChanged: (val) => setState(() => _batchAnalysePerChannel = val ?? false),
+                                ),
+                                const Expanded(
+                                  child: Text(
+                                    'Per-channel output (no regional grouping)',
+                                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                                  ),
+                                ),
+                                OutlinedButton.icon(
+                                  icon: const Icon(Icons.edit, size: 15),
+                                  label: Text(
+                                    _batchAnalyseCustomRegionMap.isEmpty
+                                        ? 'Edit Regional Mapping…'
+                                        : 'Edit Regions (${_batchAnalyseCustomRegionMap.length} mapped)',
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                  onPressed: _batchAnalysePerChannel
+                                      ? null
+                                      : () async {
+                                          final chans = _batchAnalyseEegController.text
+                                              .split(',')
+                                              .map((e) => e.trim())
+                                              .where((e) => e.isNotEmpty)
+                                              .toList();
+                                          final channelsToMap = chans.isNotEmpty
+                                              ? chans
+                                              : _batchAnalyseAvailableChannels;
+                                          if (channelsToMap.isEmpty) {
+                                            _setStatus('No channels detected yet. Please select or add recordings first.');
+                                            return;
+                                          }
+                                          final updated = await showDialog<Map<String, String>>(
+                                            context: context,
+                                            builder: (ctx) => EditRegionMappingDialog(
+                                              channels: channelsToMap,
+                                              initialMapping: _batchAnalyseCustomRegionMap,
+                                            ),
+                                          );
+                                          if (updated != null) {
+                                            setState(() {
+                                              _batchAnalyseCustomRegionMap = updated;
+                                            });
+                                          }
+                                        },
+                                ),
+                              ],
+                            ),
+                          ),
                           const SizedBox(height: 24),
                           SizedBox(
                             width: double.infinity,
@@ -6285,7 +6402,17 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                            ? null
                                            : _batchAnalyseOutDirController.text.trim();
 
-                                      _runAnalyseNidraJobs(jobs, chans, refs, outputDir: outDir);
+                                      final regionMapJson = (!_batchAnalysePerChannel && _batchAnalyseCustomRegionMap.isNotEmpty)
+                                          ? jsonEncode(_batchAnalyseCustomRegionMap)
+                                          : null;
+                                      _runAnalyseNidraJobs(
+                                        jobs,
+                                        chans,
+                                        refs,
+                                        outputDir: outDir,
+                                        perChannel: _batchAnalysePerChannel,
+                                        regionMapJson: regionMapJson,
+                                      );
                                     },
                               child: const Text(
                                 'Run Batch AnalyseNidra',
@@ -9112,26 +9239,6 @@ final _shortcuts = <ShortcutActivator, Intent>{
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-String detectAnalyseNidraExecutable() {
-  final executableDir = File(Platform.resolvedExecutable).parent.path;
-  final candidates = [
-    if (Platform.isWindows) '$executableDir\\analyse-nidra.exe',
-    if (Platform.isWindows)
-      '$executableDir\\data\\flutter_assets\\analyse-nidra.exe',
-    if (!Platform.isWindows) '$executableDir/analyse-nidra',
-    if (Platform.isMacOS) '$executableDir/../Resources/analyse-nidra',
-    if (Platform.isLinux) '$executableDir/lib/analyse-nidra',
-    '${Directory.current.path}/../analyseNidra/target/release/analyse-nidra',
-    '${Directory.current.path}/analyseNidra/target/release/analyse-nidra',
-    if (Platform.isWindows)
-      '${Directory.current.path}/analyseNidra/target/release/analyse-nidra.exe',
-  ];
-  for (final candidate in candidates) {
-    if (File(candidate).existsSync()) return candidate;
-  }
-  return Platform.isWindows ? 'analyse-nidra.exe' : 'analyse-nidra';
-}
-
 String _sidecarPath(String path, String suffix) {
   final dot = path.lastIndexOf('.');
   final base = dot >= 0 ? path.substring(0, dot) : path;
@@ -9200,7 +9307,13 @@ List<String> _parseCsvLine(String line) {
 }
 
 String _csvMetric(Map<String, String> row, String key, {int decimals = 2}) {
-  final value = double.tryParse(row[key] ?? '');
+  var raw = row[key];
+  if ((raw == null || raw.isEmpty) && key.startsWith('sp_')) {
+    raw = row['sp_all_${key.substring(3)}'];
+  } else if ((raw == null || raw.isEmpty) && key.startsWith('sp_all_')) {
+    raw = row['sp_${key.substring(7)}'];
+  }
+  final value = double.tryParse(raw ?? '');
   if (value == null || !value.isFinite) return '-';
   return value.toStringAsFixed(decimals);
 }
@@ -9256,6 +9369,8 @@ List<String> _analyseNidraArguments(
   double? lightsOffSeconds,
   double? lightsOnSeconds,
   String? outputDir,
+  bool perChannel = false,
+  String? regionMapJson,
 }) {
   final baseDir = (outputDir != null && outputDir.trim().isNotEmpty)
       ? outputDir.trim()
@@ -9285,6 +9400,12 @@ List<String> _analyseNidraArguments(
   }
   if (lightsOnSeconds != null) {
     args.addAll(['--lights-on-sec', lightsOnSeconds.toStringAsFixed(3)]);
+  }
+  if (perChannel) {
+    args.add('--per-channel');
+  }
+  if (regionMapJson != null && regionMapJson.trim().isNotEmpty) {
+    args.addAll(['--region-map', regionMapJson.trim()]);
   }
   return args;
 }
@@ -11009,6 +11130,8 @@ String _outputPathFromLogs(List<String> lines) {
   for (final line in lines.reversed) {
     final match = RegExp(r'Saved ScoringHero JSON:\s*(.*)').firstMatch(line);
     if (match != null) return match.group(1)!.trim();
+    final rustMatch = RegExp(r"""OUTPUT_SCORING\s+["']?([^"'\r\n]+)["']?""").firstMatch(line);
+    if (rustMatch != null) return rustMatch.group(1)!.trim();
   }
   return '';
 }
@@ -11120,18 +11243,36 @@ class _BatchProgressDialogState extends State<BatchProgressDialog> {
   }
 
   Future<void> _startBatch() async {
-    late final AutoscoreInvocation invocation;
-    try {
-      invocation = resolveAutoscoreInvocation();
-    } on StateError catch (error) {
-      for (final file in widget.files) {
-        _statuses[file] = 'Failed';
+    const rustAlgorithms = {
+      'tinysleepnet_rust',
+      'tinysleepnet',
+      'yasa',
+      'usleep',
+      'seqsleepnet',
+      'sleeptransformer',
+      'gssc',
+    };
+    final bool isRustStaging = isAnalyseNidraAvailable() && rustAlgorithms.contains(widget.algorithm);
+    late final AutoscoreInvocation? invocation;
+    late final String? rustExecutable;
+
+    if (isRustStaging) {
+      rustExecutable = detectAnalyseNidraExecutable();
+      invocation = null;
+    } else {
+      rustExecutable = null;
+      try {
+        invocation = resolveAutoscoreInvocation();
+      } on StateError catch (error) {
+        for (final file in widget.files) {
+          _statuses[file] = 'Failed';
+        }
+        _addLog(error.message);
+        if (mounted) {
+          setState(() => _isFinished = true);
+        }
+        return;
       }
-      _addLog(error.message);
-      if (mounted) {
-        setState(() => _isFinished = true);
-      }
-      return;
     }
 
     final startTime = DateTime.now();
@@ -11153,28 +11294,55 @@ class _BatchProgressDialogState extends State<BatchProgressDialog> {
       });
       _addLog('--- Starting AutoscoreNidra for ${_basename(file)} ---');
 
-      final args = <String>[file];
-      if (widget.outputDir != null && widget.outputDir!.trim().isNotEmpty) {
-        args.addAll(['--out-dir', widget.outputDir!.trim()]);
-      }
-      args.addAll(['--algorithm', widget.algorithm]);
-      args.addAll(['--sequence-correction', widget.correction]);
-      if (widget.eegChannels.isNotEmpty) {
-        args.addAll(['--eeg', widget.eegChannels.join(',')]);
-      }
-      if (widget.refChannels.isNotEmpty) {
-        args.addAll(['--ref', widget.refChannels.join(',')]);
-      }
-      if (widget.eogChannels.isNotEmpty) {
-        args.addAll(['--eog', widget.eogChannels.join(',')]);
-      }
-      if (widget.emgChannels.isNotEmpty) {
-        args.addAll(['--emg', widget.emgChannels.join(',')]);
-      }
+      late final String fileExe;
+      late final List<String> fileArgs;
+      if (isRustStaging) {
+        fileExe = rustExecutable!;
+        final algoFlag = widget.algorithm == 'tinysleepnet_rust' ? 'tinysleepnet' : widget.algorithm;
+        final args = <String>['--stage', file, '--algorithm', algoFlag];
+        if (widget.correction.isNotEmpty && widget.correction != 'none') {
+          args.addAll(['--sequence-correction', widget.correction]);
+          if (widget.correction == 'sleepgpt') {
+            args.addAll(['--sleepgpt-alpha', widget.sleepgptAlpha.toString()]);
+            args.addAll(['--sleepgpt-ngram', widget.sleepgptNgram.toString()]);
+          }
+        }
+        if (widget.eegChannels.isNotEmpty) {
+          args.addAll(['--channel', widget.eegChannels.first]);
+        }
+        if (widget.refChannels.isNotEmpty) {
+          args.addAll(['--ref', widget.refChannels.first]);
+        }
+        if (widget.outputDir != null && widget.outputDir!.trim().isNotEmpty) {
+          args.addAll(['--out-dir', widget.outputDir!.trim()]);
+        }
+        fileArgs = args;
+      } else {
+        fileExe = invocation!.executable;
+        final args = <String>[file];
+        if (widget.outputDir != null && widget.outputDir!.trim().isNotEmpty) {
+          args.addAll(['--out-dir', widget.outputDir!.trim()]);
+        }
+        args.addAll(['--algorithm', widget.algorithm]);
+        args.addAll(['--sequence-correction', widget.correction]);
+        if (widget.eegChannels.isNotEmpty) {
+          args.addAll(['--eeg', widget.eegChannels.join(',')]);
+        }
+        if (widget.refChannels.isNotEmpty) {
+          args.addAll(['--ref', widget.refChannels.join(',')]);
+        }
+        if (widget.eogChannels.isNotEmpty) {
+          args.addAll(['--eog', widget.eogChannels.join(',')]);
+        }
+        if (widget.emgChannels.isNotEmpty) {
+          args.addAll(['--emg', widget.emgChannels.join(',')]);
+        }
 
-      if (widget.correction == 'sleepgpt') {
-        args.addAll(['--sleepgpt-alpha', widget.sleepgptAlpha.toString()]);
-        args.addAll(['--sleepgpt-ngram', widget.sleepgptNgram.toString()]);
+        if (widget.correction == 'sleepgpt') {
+          args.addAll(['--sleepgpt-alpha', widget.sleepgptAlpha.toString()]);
+          args.addAll(['--sleepgpt-ngram', widget.sleepgptNgram.toString()]);
+        }
+        fileArgs = invocation.argumentsFor(args);
       }
 
       int fileExitCode = 1;
@@ -11182,8 +11350,8 @@ class _BatchProgressDialogState extends State<BatchProgressDialog> {
 
       try {
         final exitCode = await EegBackend().runCommandStreamAsync(
-          executable: invocation.executable,
-          arguments: invocation.argumentsFor(args),
+          executable: fileExe,
+          arguments: fileArgs,
           onLine: (line) {
             fileLogs.add(line);
             _addLog(line);

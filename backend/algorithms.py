@@ -809,7 +809,7 @@ class LunaAlgorithm(SleepScoringAlgorithm):
             raise AlgorithmUnavailable(f"Luna POPS resources not found at {pops_path}.")
 
         channel_probs = []
-        for eeg in eeg_channels:
+        for eeg_index, eeg in enumerate(eeg_channels):
             ref = _clinical_reference_for(eeg, ref_channels) if ref_channels and not is_prereferenced_channel(eeg) else None
             log(f"Running Luna POPS on {eeg}{('-' + ref) if ref else ''}.")
             safe_eeg_file_str = eeg.replace(":", "_")

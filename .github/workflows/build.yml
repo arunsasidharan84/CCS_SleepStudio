@@ -153,6 +153,7 @@ jobs:
       - name: Copy AnalyseNidra into macOS App bundle (Lite)
         run: |
           cp analyseNidra/target/release/analyse-nidra "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
+          cp -r analyseNidra/assets/models "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
           test -x "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/analyse-nidra"
 
       - name: Ad-hoc sign macOS app (Lite)
@@ -178,6 +179,7 @@ jobs:
       - name: Copy AnalyseNidra into macOS App bundle (Full)
         run: |
           cp analyseNidra/target/release/analyse-nidra "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
+          cp -r analyseNidra/assets/models "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
           test -x "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/analyse-nidra"
 
       - name: Ad-hoc sign macOS app (Full)
@@ -336,6 +338,7 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item analyseNidra\target\release\analyse-nidra.exe frontend\build\windows\x64\runner\Release\
+          Copy-Item -Recurse analyseNidra\assets\models frontend\build\windows\x64\runner\Release\assets\
           if (-not (Test-Path frontend\build\windows\x64\runner\Release\analyse-nidra.exe)) { exit 1 }
 
       - name: Package Windows app (Lite Installer)
@@ -357,6 +360,7 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item analyseNidra\target\release\analyse-nidra.exe frontend\build\windows\x64\runner\Release\
+          Copy-Item -Recurse analyseNidra\assets\models frontend\build\windows\x64\runner\Release\assets\
           if (-not (Test-Path frontend\build\windows\x64\runner\Release\analyse-nidra.exe)) { exit 1 }
 
       - name: Package Windows app (Full Installer)
@@ -511,6 +515,8 @@ jobs:
         run: |
           cp bridge/target/release/librust_sleep_eeg.so frontend/build/linux/x64/release/bundle/
           cp analyseNidra/target/release/analyse-nidra frontend/build/linux/x64/release/bundle/
+          mkdir -p frontend/build/linux/x64/release/bundle/assets
+          cp -r analyseNidra/assets/models frontend/build/linux/x64/release/bundle/assets/
           test -x frontend/build/linux/x64/release/bundle/analyse-nidra
 
       - name: Build Linux installer (Lite)
@@ -534,6 +540,8 @@ jobs:
           cp -a dist/autoscore-backend frontend/build/linux/x64/release/bundle/
           cp bridge/target/release/librust_sleep_eeg.so frontend/build/linux/x64/release/bundle/
           cp analyseNidra/target/release/analyse-nidra frontend/build/linux/x64/release/bundle/
+          mkdir -p frontend/build/linux/x64/release/bundle/assets
+          cp -r analyseNidra/assets/models frontend/build/linux/x64/release/bundle/assets/
           test -x frontend/build/linux/x64/release/bundle/analyse-nidra
 
       - name: Build Linux installer (Full)

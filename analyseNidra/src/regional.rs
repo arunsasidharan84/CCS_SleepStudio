@@ -2,7 +2,7 @@ use crate::events::{SlowWaveResults, SpindleResults};
 use crate::pac::PacChannelResult;
 use crate::pipeline::{CoreStageFeatures, LoadedRecording};
 use anyhow::{Context, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -169,6 +169,8 @@ pub fn compile(
     spindles: &SpindleResults,
     slow_waves: &SlowWaveResults,
     pac: &BTreeMap<String, PacChannelResult>,
+    per_channel: bool,
+    custom_regions: Option<&BTreeMap<String, String>>,
 ) -> BTreeMap<String, RegionalRow> {
     let spindle_by_channel = spindles
         .summary
@@ -205,47 +207,47 @@ pub fn compile(
         let pac_value = pac_by_output_channel[channel.as_str()];
         let mut row = RegionalRow::from([
             (
-                "sp_all_Count".into(),
+                "sp_Count".into(),
                 spindle.map_or(f64::NAN, |value| value.count as f64),
             ),
             (
-                "sp_all_Duration".into(),
+                "sp_Duration".into(),
                 spindle.map_or(f64::NAN, |value| value.duration),
             ),
             (
-                "sp_all_Amplitude".into(),
+                "sp_Amplitude".into(),
                 spindle.map_or(f64::NAN, |value| value.amplitude),
             ),
             (
-                "sp_all_AmpFiltered".into(),
+                "sp_AmpFiltered".into(),
                 spindle.map_or(f64::NAN, |value| value.amp_filtered),
             ),
             (
-                "sp_all_RMS".into(),
+                "sp_RMS".into(),
                 spindle.map_or(f64::NAN, |value| value.rms),
             ),
             (
-                "sp_all_AbsPower".into(),
+                "sp_AbsPower".into(),
                 spindle.map_or(f64::NAN, |value| value.abs_power),
             ),
             (
-                "sp_all_RelPower".into(),
+                "sp_RelPower".into(),
                 spindle.map_or(f64::NAN, |value| value.rel_power),
             ),
             (
-                "sp_all_Frequency".into(),
+                "sp_Frequency".into(),
                 spindle.map_or(f64::NAN, |value| value.frequency),
             ),
             (
-                "sp_all_Oscillations".into(),
+                "sp_Oscillations".into(),
                 spindle.map_or(f64::NAN, |value| value.oscillations),
             ),
             (
-                "sp_all_Symmetry".into(),
+                "sp_Symmetry".into(),
                 spindle.map_or(f64::NAN, |value| value.symmetry),
             ),
             (
-                "sp_all_density".into(),
+                "sp_density".into(),
                 spindle.map_or(f64::NAN, |value| event_density(value.count, nrem_minutes)),
             ),
             (
@@ -293,16 +295,45 @@ pub fn compile(
             ("pac_all_max_MI".into(), pac_value.maximum),
             ("pac_all_max_sp".into(), pac_value.amplitude_frequency),
             ("pac_all_max_sw".into(), pac_value.phase_frequency),
+            ("pac_all_max_gcPAC".into(), pac_value.maximum_gc),
+            ("pac_all_max_gc_sp".into(), pac_value.amplitude_frequency_gc),
+            ("pac_all_max_gc_sw".into(), pac_value.phase_frequency_gc),
         ]);
         row.extend(core.channels[channel].clone());
         channels.insert(channel.clone(), row);
     }
 
+    if per_channel {
+        return channels;
+    }
+
+    let resolve_region = |channel: &str| -> String {
+        if let Some(map) = custom_regions {
+            if let Some(r) = map.get(channel).or_else(|| map.get(&channel.to_ascii_uppercase())) {
+                return r.clone();
+            }
+        }
+        region(channel).to_string()
+    };
+
+    let mut region_names: BTreeSet<String> = BTreeSet::new();
+    for ch in channels.keys() {
+        let r = resolve_region(ch);
+        if r != "NaN" {
+            region_names.insert(r);
+        }
+    }
+    if region_names.is_empty() {
+        for r in ["Central", "Frontal", "Occipital", "Temporal"] {
+            region_names.insert(r.to_string());
+        }
+    }
+
     let mut output = BTreeMap::new();
-    for region_name in ["Central", "Frontal", "Occipital", "Temporal"] {
+    for region_name in region_names {
         let selected = channels
             .iter()
-            .filter_map(|(channel, row)| (region(channel) == region_name).then_some(row))
+            .filter_map(|(channel, row)| (resolve_region(channel) == region_name).then_some(row))
             .collect::<Vec<_>>();
         if selected.is_empty() {
             continue;
@@ -311,24 +342,24 @@ pub fn compile(
         for column in event_columns().into_iter().chain(feature_columns()) {
             row.insert(column.clone(), mean(&selected, &column));
         }
-        output.insert(region_name.into(), row);
+        output.insert(region_name, row);
     }
     output
 }
 
 fn event_columns() -> Vec<String> {
     [
-        "sp_all_Count",
-        "sp_all_Duration",
-        "sp_all_Amplitude",
-        "sp_all_AmpFiltered",
-        "sp_all_RMS",
-        "sp_all_AbsPower",
-        "sp_all_RelPower",
-        "sp_all_Frequency",
-        "sp_all_Oscillations",
-        "sp_all_Symmetry",
-        "sp_all_density",
+        "sp_Count",
+        "sp_Duration",
+        "sp_Amplitude",
+        "sp_AmpFiltered",
+        "sp_RMS",
+        "sp_AbsPower",
+        "sp_RelPower",
+        "sp_Frequency",
+        "sp_Oscillations",
+        "sp_Symmetry",
+        "sp_density",
         "sw_all_Count",
         "sw_all_density_calc",
         "sw_all_Duration",
@@ -342,6 +373,9 @@ fn event_columns() -> Vec<String> {
         "pac_all_max_MI",
         "pac_all_max_sp",
         "pac_all_max_sw",
+        "pac_all_max_gcPAC",
+        "pac_all_max_gc_sp",
+        "pac_all_max_gc_sw",
     ]
     .into_iter()
     .map(str::to_string)

@@ -1,0 +1,26 @@
+{
+  "model_class": "physioex.models.tinysleepnet:TinySleepNet",
+  "model_kwargs": {
+    "n_classes": 5,
+    "in_chan": 1,
+    "sf": 100,
+    "n_rnn_units": 128,
+    "n_rnn_layers": 1
+  },
+  "training": {
+    "dataset": "sleepedf",
+    "channels": [
+      "EEG"
+    ],
+    "pipeline_preset": "raw",
+    "sequence_length": 20,
+    "max_epochs": 200,
+    "lr": 0.0001,
+    "weight_decay": 0.001,
+    "batch_size": 15,
+    "loss": "CrossEntropyLoss",
+    "fold": 0,
+    "early_stopping_patience": 50
+  },
+  "reference": "Supratak & Guo 2020 - TinySleepNet: An Efficient Deep Learning Model for Sleep Stage Scoring based on Raw Single-Channel EEG"
+}

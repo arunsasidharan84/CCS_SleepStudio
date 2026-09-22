@@ -341,6 +341,92 @@ pub fn preprocess_mne_250hz(data: &mut [Vec<f64>]) {
     }
 }
 
+pub fn design_bandpass_fir(sfreq: f64, low_hz: f64, high_hz: f64, num_taps: usize) -> Vec<f64> {
+    let m = if num_taps % 2 == 0 { num_taps + 1 } else { num_taps };
+    let half = (m - 1) / 2;
+    let nyq = sfreq / 2.0;
+    let fl = (low_hz / nyq).clamp(0.001, 0.999);
+    let fh = (high_hz / nyq).clamp(fl + 0.001, 0.999);
+
+    let mut taps = Vec::with_capacity(m);
+    for i in 0..m {
+        let n = i as f64 - half as f64;
+        let sinc_h = if n == 0.0 {
+            2.0 * fh
+        } else {
+            (2.0 * std::f64::consts::PI * fh * n).sin() / (std::f64::consts::PI * n)
+        };
+        let sinc_l = if n == 0.0 {
+            2.0 * fl
+        } else {
+            (2.0 * std::f64::consts::PI * fl * n).sin() / (std::f64::consts::PI * n)
+        };
+        let ideal = sinc_h - sinc_l;
+        let window = 0.54 - 0.46 * (2.0 * std::f64::consts::PI * i as f64 / (m - 1) as f64).cos();
+        taps.push(ideal * window);
+    }
+    let f0 = (low_hz + high_hz) / 2.0;
+    let mut gain_center = 0.0;
+    for (i, &val) in taps.iter().enumerate() {
+        gain_center += val * (2.0 * std::f64::consts::PI * f0 * (i as f64 - half as f64) / sfreq).cos();
+    }
+    if gain_center.abs() > 1e-9 {
+        for val in &mut taps {
+            *val /= gain_center;
+        }
+    }
+    taps
+}
+
+pub fn design_notch_fir(sfreq: f64, notch_hz: f64, width_hz: f64, num_taps: usize) -> Vec<f64> {
+    let m = if num_taps % 2 == 0 { num_taps + 1 } else { num_taps };
+    let half = (m - 1) / 2;
+    let nyq = sfreq / 2.0;
+    let fl = ((notch_hz - width_hz / 2.0) / nyq).clamp(0.001, 0.999);
+    let fh = ((notch_hz + width_hz / 2.0) / nyq).clamp(fl + 0.001, 0.999);
+
+    let mut taps = Vec::with_capacity(m);
+    for i in 0..m {
+        let n = i as f64 - half as f64;
+        let sinc_h = if n == 0.0 {
+            2.0 * fh
+        } else {
+            (2.0 * std::f64::consts::PI * fh * n).sin() / (std::f64::consts::PI * n)
+        };
+        let sinc_l = if n == 0.0 {
+            2.0 * fl
+        } else {
+            (2.0 * std::f64::consts::PI * fl * n).sin() / (std::f64::consts::PI * n)
+        };
+        let bandpass_ideal = sinc_h - sinc_l;
+        let window = 0.54 - 0.46 * (2.0 * std::f64::consts::PI * i as f64 / (m - 1) as f64).cos();
+        let bp_tap = bandpass_ideal * window;
+        let delta = if i == half { 1.0 } else { 0.0 };
+        taps.push(delta - bp_tap);
+    }
+    taps
+}
+
+pub fn filter_bandpass_fir(signal: &[f64], sfreq: f64, low_hz: f64, high_hz: f64) -> Vec<f64> {
+    if signal.len() < 100 {
+        return signal.to_vec();
+    }
+    let num_taps = ((3.3 * sfreq / low_hz.max(0.5)).round() as usize).clamp(51, 301);
+    let taps = design_bandpass_fir(sfreq, low_hz, high_hz, num_taps);
+    let padlen = (num_taps * 2).min(signal.len() - 2);
+    scipy_filtfilt_fir(signal, &taps, padlen)
+}
+
+pub fn filter_notch(signal: &[f64], sfreq: f64, notch_hz: f64, width_hz: f64) -> Vec<f64> {
+    if signal.len() < 100 || notch_hz >= sfreq / 2.0 {
+        return signal.to_vec();
+    }
+    let num_taps = ((3.3 * sfreq / width_hz.max(1.0)).round() as usize).clamp(51, 301);
+    let taps = design_notch_fir(sfreq, notch_hz, width_hz, num_taps);
+    let padlen = (num_taps * 2).min(signal.len() - 2);
+    scipy_filtfilt_fir(signal, &taps, padlen)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,5 +1,6 @@
 // lib/src/detection_dialogs.dart
 
+import 'dart:convert';
 import 'package:flutter/material.dart';
 
 class MtKcdDialog extends StatefulWidget {
@@ -1090,7 +1091,7 @@ class AutoScoringDialog extends StatefulWidget {
 }
 
 class _AutoScoringDialogState extends State<AutoScoringDialog> {
-  String _algorithm = 'yasa';
+  String _algorithm = 'tinysleepnet_rust';
   String _correction = 'none';
   double _sleepgptAlpha = 0.1;
   int _sleepgptNgram = 30;
@@ -1166,6 +1167,13 @@ class _AutoScoringDialogState extends State<AutoScoringDialog> {
                             ),
                           ),
                           items: const [
+                            DropdownMenuItem(
+                              value: 'tinysleepnet_rust',
+                              child: Text(
+                                'TinySleepNet (Native Rust ONNX, Zero-Python)',
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                              ),
+                            ),
                             DropdownMenuItem(
                               value: 'yasa',
                               child: Text(
@@ -1615,6 +1623,13 @@ class BatchAutoScoringDialog extends StatefulWidget {
   State<BatchAutoScoringDialog> createState() => _BatchAutoScoringDialogState();
 }
 
+typedef AnalyseNidraRunCallback = void Function(
+  List<String> channels,
+  List<String> references, {
+  bool perChannel,
+  String? regionMapJson,
+});
+
 class AnalyseNidraDialog extends StatefulWidget {
   const AnalyseNidraDialog({
     super.key,
@@ -1625,7 +1640,7 @@ class AnalyseNidraDialog extends StatefulWidget {
 
   final List<String> channelLabels;
   final int batchCount;
-  final void Function(List<String> channels, List<String> references) onRun;
+  final AnalyseNidraRunCallback onRun;
 
   @override
   State<AnalyseNidraDialog> createState() => _AnalyseNidraDialogState();
@@ -1634,6 +1649,8 @@ class AnalyseNidraDialog extends StatefulWidget {
 class _AnalyseNidraDialogState extends State<AnalyseNidraDialog> {
   late final Map<String, bool> _channels;
   late final Map<String, bool> _references;
+  bool _perChannel = false;
+  Map<String, String> _customRegionMap = {};
 
   @override
   void initState() {
@@ -1654,6 +1671,26 @@ class _AnalyseNidraDialogState extends State<AnalyseNidraDialog> {
     }
   }
 
+  Future<void> _openEditRegionMappingDialog() async {
+    final activeChannels = _channels.entries
+        .where((e) => e.value)
+        .map((e) => e.key)
+        .toList();
+    final channelsToMap = activeChannels.isNotEmpty ? activeChannels : widget.channelLabels;
+    final updated = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (ctx) => EditRegionMappingDialog(
+        channels: channelsToMap,
+        initialMapping: _customRegionMap,
+      ),
+    );
+    if (updated != null) {
+      setState(() {
+        _customRegionMap = updated;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -1663,13 +1700,52 @@ class _AnalyseNidraDialogState extends State<AnalyseNidraDialog> {
             : 'Batch analyse ${widget.batchCount} recordings',
       ),
       content: SizedBox(
-        width: 620,
-        height: 430,
-        child: Row(
+        width: 640,
+        height: 480,
+        child: Column(
           children: [
-            Expanded(child: _selector('EEG channels', _channels)),
-            const SizedBox(width: 12),
-            Expanded(child: _selector('Reference channels', _references)),
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: _selector('EEG channels', _channels)),
+                  const SizedBox(width: 12),
+                  Expanded(child: _selector('Reference channels', _references)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: _perChannel,
+                    onChanged: (val) => setState(() => _perChannel = val ?? false),
+                  ),
+                  const Expanded(
+                    child: Text(
+                      'Per-channel output (no regional grouping)',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.edit, size: 15),
+                    label: Text(
+                      _customRegionMap.isEmpty
+                          ? 'Edit Regional Mapping…'
+                          : 'Edit Regions (${_customRegionMap.length} mapped)',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    onPressed: _perChannel ? null : _openEditRegionMappingDialog,
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -1697,7 +1773,15 @@ class _AnalyseNidraDialogState extends State<AnalyseNidraDialog> {
               return;
             }
             Navigator.of(context).pop();
-            widget.onRun(channels, references);
+            final regionMapJson = (!_perChannel && _customRegionMap.isNotEmpty)
+                ? jsonEncode(_customRegionMap)
+                : null;
+            widget.onRun(
+              channels,
+              references,
+              perChannel: _perChannel,
+              regionMapJson: regionMapJson,
+            );
           },
           child: const Text('Run analysis'),
         ),
@@ -1736,8 +1820,162 @@ class _AnalyseNidraDialogState extends State<AnalyseNidraDialog> {
   }
 }
 
+class EditRegionMappingDialog extends StatefulWidget {
+  const EditRegionMappingDialog({
+    super.key,
+    required this.channels,
+    required this.initialMapping,
+  });
+
+  final List<String> channels;
+  final Map<String, String> initialMapping;
+
+  @override
+  State<EditRegionMappingDialog> createState() => _EditRegionMappingDialogState();
+}
+
+class _EditRegionMappingDialogState extends State<EditRegionMappingDialog> {
+  late final Map<String, TextEditingController> _controllers;
+
+  @override
+  void initState() {
+    super.initState();
+    _controllers = {};
+    for (final channel in widget.channels) {
+      final initial = widget.initialMapping[channel] ??
+          widget.initialMapping[channel.toUpperCase()] ??
+          defaultRegionForChannel(channel);
+      _controllers[channel] = TextEditingController(text: initial);
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final controller in _controllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  static String defaultRegionForChannel(String channel) {
+    final chan = channel.toUpperCase().trim();
+    if (chan == 'PPG' || chan == 'ECG' || chan == 'EMG' || chan == 'EOG' || chan == 'REF' || chan == 'GND') {
+      return 'NaN';
+    }
+    if (chan.startsWith('FP') || chan.startsWith('AF') || chan.startsWith('F')) {
+      return 'Frontal';
+    } else if (chan.startsWith('FC') || chan.startsWith('CP') || chan.startsWith('C')) {
+      return 'Central';
+    } else if (chan.startsWith('PO') || chan.startsWith('O')) {
+      return 'Occipital';
+    } else if (chan.startsWith('FT') || chan.startsWith('TP') || chan.startsWith('T') || chan.startsWith('M') || chan.startsWith('A')) {
+      return 'Temporal';
+    }
+    return 'Central';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const commonRegions = ['Frontal', 'Central', 'Temporal', 'Parietal', 'Occipital', 'NaN'];
+    return AlertDialog(
+      title: const Text('Edit Channel Regional Mapping'),
+      content: SizedBox(
+        width: 480,
+        height: 380,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Assign each channel to an anatomical region (e.g. Frontal, Central, Temporal, Parietal, Occipital). '
+              'Use NaN to omit non-EEG channels from regional averaging.',
+              style: TextStyle(fontSize: 12, color: Colors.black87),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView.separated(
+                itemCount: widget.channels.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final channel = widget.channels[index];
+                  final controller = _controllers[channel]!;
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 90,
+                          child: Text(
+                            channel,
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                        ),
+                        Expanded(
+                          child: TextField(
+                            controller: controller,
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        PopupMenuButton<String>(
+                          icon: const Icon(Icons.arrow_drop_down),
+                          tooltip: 'Quick select region',
+                          onSelected: (val) {
+                            setState(() {
+                              controller.text = val;
+                            });
+                          },
+                          itemBuilder: (_) => commonRegions
+                              .map((r) => PopupMenuItem(value: r, child: Text(r)))
+                              .toList(),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            setState(() {
+              for (final channel in widget.channels) {
+                _controllers[channel]?.text = defaultRegionForChannel(channel);
+              }
+            });
+          },
+          child: const Text('Reset to Defaults'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            final result = <String, String>{};
+            for (final entry in _controllers.entries) {
+              final reg = entry.value.text.trim();
+              if (reg.isNotEmpty) {
+                result[entry.key] = reg;
+              }
+            }
+            Navigator.of(context).pop(result);
+          },
+          child: const Text('Save Mapping'),
+        ),
+      ],
+    );
+  }
+}
+
 class _BatchAutoScoringDialogState extends State<BatchAutoScoringDialog> {
-  String _algorithm = 'yasa';
+  String _algorithm = 'tinysleepnet_rust';
   String _correction = 'none';
   double _sleepgptAlpha = 0.1;
   int _sleepgptNgram = 30;
@@ -1818,6 +2056,13 @@ class _BatchAutoScoringDialogState extends State<BatchAutoScoringDialog> {
                   ),
                 ),
                 items: const [
+                  DropdownMenuItem(
+                    value: 'tinysleepnet_rust',
+                    child: Text(
+                      'TinySleepNet (Native Rust ONNX, Zero-Python)',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
+                  ),
                   DropdownMenuItem(
                     value: 'yasa',
                     child: Text(

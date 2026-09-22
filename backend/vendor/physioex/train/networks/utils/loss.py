@@ -2,10 +2,13 @@ from abc import ABC, abstractmethod
 from typing import Dict
 
 import torch
-from pytorch_metric_learning import losses, miners
-from pytorch_metric_learning.distances import CosineSimilarity
-from pytorch_metric_learning.reducers import ClassWeightedReducer
-from pytorch_metric_learning.regularizers import LpRegularizer
+try:
+    from pytorch_metric_learning import losses, miners
+    from pytorch_metric_learning.distances import CosineSimilarity
+    from pytorch_metric_learning.reducers import ClassWeightedReducer
+    from pytorch_metric_learning.regularizers import LpRegularizer
+except ImportError:
+    losses = miners = CosineSimilarity = ClassWeightedReducer = LpRegularizer = None
 from torch import nn
 
 

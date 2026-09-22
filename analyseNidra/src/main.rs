@@ -12,7 +12,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const VERSION: &str = "1.17.0";
+const VERSION: &str = "1.17.1";
 
 const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
 [core.json|-] [pac.json|-] [slow-waves.json|-] [spindles.json|-] [regional.csv|-] \

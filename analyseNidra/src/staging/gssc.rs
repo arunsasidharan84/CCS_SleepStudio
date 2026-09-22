@@ -720,6 +720,10 @@ mod tests {
     #[test]
     fn test_gssc_eeg_batches() -> Result<()> {
         let input_path = std::path::Path::new("/tmp/gssc_debug_input.bin");
+        if !input_path.exists() {
+            println!("Debug input not found at /tmp/gssc_debug_input.bin, skipping batch test.");
+            return Ok(());
+        }
         let input_bytes = std::fs::read(input_path)?;
         let n_floats = input_bytes.len() / 4;
         let single_epoch: Vec<f32> = (0..n_floats)

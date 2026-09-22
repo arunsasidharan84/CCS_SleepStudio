@@ -39,70 +39,6 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install Python dependencies
-        run: |
-          pip install --upgrade pip
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install -e vendor/ccstools
-          pip install -r backend/requirements.txt
-          pip check
-          # usleep-api 0.1.3 pins requests==2.25.1, while PhysioEx/psg-utils
-          # requires requests>=2.27.1. Its client works with current requests.
-          pip install --no-deps usleep-api==0.1.3
-          pip install pyinstaller
-
-      - name: Build Python standalone backend
-        run: |
-          pyinstaller --onedir --name autoscore-backend \
-            --collect-all torch \
-            --collect-all torchvision \
-            --collect-all gssc \
-            --collect-all mne \
-            --collect-all yasa \
-            --collect-all lspopt \
-            --collect-all lightgbm \
-            --collect-all physioex \
-            --collect-all braindecode \
-            --collect-all mne_bids \
-            --collect-all lightning_fabric \
-            --collect-all lunapi \
-            --collect-all safetensors \
-            --collect-all transformers \
-            --collect-all usleep_api \
-            --collect-all antropy \
-            --collect-all autoreject \
-            --collect-all mne_icalabel \
-            --copy-metadata torch \
-            --copy-metadata transformers \
-            --copy-metadata safetensors \
-            --hidden-import transformers.models.gpt2 \
-            --hidden-import transformers.models.gpt2.modeling_gpt2 \
-            --hidden-import transformers.models.gpt2.configuration_gpt2 \
-            --hidden-import transformers.models.gpt2.tokenization_gpt2 \
-            --hidden-import torch.nn.functional \
-            --hidden-import torch.backends.cuda \
-            --hidden-import torch.backends.mps \
-            --hidden-import ccstools \
-            --hidden-import ccstools.ccs_eeg \
-            --hidden-import ccstools.ccs_eeg.pipeline \
-            --hidden-import ccstools.ccs_eeg.gedai \
-            --hidden-import ccstools.ccs_eeg.gedai.gedai_algo \
-            --add-data "backend/vendor/physioex/train/models/checkpoints:physioex/train/models/checkpoints" \
-            --add-data "backend/models:backend/models" \
-            --add-data "backend/sleepgpt-main:sleepgpt-main" \
-            --add-data "vendor/ccstools/ccstools:ccstools" \
-            backend_entry.py
-
-      - name: Validate AutoscoreNidra standalone backend
-        run: |
-          chmod +x dist/autoscore-backend/autoscore-backend
-          dist/autoscore-backend/autoscore-backend --check-models
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -153,7 +89,6 @@ jobs:
       - name: Copy AnalyseNidra into macOS App bundle (Lite)
         run: |
           cp analyseNidra/target/release/analyse-nidra "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
-          cp -r analyseNidra/assets/models "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
           test -x "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/analyse-nidra"
 
       - name: Ad-hoc sign macOS app (Lite)
@@ -171,12 +106,7 @@ jobs:
         run: flutter build macos --release
         working-directory: frontend
 
-      - name: Copy Python backend into macOS App bundle (Full)
-        run: |
-          cp -R dist/autoscore-backend "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
-          test -x "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/autoscore-backend/autoscore-backend"
-
-      - name: Copy AnalyseNidra into macOS App bundle (Full)
+      - name: Copy AnalyseNidra and Models into macOS App bundle (Full)
         run: |
           cp analyseNidra/target/release/analyse-nidra "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
           cp -r analyseNidra/assets/models "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
@@ -221,70 +151,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install Python dependencies
-        shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install -e vendor/ccstools
-          pip install -r backend/requirements.txt
-          pip check
-          # usleep-api 0.1.3 has an obsolete requests==2.25.1 dependency pin.
-          pip install --no-deps usleep-api==0.1.3
-          pip install pyinstaller
-
-      - name: Build Python standalone backend
-        shell: pwsh
-        run: |
-          pyinstaller --onedir --name autoscore-backend `
-            --collect-all torch `
-            --collect-all torchvision `
-            --collect-all gssc `
-            --collect-all mne `
-            --collect-all yasa `
-            --collect-all lspopt `
-            --collect-all lightgbm `
-            --collect-all physioex `
-            --collect-all braindecode `
-            --collect-all mne_bids `
-            --collect-all lightning_fabric `
-            --collect-all lunapi `
-            --collect-all safetensors `
-            --collect-all transformers `
-            --collect-all usleep_api `
-            --collect-all antropy `
-            --collect-all autoreject `
-            --collect-all mne_icalabel `
-            --copy-metadata torch `
-            --copy-metadata transformers `
-            --copy-metadata safetensors `
-            --hidden-import transformers.models.gpt2 `
-            --hidden-import transformers.models.gpt2.modeling_gpt2 `
-            --hidden-import transformers.models.gpt2.configuration_gpt2 `
-            --hidden-import transformers.models.gpt2.tokenization_gpt2 `
-            --hidden-import torch.nn.functional `
-            --hidden-import torch.backends.cuda `
-            --hidden-import torch.backends.mps `
-            --hidden-import ccstools `
-            --hidden-import ccstools.ccs_eeg `
-            --hidden-import ccstools.ccs_eeg.pipeline `
-            --hidden-import ccstools.ccs_eeg.gedai `
-            --hidden-import ccstools.ccs_eeg.gedai.gedai_algo `
-            --add-data "backend/vendor/physioex/train/models/checkpoints;physioex/train/models/checkpoints" `
-            --add-data "backend/models;backend/models" `
-            --add-data "backend/sleepgpt-main;sleepgpt-main" `
-            --add-data "vendor/ccstools/ccstools;ccstools" `
-            backend_entry.py
-
-      - name: Validate AutoscoreNidra standalone backend
-        shell: pwsh
-        run: dist\autoscore-backend\autoscore-backend.exe --check-models
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -338,7 +204,6 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item analyseNidra\target\release\analyse-nidra.exe frontend\build\windows\x64\runner\Release\
-          Copy-Item -Recurse analyseNidra\assets\models frontend\build\windows\x64\runner\Release\assets\
           if (-not (Test-Path frontend\build\windows\x64\runner\Release\analyse-nidra.exe)) { exit 1 }
 
       - name: Package Windows app (Lite Installer)
@@ -349,14 +214,7 @@ jobs:
         run: flutter build windows --release
         working-directory: frontend
 
-      - name: Copy Python backend into Windows runner build output (Full)
-        shell: pwsh
-        run: |
-          Copy-Item -Recurse dist\autoscore-backend frontend\build\windows\x64\runner\Release\
-          Get-ChildItem -Path "frontend\build\windows\x64\runner\Release\autoscore-backend\_internal" -Recurse -Directory -Filter "licenses" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-          if (-not (Test-Path frontend\build\windows\x64\runner\Release\autoscore-backend\autoscore-backend.exe)) { exit 1 }
-
-      - name: Copy AnalyseNidra into Windows runner build output (Full)
+      - name: Copy AnalyseNidra and Models into Windows runner build output (Full)
         shell: pwsh
         run: |
           Copy-Item analyseNidra\target\release\analyse-nidra.exe frontend\build\windows\x64\runner\Release\
@@ -401,70 +259,6 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libblkid-dev dpkg-dev rpm
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install -e vendor/ccstools
-          pip install -r backend/requirements.txt
-          pip check
-          # usleep-api 0.1.3 pins requests==2.25.1, while PhysioEx/psg-utils
-          # requires requests>=2.27.1. Its client works with current requests.
-          pip install --no-deps usleep-api==0.1.3
-          pip install pyinstaller
-
-      - name: Build Python standalone backend
-        run: |
-          pyinstaller --onedir --name autoscore-backend \
-            --collect-all torch \
-            --collect-all torchvision \
-            --collect-all gssc \
-            --collect-all mne \
-            --collect-all yasa \
-            --collect-all lspopt \
-            --collect-all lightgbm \
-            --collect-all physioex \
-            --collect-all braindecode \
-            --collect-all mne_bids \
-            --collect-all lightning_fabric \
-            --collect-all lunapi \
-            --collect-all safetensors \
-            --collect-all transformers \
-            --collect-all usleep_api \
-            --collect-all antropy \
-            --collect-all autoreject \
-            --collect-all mne_icalabel \
-            --copy-metadata torch \
-            --copy-metadata transformers \
-            --copy-metadata safetensors \
-            --hidden-import transformers.models.gpt2 \
-            --hidden-import transformers.models.gpt2.modeling_gpt2 \
-            --hidden-import transformers.models.gpt2.configuration_gpt2 \
-            --hidden-import transformers.models.gpt2.tokenization_gpt2 \
-            --hidden-import torch.nn.functional \
-            --hidden-import torch.backends.cuda \
-            --hidden-import torch.backends.mps \
-            --hidden-import ccstools \
-            --hidden-import ccstools.ccs_eeg \
-            --hidden-import ccstools.ccs_eeg.pipeline \
-            --hidden-import ccstools.ccs_eeg.gedai \
-            --hidden-import ccstools.ccs_eeg.gedai.gedai_algo \
-            --add-data "backend/vendor/physioex/train/models/checkpoints:physioex/train/models/checkpoints" \
-            --add-data "backend/models:backend/models" \
-            --add-data "backend/sleepgpt-main:sleepgpt-main" \
-            --add-data "vendor/ccstools/ccstools:ccstools" \
-            backend_entry.py
-
-      - name: Validate AutoscoreNidra standalone backend
-        run: |
-          chmod +x dist/autoscore-backend/autoscore-backend
-          dist/autoscore-backend/autoscore-backend --check-models
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -515,8 +309,6 @@ jobs:
         run: |
           cp bridge/target/release/librust_sleep_eeg.so frontend/build/linux/x64/release/bundle/
           cp analyseNidra/target/release/analyse-nidra frontend/build/linux/x64/release/bundle/
-          mkdir -p frontend/build/linux/x64/release/bundle/assets
-          cp -r analyseNidra/assets/models frontend/build/linux/x64/release/bundle/assets/
           test -x frontend/build/linux/x64/release/bundle/analyse-nidra
 
       - name: Build Linux installer (Lite)
@@ -535,9 +327,8 @@ jobs:
         run: flutter build linux --release
         working-directory: frontend
 
-      - name: Copy Python and Rust backend into Linux bundle (Full)
+      - name: Copy Rust backend and Models into Linux bundle (Full)
         run: |
-          cp -a dist/autoscore-backend frontend/build/linux/x64/release/bundle/
           cp bridge/target/release/librust_sleep_eeg.so frontend/build/linux/x64/release/bundle/
           cp analyseNidra/target/release/analyse-nidra frontend/build/linux/x64/release/bundle/
           mkdir -p frontend/build/linux/x64/release/bundle/assets
@@ -571,11 +362,10 @@ jobs:
             almalinux:9 bash -lc '
               dnf install -y /packages/CCSSleepStudio-linux-x86_64.rpm &&
               test -x /usr/bin/ccs-sleep-studio &&
-              test -x /usr/lib/ccs-sleep-studio/autoscore-backend/autoscore-backend &&
               test -x /usr/lib/ccs-sleep-studio/analyse-nidra &&
+              test -d /usr/lib/ccs-sleep-studio/assets/models &&
               ldd /usr/lib/ccs-sleep-studio/CCSSleepStudio > /tmp/app-ldd.txt &&
-              ldd /usr/lib/ccs-sleep-studio/autoscore-backend/autoscore-backend > /tmp/backend-ldd.txt &&
-              ! grep -E "not found|version .* not found" /tmp/app-ldd.txt /tmp/backend-ldd.txt
+              ! grep -E "not found|version .* not found" /tmp/app-ldd.txt
             '
 
       # 3. Upload Artifacts

@@ -373,6 +373,7 @@ PID="\$1"
 TARGET_APP="\$2"
 NEW_APP="\$3"
 CLEANUP_DIR="\$4"
+ZIP_FILE="\$5"
 
 # 1. Wait for current app PID to terminate
 while kill -0 "\$PID" 2>/dev/null; do
@@ -388,6 +389,7 @@ rm -rf "\$TARGET_APP"
 if cp -R "\$NEW_APP" "\$TARGET_APP"; then
   open -a "\$TARGET_APP" 2>/dev/null || open "\$TARGET_APP"
   rm -rf "\$CLEANUP_DIR"
+  rm -f "\$ZIP_FILE"
 else
   # Fallback to opening extracted app in Finder if permissions denied
   open -R "\$NEW_APP"
@@ -399,7 +401,7 @@ fi
       // Launch helper detached and exit cleanly
       await Process.start(
         '/bin/bash',
-        [helperScript.path, pid.toString(), currentApp, extractedApp, tempDir.path],
+        [helperScript.path, pid.toString(), currentApp, extractedApp, tempDir.path, zipFile.path],
         mode: ProcessStartMode.detached,
       );
 

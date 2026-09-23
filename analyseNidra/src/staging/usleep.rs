@@ -27,41 +27,11 @@ impl USleepModel {
     pub fn resolve_model(model_arg: Option<&str>) -> Result<PathBuf> {
         if let Some(arg) = model_arg {
             let p = PathBuf::from(arg);
-            if p.exists() {
+            if p.is_file() {
                 return Ok(p);
             }
         }
-
-        let candidates = [
-            PathBuf::from("assets/models/usleep/usleep.onnx"),
-            PathBuf::from("analyseNidra/assets/models/usleep/usleep.onnx"),
-            PathBuf::from("../assets/models/usleep/usleep.onnx"),
-            PathBuf::from("../analyseNidra/assets/models/usleep/usleep.onnx"),
-        ];
-
-        for c in &candidates {
-            if c.exists() {
-                return Ok(c.clone());
-            }
-        }
-
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(parent) = exe.parent() {
-                let exe_candidates = [
-                    parent.join("assets/models/usleep/usleep.onnx"),
-                    parent.join("models/usleep/usleep.onnx"),
-                    parent.join("../Resources/models/usleep/usleep.onnx"),
-                    parent.join("../Resources/assets/models/usleep/usleep.onnx"),
-                ];
-                for c in &exe_candidates {
-                    if c.exists() {
-                        return Ok(c.clone());
-                    }
-                }
-            }
-        }
-
-        anyhow::bail!("U-Sleep ONNX model not found. Ensure assets/models/usleep/usleep.onnx exists.")
+        super::assets::require_model_file("usleep/usleep.onnx", "U-Sleep ONNX model")
     }
 
     /// Run forward pass on a single 3-epoch sequence (shape [3, 2, 3000]).
@@ -238,14 +208,12 @@ pub fn score_usleep_recording(
     let eog_norm = eog_100.map(|sig| normalize_channel_iqr(&sig));
 
     let sequences = build_usleep_sequences(&eeg_norm, eog_norm.as_deref());
-    let mut all_probs = Vec::with_capacity(sequences.len());
-
-    for seq in &sequences {
-        let probs = model.score_sequence(seq)?;
-        all_probs.push(probs);
-    }
-
-    Ok(all_probs)
+    use rayon::prelude::*;
+    // Sequences are independent: run them in parallel across cores.
+    sequences
+        .par_iter()
+        .map(|seq| model.score_sequence(seq))
+        .collect()
 }
 
 #[cfg(test)]

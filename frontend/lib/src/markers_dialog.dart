@@ -15,8 +15,19 @@ Color _eventColor(int digit) {
     Color(0xFFD81B60), // 7 Pink
     Color(0xFF3949AB), // 8 Indigo
     Color(0xFF00897B), // 9 Teal
+    Color(0xFFBCBD22), // 10
+    Color(0xFFFFA500), // 11
+    Color(0xFF4B0082), // 12
+    Color(0xFFC62828), // 13 Obstructive apnea
+    Color(0xFF1565C0), // 14 Central apnea
+    Color(0xFF6A1B9A), // 15 Mixed apnea
+    Color(0xFFEF6C00), // 16 Hypopnea
+    Color(0xFFF9A825), // 17 RERA
+    Color(0xFF0097A7), // 18 Desaturation
+    Color(0xFF7CB342), // 19 Leg movement
+    Color(0xFF1B5E20), // 20 PLM
   ];
-  return colors[digit.clamp(0, 9)];
+  return colors[digit.clamp(0, colors.length - 1)];
 }
 
 class MarkersDialog extends StatefulWidget {

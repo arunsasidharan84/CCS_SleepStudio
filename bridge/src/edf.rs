@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::ffi::{CString, CStr};
 use std::os::raw::c_char;
@@ -161,6 +161,9 @@ pub fn load_edf_impl(path: &Path, scale_volts: bool) -> Result<EdfFile, String> 
 
     // Move file cursor to data start (in case we did not read exactly up to header_bytes)
     file.seek(SeekFrom::Start(header_bytes as u64)).map_err(|e| e.to_string())?;
+    // Buffer the record reads: one read syscall per (small) data record is
+    // very slow on Windows, especially with antivirus / network drives.
+    let mut file = BufReader::with_capacity(8 << 20, file);
 
     // Read records one by one
     let mut record_buffer = vec![0u8; total_samples_per_record * 2];

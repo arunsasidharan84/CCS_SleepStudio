@@ -10,7 +10,7 @@
   <b>National Institute of Mental Health and Neurosciences (NIMHANS)</b>, Bangalore, India.
 </p>
 
-**Version:** 1.18.0
+**Version:** 1.19.0
 
 Welcome to **CCS Sleep Studio**, a high-performance, cross-platform desktop application designed to assist researchers and clinicians in sleep EEG visualization, event annotation, sleep scoring, automated staging, and advanced EEG analysis.
 
@@ -18,6 +18,13 @@ CCS Sleep Studio is comprised of the following key modules:
 *   **ScoringNidra**: Interactive sleep scoring and event annotation module supporting EDF, Brain Products (.vhdr / .vmrk), Nihon Kohden (.EEG / .LOG), EMBLA (.ebm), Orbit (.orb), and R09 (.r09).
 *   **AutoscoreNidra**: Automated sleep scoring module with both interactive and batch modes.
 *   **AnalyseNidra**: Automated sleep EEG analysis and reporting module operating in both interactive and batch modes.
+
+### 🌟 New in Version 1.19.0
+*   **Respiratory / OSA analysis (Utilities menu)** following the AASM Scoring Manual v3: apneas (obstructive / central / mixed), hypopneas with the 1A (3 % or arousal) or 1B (4 %) rule, RERAs, alternative-sensor fallback when the flow sensor fails, ODI, T90/T88, hypoxic burden, pulse-rate response, ventilatory burden, REM-related and positional OSA and Cheyne-Stokes breathing. Events are shown as markers on the waveforms and hypnogram, and a Respiratory page is added to the PDF report.
+*   **Periodic limb movement (PLMS) analysis** using AASM v3 rules (WASM 2016 available): LM, PLMS/PLMW, PLMS-arousal and respiratory-related LM indices, periodicity index, inter-movement-interval histogram, with markers and a PLM page in the PDF report.
+*   **All autoscoring algorithms now run in the native engine** (TinySleepNet, YASA, U-Sleep, Luna POPS, GSSC, SeqSleepNet, SleepTransformer, Dreamento, SleepEEGpy), with multi-montage consensus and automatic EOG/EMG. Outputs are saved as `<recording>_<algorithm>_scoring.json`, so your manual scoring file is never overwritten.
+*   **Simpler batch file selection**: *Add Single Files…* and *Add from Folder…* in both batch panels, with *Include subfolders*, *Use wildcard pattern* and (AnalyseNidra) *Auto-load scorings* options. Every channel field can be filled from the channel list of the first recording.
+*   **Windows performance**: buffered EDF reading, coalesced hypnogram/spectrogram navigation, and a per-user install location under `%LOCALAPPDATA%\Programs` instead of the roaming profile.
 
 ### 🌟 New in Version 1.7.0
 *   **Universal Markers & Annotations Support**:

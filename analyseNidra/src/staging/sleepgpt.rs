@@ -136,43 +136,11 @@ impl SleepGptModel {
     pub fn resolve_model(model_arg: Option<&str>) -> Result<PathBuf> {
         if let Some(arg) = model_arg {
             let p = PathBuf::from(arg);
-            if p.exists() {
+            if p.is_file() {
                 return Ok(p);
             }
         }
-
-        let candidates = [
-            PathBuf::from("assets/models/sleepgpt/sleepgpt_weights.json"),
-            PathBuf::from("analyseNidra/assets/models/sleepgpt/sleepgpt_weights.json"),
-            PathBuf::from("../assets/models/sleepgpt/sleepgpt_weights.json"),
-            PathBuf::from("../analyseNidra/assets/models/sleepgpt/sleepgpt_weights.json"),
-        ];
-
-        for c in &candidates {
-            if c.exists() {
-                return Ok(c.clone());
-            }
-        }
-
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(parent) = exe.parent() {
-                let exe_candidates = [
-                    parent.join("assets/models/sleepgpt/sleepgpt_weights.json"),
-                    parent.join("models/sleepgpt/sleepgpt_weights.json"),
-                    parent.join("../Resources/models/sleepgpt/sleepgpt_weights.json"),
-                    parent.join("../Resources/assets/models/sleepgpt/sleepgpt_weights.json"),
-                ];
-                for c in &exe_candidates {
-                    if c.exists() {
-                        return Ok(c.clone());
-                    }
-                }
-            }
-        }
-
-        anyhow::bail!(
-            "SleepGPT weights not found. Ensure assets/models/sleepgpt/sleepgpt_weights.json exists."
-        )
+        super::assets::require_model_file("sleepgpt/sleepgpt_weights.json", "SleepGPT weights")
     }
 
     /// Forward pass for input sequence tokens. Returns logits [6] for the final step.

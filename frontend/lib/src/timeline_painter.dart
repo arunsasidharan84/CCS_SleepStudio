@@ -2301,6 +2301,15 @@ Color _eventColor(int digit) {
     Color.fromARGB(100, 255, 165, 0),
     Color.fromARGB(100, 75, 0, 130),
     Color.fromARGB(100, 255, 105, 180),
+    // 13-20: respiratory & limb-movement events (psg_analysis.dart)
+    Color.fromARGB(120, 198, 40, 40), // 13 obstructive apnea
+    Color.fromARGB(120, 21, 101, 192), // 14 central apnea
+    Color.fromARGB(120, 106, 27, 154), // 15 mixed apnea
+    Color.fromARGB(120, 239, 108, 0), // 16 hypopnea
+    Color.fromARGB(120, 249, 168, 37), // 17 RERA
+    Color.fromARGB(110, 0, 151, 167), // 18 desaturation
+    Color.fromARGB(110, 124, 179, 66), // 19 leg movement
+    Color.fromARGB(130, 27, 94, 32), // 20 PLM
   ];
   return colors[digit.clamp(0, colors.length - 1)];
 }

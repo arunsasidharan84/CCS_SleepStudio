@@ -22,6 +22,7 @@ import 'models.dart';
 import 'marker_io.dart';
 import 'markers_dialog.dart';
 import 'preprocess_dialog.dart';
+import 'psg_analysis.dart';
 import 'publication_sleep_report.dart';
 import 'regional_csv.dart';
 import 'scoring_io.dart';
@@ -99,6 +100,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       TextEditingController();
   final TextEditingController _batchStagingOutDirController =
       TextEditingController();
+  bool _batchStagingRecursive = true;
+  bool _batchStagingUseWildcard = false;
+  final TextEditingController _batchStagingWildcardController =
+      TextEditingController(text: '*.edf');
 
   // Batch AnalyseNidra State
   final List<Map<String, String>> _batchAnalysePairs = [];
@@ -114,6 +119,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   List<String> _lastAnalyseRegionalFiles = const [];
   List<String> _batchAnalyseAvailableChannels = const [];
   bool _batchAnalysePerChannel = false;
+  bool _batchAnalyseRecursive = true;
+  bool _batchAnalyseUseWildcard = false;
+  bool _batchAnalyseAutoLoadScorings = true;
+  final TextEditingController _batchAnalyseWildcardController =
+      TextEditingController(text: '*.edf');
   Map<String, String> _batchAnalyseCustomRegionMap = {};
 
   // Video Sync State
@@ -168,6 +178,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     _batchAnalyseEegController.dispose();
     _batchAnalyseRefController.dispose();
     _batchScoringPostfixController.dispose();
+    _batchStagingWildcardController.dispose();
+    _batchAnalyseWildcardController.dispose();
     super.dispose();
   }
 
@@ -758,10 +770,33 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     _jumpToEpoch(v.currentEpoch + 1 + delta);
   }
 
+  int? _pendingJumpEpoch;
+
+  /// Coalesces bursts of navigation requests (e.g. dragging across the
+  /// hypnogram or spectrogram, which fires on every pointer event — up to
+  /// 1000 Hz with high-polling-rate mice on Windows) into one viewport
+  /// rebuild per frame.
+  void _jumpToEpochCoalesced(int epochOneBased) {
+    final alreadyScheduled = _pendingJumpEpoch != null;
+    _pendingJumpEpoch = epochOneBased;
+    if (alreadyScheduled) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = _pendingJumpEpoch;
+      _pendingJumpEpoch = null;
+      if (target != null && mounted) _jumpToEpoch(target);
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
   void _jumpToEpoch(int epochOneBased, [bool claimFocus = true]) {
     final v = _viewport;
     if (v == null) return;
     final epoch = (epochOneBased - 1).clamp(0, v.epochCount - 1);
+    if (epoch == v.currentEpoch) {
+      // Already there: skip the (expensive, synchronous) viewport rebuild.
+      if (claimFocus && mounted) _viewerFocusNode.requestFocus();
+      return;
+    }
     final eeg = _loadedEeg;
     final serial = ++_navigationSerial;
     _tfRefreshTimer?.cancel();
@@ -1153,6 +1188,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   String _eventLabel(int digit) {
     final custom = _config.customEventNames[digit]?.trim();
     if (custom != null && custom.isNotEmpty) return custom;
+    final psgName = kPsgEventNames[digit];
+    if (psgName != null) return psgName;
     return digit == 0 ? 'Artifact' : 'Event $digit';
   }
 
@@ -1230,99 +1267,30 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     if (v == null || eeg == null || path == null) return;
 
     final navigator = Navigator.of(context);
-    final algorithm = settings['algorithm'] as String;
-    final rustSupportedAlgorithms = {
-      'tinysleepnet_rust',
-      'tinysleepnet',
-      'yasa',
-      'usleep',
-      'seqsleepnet',
-      'sleeptransformer',
-      'gssc',
-    };
-    final bool isRustStaging = isAnalyseNidraAvailable() && rustSupportedAlgorithms.contains(algorithm);
-
-    late final String executable;
-    late final List<String> commandArgs;
-
-    if (isRustStaging) {
-      executable = detectAnalyseNidraExecutable();
-      final algoFlag = algorithm == 'tinysleepnet_rust' ? 'tinysleepnet' : algorithm;
-      final args = <String>['--stage', path, '--algorithm', algoFlag];
-      final correction = settings['sequence_correction'] as String?;
-      if (correction != null && correction.isNotEmpty && correction != 'none') {
-        args.addAll(['--sequence-correction', correction]);
-        if (correction == 'sleepgpt') {
-          final alpha = settings['sleepgpt_alpha'];
-          if (alpha != null) args.addAll(['--sleepgpt-alpha', alpha.toString()]);
-          final ngram = settings['sleepgpt_ngram'];
-          if (ngram != null) args.addAll(['--sleepgpt-ngram', ngram.toString()]);
-        }
-      }
-      final eegChans = (settings['eeg'] as List?)?.map((e) => e.toString()).toList() ?? const [];
-      if (eegChans.isNotEmpty) {
-        args.addAll(['--channel', eegChans.first]);
-      }
-      final refChans = (settings['ref'] as List?)?.map((e) => e.toString()).toList() ?? const [];
-      if (refChans.isNotEmpty) {
-        args.addAll(['--ref', refChans.first]);
-      }
-      commandArgs = args;
-    } else {
-      late final AutoscoreInvocation invocation;
-      try {
-        invocation = resolveAutoscoreInvocation();
-      } on StateError catch (error) {
-        _setStatus(error.message);
-        if (mounted) {
-          _showTextDialog('AutoscoreNidra unavailable', error.message);
-        }
-        return;
-      }
-
-      final args = <String>[path];
-      args.addAll(['--algorithm', algorithm]);
-
-      final correction = settings['sequence_correction'] as String;
-      args.addAll(['--sequence-correction', correction]);
-
-      final eegChans = (settings['eeg'] as List?)?.map((e) => e.toString()).toList() ?? const [];
-      if (eegChans.isNotEmpty) {
-        args.addAll(['--eeg', eegChans.join(',')]);
-      }
-
-      final refChans = (settings['ref'] as List?)?.map((e) => e.toString()).toList() ?? const [];
-      if (refChans.isNotEmpty) {
-        args.addAll(['--ref', refChans.join(',')]);
-      }
-
-      final eogChans = (settings['eog'] as List?)?.map((e) => e.toString()).toList() ?? const [];
-      if (eogChans.isNotEmpty) {
-        args.addAll(['--eog', eogChans.join(',')]);
-      }
-
-      final emgChans = (settings['emg'] as List?)?.map((e) => e.toString()).toList() ?? const [];
-      if (emgChans.isNotEmpty) {
-        args.addAll(['--emg', emgChans.join(',')]);
-      }
-
-      if (correction == 'sleepgpt') {
-        final alpha = settings['sleepgpt_alpha'] as double;
-        args.addAll(['--sleepgpt-alpha', alpha.toString()]);
-        final ngram = settings['sleepgpt_ngram'] as int;
-        args.addAll(['--sleepgpt-ngram', ngram.toString()]);
-      }
-
-      executable = invocation.executable;
-      commandArgs = invocation.argumentsFor(args);
+    final algorithm = canonicalAutoscoreAlgorithm(
+      settings['algorithm'] as String? ?? 'tinysleepnet',
+    );
+    final algoLabel = autoscoreAlgorithmLabel(algorithm);
+    if (!isAnalyseNidraAvailable()) {
+      const message =
+          'The native analyse-nidra engine was not found beside the '
+          'application. Reinstall CCS Sleep Studio to restore autoscoring.';
+      _setStatus(message);
+      if (mounted) _showTextDialog('AutoscoreNidra unavailable', message);
+      return;
     }
+    final executable = detectAnalyseNidraExecutable();
+    final correction = settings['sequence_correction'] as String?;
+    List<String> settingList(String key) =>
+        (settings[key] as List?)?.map((e) => e.toString()).toList() ??
+        const <String>[];
 
     final logsController = StreamController<String>();
     final logLines = <String>[];
     final scrollController = ScrollController();
     var isDone = false;
     var progress = 0.0;
-    var progressLabel = isRustStaging ? 'Starting native Rust TinySleepNet engine...' : 'Starting scoring backend...';
+    var progressLabel = 'Starting $algoLabel…';
     String? outputJsonPath;
     StateSetter? setStateDialogRef;
     var dialogActive = true;
@@ -1421,14 +1389,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         startupTimer?.cancel();
         return;
       }
-      progressLabel = isRustStaging
-          ? 'Scoring with native Rust TinySleepNet (${startupStopwatch.elapsed.inSeconds}s elapsed)'
-          : 'Launching packaged model runtime... (${startupStopwatch.elapsed.inSeconds}s elapsed)';
+      progressLabel =
+          'Scoring with $algoLabel (${startupStopwatch.elapsed.inSeconds}s elapsed)';
       setStateDialogRef?.call(() {});
     });
 
     Future.microtask(() async {
-      _setStatus(isRustStaging ? 'Starting native Rust TinySleepNet…' : 'Starting AutoscoreNidra backend…');
+      _setStatus('Starting $algoLabel autoscoring…');
+      Directory? tempDir;
       try {
         void onLine(String line) {
           final update = _scoringProgressFromLine(line);
@@ -1450,9 +1418,35 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           });
         }
 
-        onLine(isRustStaging
-            ? 'Native Rust TinySleepNet engine launched. Running ONNX inference...'
-            : 'Backend launched. Loading model dependencies…');
+        var stageInput = path;
+        String? explicitOut;
+        if (!analyseNidraReadsNatively(path)) {
+          onLine('Converting ${_basename(path)} to a temporary EDF for the native engine…');
+          tempDir = await Directory.systemTemp.createTemp('ccs_autoscore_');
+          var stem = _basename(path);
+          final dot = stem.lastIndexOf('.');
+          if (dot > 0) stem = stem.substring(0, dot);
+          stageInput = '${tempDir.path}${Platform.pathSeparator}$stem.edf';
+          await processEdfFile(path, stageInput, EdfTransformOptions());
+          explicitOut = nativeStageOutputPath(
+            path,
+            algorithm,
+            sequenceCorrection: correction,
+          );
+        }
+        final commandArgs = buildNativeStageArgs(
+          inputPath: stageInput,
+          algorithm: algorithm,
+          sequenceCorrection: correction,
+          sleepgptAlpha: settings['sleepgpt_alpha'],
+          sleepgptNgram: settings['sleepgpt_ngram'],
+          eeg: settingList('eeg'),
+          ref: settingList('ref'),
+          eog: settingList('eog'),
+          emg: settingList('emg'),
+          outJson: explicitOut,
+        );
+        onLine('Native $algoLabel engine launched (analyse-nidra).');
         final exitCode = await _backend.runCommandStreamAsync(
           executable: executable,
           arguments: commandArgs,
@@ -1491,7 +1485,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               stagesConfidence: scoringData.stagesConfidence,
               stageProbabilities: scoringData.stageProbabilities,
             );
-            _status = 'AutoscoreNidra completed with $algorithm';
+            _status = 'AutoscoreNidra completed with $algoLabel';
           });
           if (dialogActive) navigator.pop();
         } else {
@@ -1561,6 +1555,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       } finally {
         startupTimer?.cancel();
         logsController.close();
+        if (tempDir != null) {
+          try {
+            await tempDir.delete(recursive: true);
+          } catch (_) {}
+        }
       }
     });
   }
@@ -1588,14 +1587,15 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       return;
     }
 
-    late final AutoscoreInvocation invocation;
-    try {
-      invocation = resolveAutoscoreInvocation();
-    } on StateError catch (error) {
-      _setStatus(error.message);
-      if (mounted) _showTextDialog('AutoscoreNidra unavailable', error.message);
+    if (!isAnalyseNidraAvailable()) {
+      const message =
+          'The native analyse-nidra engine was not found beside the '
+          'application. Reinstall CCS Sleep Studio to use SleepGPT.';
+      _setStatus(message);
+      if (mounted) _showTextDialog('AutoscoreNidra unavailable', message);
       return;
     }
+    final sleepGptExecutable = detectAnalyseNidraExecutable();
 
     final tempDir = await Directory.systemTemp.createTemp(
       'ccs_sleep_studio_sleepgpt_',
@@ -1695,12 +1695,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       final args = <String>[
         '--apply-sleepgpt',
         inputPath,
-        '--output-json',
+        '--out',
         outputPath,
       ];
       final exitCode = await _backend.runCommandStreamAsync(
-        executable: invocation.executable,
-        arguments: invocation.argumentsFor(args),
+        executable: sleepGptExecutable,
+        arguments: args,
         onLine: onLine,
       );
       if (dialogActive) navigator.pop();
@@ -2098,6 +2098,276 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         _batchAnalyseRefController.text = selected.join(',');
       });
     }
+  }
+
+  // ─── Shared batch file-selection helpers ──────────────────────────────────
+
+  static const List<String> _batchAutoscoreExtensions = [
+    'edf', 'eeg', 'vhdr', 'orb', 'signal', 'ebm', 'mat', 'r09',
+  ];
+  static const List<String> _batchAnalyseExtensions = ['edf', 'orb', 'signal'];
+
+  void _batchSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// "Add Single Files…" / "Add from Folder…" for both batch panels. The
+  /// subfolder and wildcard options apply to folder scans; the wildcard also
+  /// filters individually picked files.
+  Future<List<String>> _collectBatchRecordings({
+    required bool fromFolder,
+    required List<String> extensions,
+    required bool recursive,
+    required bool useWildcard,
+    required String pattern,
+    required String title,
+  }) async {
+    final exts = extensions.map((e) => e.toLowerCase()).toSet();
+    bool extOk(String path) => exts.contains(path.split('.').last.toLowerCase());
+    final pat = pattern.trim().isEmpty ? '*' : pattern.trim();
+    if (!fromFolder) {
+      final result = await FilePicker.pickFiles(
+        dialogTitle: title,
+        type: FileType.custom,
+        allowedExtensions: [for (final e in exts) ...[e, e.toUpperCase()]],
+        allowMultiple: true,
+      );
+      final paths = result?.files.map((f) => f.path).whereType<String>().toList() ??
+          const <String>[];
+      final kept = useWildcard ? paths.where((p) => matchesWildcard(p, pat)).toList() : paths;
+      if (useWildcard && kept.length < paths.length) {
+        _batchSnack('${paths.length - kept.length} file(s) skipped: they do not match "$pat".');
+      }
+      return kept;
+    }
+    final dir = await FilePicker.getDirectoryPath(dialogTitle: title);
+    if (dir == null) return const [];
+    final directory = Directory(dir);
+    if (!directory.existsSync()) return const [];
+    final found = <String>[];
+    try {
+      await for (final entity in directory.list(recursive: recursive, followLinks: false)) {
+        if (entity is File &&
+            extOk(entity.path) &&
+            (!useWildcard || matchesWildcard(entity.path, pat))) {
+          found.add(entity.path);
+        }
+      }
+    } catch (e) {
+      _batchSnack('Could not scan folder: $e');
+    }
+    found.sort();
+    if (found.isEmpty) {
+      _batchSnack(
+        useWildcard
+            ? 'No recordings matching "$pat" were found${recursive ? ' (including subfolders)' : ''}.'
+            : 'No recordings were found${recursive ? ' (including subfolders)' : ''}.',
+      );
+      return const [];
+    }
+    if (found.length == 1 || !mounted) return found;
+    final selected = await showBatchFileSubSelectionDialog(
+      context: context,
+      title: 'Recordings found in ${_basename(dir)} (${found.length})',
+      files: found,
+    );
+    return selected ?? const [];
+  }
+
+  /// Finds a scoring file for [eegPath]: `<stem><postfix>.json`,
+  /// `<stem>_scoring.json`, `<stem>.json`, else the newest autoscoring output
+  /// (`<stem>_<algorithm>_scoring.json`) beside the recording.
+  String _findScoringForRecording(String eegPath, String postfix) {
+    final file = File(eegPath);
+    final dir = file.parent;
+    var stem = _basename(eegPath);
+    final dot = stem.lastIndexOf('.');
+    if (dot > 0) stem = stem.substring(0, dot);
+    final sep = Platform.pathSeparator;
+    for (final name in [
+      if (postfix.isNotEmpty) '$stem$postfix.json',
+      '${stem}_scoring.json',
+      '$stem.json',
+    ]) {
+      final candidate = '${dir.path}$sep$name';
+      if (File(candidate).existsSync()) return candidate;
+    }
+    try {
+      final autos = dir
+          .listSync(followLinks: false)
+          .whereType<File>()
+          .where((f) {
+            final name = _basename(f.path);
+            return name.startsWith('${stem}_') && name.endsWith('_scoring.json');
+          })
+          .toList()
+        ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+      if (autos.isNotEmpty) return autos.first.path;
+    } catch (_) {}
+    return '';
+  }
+
+  void _addBatchAnalyseRecordings(List<String> files) {
+    if (files.isEmpty) return;
+    final postfix = _batchScoringPostfixController.text.trim();
+    setState(() {
+      for (final f in files) {
+        if (_batchAnalysePairs.any((p) => p['eegPath'] == f)) continue;
+        _batchAnalysePairs.add({
+          'eegPath': f,
+          'scoringPath': _batchAnalyseAutoLoadScorings
+              ? _findScoringForRecording(f, postfix)
+              : '',
+        });
+      }
+    });
+    _autoInspectBatchAnalyseChannels();
+  }
+
+  void _rematchBatchScorings() {
+    final postfix = _batchScoringPostfixController.text.trim();
+    setState(() {
+      for (final pair in _batchAnalysePairs) {
+        if ((pair['scoringPath'] ?? '').isEmpty) {
+          pair['scoringPath'] = _findScoringForRecording(pair['eegPath'] ?? '', postfix);
+        }
+      }
+    });
+  }
+
+  Widget _batchOptionCheckbox(String label, bool value, ValueChanged<bool> onChanged) {
+    return InkWell(
+      onTap: () => onChanged(!value),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Checkbox(
+            value: value,
+            visualDensity: VisualDensity.compact,
+            onChanged: (v) => onChanged(v ?? false),
+          ),
+          Text(label, style: const TextStyle(fontSize: 13)),
+        ],
+      ),
+    );
+  }
+
+  /// Consistent file-selection controls for the AutoscoreNidra and
+  /// AnalyseNidra batch panels.
+  Widget _batchSourceControls({
+    required VoidCallback onAddFiles,
+    required VoidCallback onAddFolder,
+    required bool hasItems,
+    required VoidCallback onSelectDeselect,
+    required VoidCallback onClear,
+    required bool recursive,
+    required ValueChanged<bool> onRecursive,
+    required bool useWildcard,
+    required ValueChanged<bool> onWildcard,
+    required TextEditingController wildcardController,
+    List<Widget> extraOptions = const [],
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ElevatedButton.icon(
+              icon: const Icon(Icons.note_add, size: 16),
+              label: const Text('Add Single Files…'),
+              onPressed: onAddFiles,
+            ),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.create_new_folder, size: 16),
+              label: const Text('Add from Folder…'),
+              onPressed: onAddFolder,
+            ),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.checklist, size: 16),
+              label: const Text('Select / Deselect…'),
+              onPressed: hasItems ? onSelectDeselect : null,
+            ),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.clear_all, size: 16),
+              label: const Text('Clear All'),
+              onPressed: hasItems ? onClear : null,
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 12,
+          runSpacing: 4,
+          children: [
+            _batchOptionCheckbox('Include subfolders', recursive, onRecursive),
+            _batchOptionCheckbox('Use wildcard pattern', useWildcard, onWildcard),
+            if (useWildcard)
+              SizedBox(
+                width: 210,
+                child: TextField(
+                  controller: wildcardController,
+                  decoration: const InputDecoration(
+                    labelText: 'Pattern',
+                    hintText: 'e.g. *.edf, sub-*_eeg.edf, **/night1/*.edf',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+            ...extraOptions,
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// Opens the channel list of the first batch recording and writes the
+  /// selection into [controller].
+  Future<void> _pickBatchChannelsInto({
+    required TextEditingController controller,
+    required String? firstFile,
+    required String title,
+  }) async {
+    if (firstFile == null || firstFile.isEmpty) {
+      _batchSnack('Add recordings first: channels are listed from the first file in the batch.');
+      return;
+    }
+    final available = await extractRecordingChannels(firstFile);
+    if (available.isEmpty) {
+      _batchSnack('Could not read channel labels from ${_basename(firstFile)}. You can type channels manually.');
+      return;
+    }
+    if (!mounted) return;
+    final selected = await showChannelSelectionDialog(
+      context: context,
+      title: title,
+      recordingPath: firstFile,
+      availableChannels: available,
+      initialSelectedChannels: _parseChannelList(controller.text),
+    );
+    if (selected != null && mounted) {
+      setState(() => controller.text = selected.join(','));
+    }
+  }
+
+  Widget _batchChannelPickerButton(
+    TextEditingController controller,
+    String? firstFile,
+    String title,
+  ) {
+    return IconButton(
+      icon: const Icon(Icons.playlist_add_check),
+      tooltip: 'Choose from the channel list of the first recording…',
+      onPressed: () => _pickBatchChannelsInto(
+        controller: controller,
+        firstFile: firstFile,
+        title: title,
+      ),
+    );
   }
 
   Future<void> _openBatchAutoscoreChannelSelector() async {
@@ -3261,6 +3531,246 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
+  // ─── Respiratory (OSA) & PLM analysis ────────────────────────────────────
+
+  /// Returns an EDF the native engine can read for [path] (converting other
+  /// formats to a temporary EDF) plus the temp folder to delete afterwards.
+  Future<(String, Directory?)> _nativeEdfFor(String path) async {
+    if (analyseNidraReadsNatively(path)) return (path, null);
+    final tempDir = await Directory.systemTemp.createTemp('ccs_psg_');
+    var stem = _basename(path);
+    final dot = stem.lastIndexOf('.');
+    if (dot > 0) stem = stem.substring(0, dot);
+    final edf = '${tempDir.path}${Platform.pathSeparator}$stem.edf';
+    await processEdfFile(path, edf, EdfTransformOptions());
+    return (edf, tempDir);
+  }
+
+  Future<String?> _saveScoringForPsg(String path, EegViewport v) async {
+    await autoSaveScoring(
+      path,
+      v.stages,
+      v.epochSeconds,
+      events: v.scoredEvents,
+      stagesUncertain: v.stagesUncertain,
+      stagesConfidence: v.stagesConfidence,
+      stageProbabilities: v.stageProbabilities,
+    );
+    final scoringPath = _analyseNidraScoringPath(path);
+    return File(scoringPath).existsSync() ? scoringPath : null;
+  }
+
+  void _replacePsgEvents(
+    bool Function(int digit) isOld,
+    List<ScoredEvent> fresh,
+    String status,
+  ) {
+    final v = _viewport;
+    if (v == null) return;
+    final kept = v.scoredEvents.where((e) => !isOld(e.digit)).toList();
+    final merged = [...kept, ...fresh]
+      ..sort((a, b) => a.startSec.compareTo(b.startSec));
+    setState(() {
+      _viewport = v.copyWith(scoredEvents: merged, clearEventSelections: true);
+      _status = status;
+    });
+    autoSaveScoring(
+      _activePath,
+      _viewport!.stages,
+      _viewport!.epochSeconds,
+      events: _viewport!.scoredEvents,
+      stagesUncertain: _viewport!.stagesUncertain,
+      stagesConfidence: _viewport!.stagesConfidence,
+      stageProbabilities: _viewport!.stageProbabilities,
+    );
+  }
+
+  Future<void> _runRespiratoryAnalysis() async {
+    final v = _viewport;
+    final path = _activePath;
+    if (v == null || path == null) {
+      _setStatus('Load a PSG recording first');
+      return;
+    }
+    if (!isAnalyseNidraAvailable()) {
+      _showTextDialog(
+        'Respiratory analysis unavailable',
+        'The native analyse-nidra engine was not found beside the application.',
+      );
+      return;
+    }
+    final executable = detectAnalyseNidraExecutable();
+    Directory? tempDir;
+    try {
+      _setStatus('Reading PSG channels…');
+      final (edf, tmp) = await _nativeEdfFor(path);
+      tempDir = tmp;
+      final signals = await listPsgSignals(executable, edf);
+      if (!mounted) return;
+      final hasManualArousals = v.scoredEvents.any(
+        (e) => e.label.toLowerCase().contains('arous'),
+      );
+      final settings = await showDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (_) => RespiratoryAnalysisDialog(
+          signals: signals,
+          hasHypnogram: v.stages.any((s) => s.isScored),
+          hasManualArousals: hasManualArousals,
+        ),
+      );
+      if (settings == null || !mounted) {
+        _setStatus('Respiratory analysis cancelled');
+        return;
+      }
+      final scoringPath = await _saveScoringForPsg(path, v);
+      final outPath = respiratoryReportPath(path);
+      final args = buildRespiratoryArgs(
+        edfPath: edf,
+        settings: settings,
+        scoringPath: scoringPath,
+        lightsOffSeconds: _config.lightsOffSeconds,
+        lightsOnSeconds: _config.lightsOnSeconds,
+        outPath: outPath,
+      );
+      if (!mounted) return;
+      final (exitCode, logs) = await runAnalyseNidraWithProgress(
+        context: context,
+        title: 'Respiratory / OSA Analysis',
+        executable: executable,
+        arguments: args,
+      );
+      final report = exitCode == 0 ? await loadPsgReport(outPath) : null;
+      if (report == null) {
+        _setStatus('Respiratory analysis failed');
+        _showTextDialog(
+          'Respiratory analysis failed',
+          'analyse-nidra returned exit code $exitCode.\n\n${logs.join('\n')}',
+        );
+        return;
+      }
+      final events = respiratoryEventsFromReport(report);
+      final ahi = (report['summary'] as Map?)?['AHI'];
+      _replacePsgEvents(
+        isRespiratoryEventDigit,
+        events,
+        'Respiratory analysis: AHI ${ahi is num ? ahi.toStringAsFixed(1) : '—'}/h, '
+        '${events.length} markers added',
+      );
+      if (!mounted) return;
+      await showPsgSummaryDialog(
+        context,
+        title: 'Respiratory Analysis — ${_basename(path)}',
+        sections: respiratorySummarySections(report),
+        warnings: [
+          for (final w in (report['warnings'] as List? ?? const [])) w.toString(),
+        ],
+        reportPath: outPath,
+      );
+    } catch (e) {
+      _setStatus('Respiratory analysis failed: $e');
+      if (mounted) _showTextDialog('Respiratory analysis failed', '$e');
+    } finally {
+      if (tempDir != null) {
+        try {
+          await tempDir.delete(recursive: true);
+        } catch (_) {}
+      }
+    }
+  }
+
+  Future<void> _runPlmAnalysis() async {
+    final v = _viewport;
+    final path = _activePath;
+    if (v == null || path == null) {
+      _setStatus('Load a PSG recording first');
+      return;
+    }
+    if (!isAnalyseNidraAvailable()) {
+      _showTextDialog(
+        'PLM analysis unavailable',
+        'The native analyse-nidra engine was not found beside the application.',
+      );
+      return;
+    }
+    final executable = detectAnalyseNidraExecutable();
+    Directory? tempDir;
+    try {
+      _setStatus('Reading PSG channels…');
+      final (edf, tmp) = await _nativeEdfFor(path);
+      tempDir = tmp;
+      final signals = await listPsgSignals(executable, edf);
+      if (!mounted) return;
+      final respPath = respiratoryReportPath(path);
+      final hasResp = File(respPath).existsSync();
+      final settings = await showDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (_) => PlmAnalysisDialog(
+          signals: signals,
+          hasHypnogram: v.stages.any((s) => s.isScored),
+          hasRespiratoryReport: hasResp,
+        ),
+      );
+      if (settings == null || !mounted) {
+        _setStatus('PLM analysis cancelled');
+        return;
+      }
+      final scoringPath = await _saveScoringForPsg(path, v);
+      final outPath = plmReportPath(path);
+      final args = buildPlmArgs(
+        edfPath: edf,
+        settings: settings,
+        scoringPath: scoringPath,
+        respiratoryJson: hasResp ? respPath : null,
+        lightsOffSeconds: _config.lightsOffSeconds,
+        lightsOnSeconds: _config.lightsOnSeconds,
+        outPath: outPath,
+      );
+      if (!mounted) return;
+      final (exitCode, logs) = await runAnalyseNidraWithProgress(
+        context: context,
+        title: 'Periodic Limb Movement Analysis',
+        executable: executable,
+        arguments: args,
+      );
+      final report = exitCode == 0 ? await loadPsgReport(outPath) : null;
+      if (report == null) {
+        _setStatus('PLM analysis failed');
+        _showTextDialog(
+          'PLM analysis failed',
+          'analyse-nidra returned exit code $exitCode.\n\n${logs.join('\n')}',
+        );
+        return;
+      }
+      final events = plmEventsFromReport(report);
+      final plmsi = (report['summary'] as Map?)?['PLMS_index'];
+      _replacePsgEvents(
+        isLimbMovementDigit,
+        events,
+        'PLM analysis: PLMS index ${plmsi is num ? plmsi.toStringAsFixed(1) : '—'}/h, '
+        '${events.length} leg-movement markers added',
+      );
+      if (!mounted) return;
+      await showPsgSummaryDialog(
+        context,
+        title: 'PLM Analysis — ${_basename(path)}',
+        sections: plmSummarySections(report),
+        warnings: [
+          for (final w in (report['warnings'] as List? ?? const [])) w.toString(),
+        ],
+        reportPath: outPath,
+      );
+    } catch (e) {
+      _setStatus('PLM analysis failed: $e');
+      if (mounted) _showTextDialog('PLM analysis failed', '$e');
+    } finally {
+      if (tempDir != null) {
+        try {
+          await tempDir.delete(recursive: true);
+        } catch (_) {}
+      }
+    }
+  }
+
   String _getStageLatency(EegViewport v, SleepStage target) {
     for (var i = 0; i < v.stages.length; i++) {
       if (v.stages[i] == target) {
@@ -3289,15 +3799,43 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     }
   }
 
-  Future<List<bool>?> _showPageSelectionDialog() async {
+  /// Returns 7 flags: the five EEG pages, then Respiratory and PLM pages
+  /// (added only when the corresponding analysis results exist).
+  Future<List<bool>?> _showPageSelectionDialog({
+    bool? hasRespiratory,
+    bool? hasPlm,
+  }) async {
     final List<String> pageNames = [
       'Page 1: Macrostructure & Sleep Architecture',
       'Page 2: Thalamocortical Microstructure',
       'Page 3: Aperiodic & Fractal Activity',
       'Page 4: Spectral & Complexity Profile',
       'Page 5: Clinical Summary & Interpretation',
+      hasRespiratory == null
+          ? 'Respiratory Events & Oximetry (when analysed)'
+          : 'Respiratory Events & Oximetry',
+      hasPlm == null
+          ? 'Periodic Limb Movements (when analysed)'
+          : 'Periodic Limb Movements',
     ];
-    final List<bool> selected = [true, true, true, true, true];
+    final List<bool> selected = [
+      true,
+      true,
+      true,
+      true,
+      true,
+      hasRespiratory ?? true,
+      hasPlm ?? true,
+    ];
+    final List<bool> enabled = [
+      true,
+      true,
+      true,
+      true,
+      true,
+      hasRespiratory ?? true,
+      hasPlm ?? true,
+    ];
 
     return showDialog<List<bool>>(
       context: context,
@@ -3313,12 +3851,17 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                     CheckboxListTile(
                       dense: true,
                       title: Text(pageNames[i]),
-                      value: selected[i],
-                      onChanged: (v) {
-                        setState(() {
-                          selected[i] = v ?? false;
-                        });
-                      },
+                      subtitle: enabled[i]
+                          ? null
+                          : const Text('Run the analysis from the Utilities menu first'),
+                      value: selected[i] && enabled[i],
+                      onChanged: enabled[i]
+                          ? (v) {
+                              setState(() {
+                                selected[i] = v ?? false;
+                              });
+                            }
+                          : null,
                     ),
                 ],
               ),
@@ -3348,7 +3891,15 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       return;
     }
 
-    final selectedPages = await _showPageSelectionDialog();
+    final activeForReport = _activePath;
+    final respiratoryPath = activeForReport == null
+        ? null
+        : respiratoryReportPath(activeForReport);
+    final plmPath = activeForReport == null ? null : plmReportPath(activeForReport);
+    final selectedPages = await _showPageSelectionDialog(
+      hasRespiratory: respiratoryPath != null && File(respiratoryPath).existsSync(),
+      hasPlm: plmPath != null && File(plmPath).existsSync(),
+    );
     if (selectedPages == null) {
       _setStatus('Report export cancelled');
       return;
@@ -3378,11 +3929,19 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       }
     }
 
+    final respiratoryReport = selectedPages[5] && respiratoryPath != null
+        ? await loadPsgReport(respiratoryPath)
+        : null;
+    final plmReport = selectedPages[6] && plmPath != null
+        ? await loadPsgReport(plmPath)
+        : null;
     final bytes = buildPublicationSleepReport(
       viewport: viewport,
       recordingName: _basename(_activePath ?? viewport.sourceDescription),
       regionalRows: regionalRows,
-      includePages: selectedPages,
+      includePages: selectedPages.sublist(0, 5),
+      respiratoryReport: respiratoryReport,
+      plmReport: plmReport,
       metadata: ReportMetadata(
         title: _config.reportTitle,
         studySite: _config.studySite,
@@ -4839,6 +5398,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             onSelected: _runAnalyseNidraDetection,
           ),
           PlatformMenuItem(
+            label: 'Respiratory / OSA Analysis (AASM)…',
+            onSelected: _runRespiratoryAnalysis,
+          ),
+          PlatformMenuItem(
+            label: 'Periodic Limb Movement (PLMS) Analysis…',
+            onSelected: _runPlmAnalysis,
+          ),
+          PlatformMenuItem(
             label: 'Find similar epochs from current epoch…',
             onSelected: _showSimilarEpochDialog,
           ),
@@ -5175,6 +5742,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 ),
               ),
               MenuItemButton(
+                onPressed: _runRespiratoryAnalysis,
+                child: const Text('Respiratory / OSA Analysis (AASM)…'),
+              ),
+              MenuItemButton(
+                onPressed: _runPlmAnalysis,
+                child: const Text('Periodic Limb Movement (PLMS) Analysis…'),
+              ),
+              MenuItemButton(
                 onPressed: _showSimilarEpochDialog,
                 child: const Text('Find similar epochs from current epoch…'),
               ),
@@ -5390,170 +5965,60 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                     ),
                             ),
                             const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                ElevatedButton.icon(
-                                  icon: const Icon(Icons.add, size: 16),
-                                  label: const Text('Add Recording Files…'),
-                                  onPressed: () async {
-                                    final result = await FilePicker.pickFiles(
-                                      dialogTitle:
-                                          'Select EEG files for batch AutoscoreNidra',
-                                      type: FileType.custom,
-                                      allowedExtensions: ['edf', 'EDF', 'eeg', 'EEG', 'vhdr', 'VHDR', 'orb', 'signal', 'ebm', 'EBM', 'mat', 'r09'],
-                                      allowMultiple: true,
-                                    );
-                                    if (result != null) {
-                                      setState(() {
-                                        for (final file in result.files) {
-                                          if (file.path != null &&
-                                              !_batchStagingFiles.contains(
-                                                file.path!,
-                                              )) {
-                                            _batchStagingFiles.add(file.path!);
-                                          }
-                                        }
-                                      });
-                                    }
-                                  },
-                                ),
-                                ElevatedButton.icon(
-                                  icon: const Icon(Icons.folder, size: 16),
-                                  label: const Text('Add Directory (Recursive)…'),
-                                  onPressed: () async {
-                                    final dir = await FilePicker.getDirectoryPath(
-                                      dialogTitle: 'Select directory to search recursively',
-                                    );
-                                    if (dir != null) {
-                                      final directory = Directory(dir);
-                                      if (directory.existsSync()) {
-                                        final files = directory.listSync(recursive: true);
-                                        setState(() {
-                                          for (final file in files) {
-                                            if (file is File) {
-                                              final ext = file.path.split('.').last.toLowerCase();
-                                              if ((ext == 'edf' || ext == 'eeg' || ext == 'vhdr' || ext == 'orb' || ext == 'signal' || ext == 'ebm' || ext == 'mat' || ext == 'r09') &&
-                                                  !_batchStagingFiles.contains(file.path)) {
-                                                _batchStagingFiles.add(file.path);
-                                              }
-                                            }
-                                          }
-                                        });
-                                      }
-                                    }
-                                  },
-                                ),
-                                ElevatedButton.icon(
-                                  icon: const Icon(Icons.manage_search, size: 16),
-                                  label: const Text('Add by Pattern/Wildcard…'),
-                                  onPressed: () async {
-                                    final dir = await FilePicker.getDirectoryPath(
-                                      dialogTitle: 'Select directory to search with pattern',
-                                    );
-                                    if (dir != null && mounted) {
-                                      final patternCtrl = TextEditingController(text: '*.edf');
-                                      if (!mounted) return;
-                                      final confirmedPattern = await showDialog<String>(
-                                        context: context,
-                                        builder: (ctx) => AlertDialog(
-                                          title: const Text('Search by Pattern / Wildcard'),
-                                          content: Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text('Directory:\n$dir', style: const TextStyle(fontSize: 12)),
-                                              const SizedBox(height: 12),
-                                              TextField(
-                                                controller: patternCtrl,
-                                                decoration: const InputDecoration(
-                                                  labelText: 'Wildcard Pattern',
-                                                  hintText: 'e.g. *.edf, *sub_*_eeg.edf, **/*.edf',
-                                                  border: OutlineInputBorder(),
-                                                  isDense: true,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          actions: [
-                                            TextButton(
-                                              onPressed: () => Navigator.of(ctx).pop(null),
-                                              child: const Text('Cancel'),
-                                            ),
-                                            ElevatedButton(
-                                              onPressed: () => Navigator.of(ctx).pop(patternCtrl.text.trim()),
-                                              child: const Text('Search'),
-                                            ),
-                                          ],
-                                        ),
-                                      );
-
-                                      if (confirmedPattern != null && confirmedPattern.isNotEmpty && mounted) {
-                                        final matched = await scanDirectoryWithPattern(
-                                          directoryPath: dir,
-                                          pattern: confirmedPattern,
-                                          allowedExtensions: ['edf', 'eeg', 'vhdr', 'orb', 'signal', 'ebm', 'mat', 'r09'],
-                                        );
-                                        if (!mounted) return;
-                                        if (matched.isEmpty) {
-                                          if (mounted) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              const SnackBar(content: Text('No files matched the specified pattern.')),
-                                            );
-                                          }
-                                          return;
-                                        }
-                                        if (!mounted) return;
-                                        final selected = await showBatchFileSubSelectionDialog(
-                                          context: context,
-                                          title: 'Select Matched Files ($confirmedPattern)',
-                                          files: matched,
-                                        );
-                                        if (selected != null && selected.isNotEmpty && mounted) {
-                                          setState(() {
-                                            for (final f in selected) {
-                                              if (!_batchStagingFiles.contains(f)) {
-                                                _batchStagingFiles.add(f);
-                                              }
-                                            }
-                                          });
-                                        }
-                                      }
-                                    }
-                                  },
-                                ),
-                                OutlinedButton.icon(
-                                  icon: const Icon(Icons.checklist, size: 16),
-                                  label: const Text('Select / Deselect…'),
-                                  onPressed: _batchStagingFiles.isEmpty
-                                      ? null
-                                      : () async {
-                                          final selected = await showBatchFileSubSelectionDialog(
-                                            context: context,
-                                            title: 'Batch Autoscore File Selection',
-                                            files: List<String>.from(_batchStagingFiles),
-                                          );
-                                          if (selected != null && mounted) {
-                                            setState(() {
-                                              _batchStagingFiles.clear();
-                                              _batchStagingFiles.addAll(selected);
-                                            });
-                                          }
-                                        },
-                                ),
-                                OutlinedButton.icon(
-                                  icon: const Icon(Icons.clear_all, size: 16),
-                                  label: const Text('Clear All Files'),
-                                  onPressed: _batchStagingFiles.isEmpty
-                                      ? null
-                                      : () {
-                                          setState(() {
-                                            _batchStagingFiles.clear();
-                                          });
-                                        },
-                                ),
-                              ],
+                            _batchSourceControls(
+                              onAddFiles: () async {
+                                final files = await _collectBatchRecordings(
+                                  fromFolder: false,
+                                  extensions: _batchAutoscoreExtensions,
+                                  recursive: _batchStagingRecursive,
+                                  useWildcard: _batchStagingUseWildcard,
+                                  pattern: _batchStagingWildcardController.text,
+                                  title: 'Select recordings for batch AutoscoreNidra',
+                                );
+                                if (files.isEmpty || !mounted) return;
+                                setState(() {
+                                  for (final f in files) {
+                                    if (!_batchStagingFiles.contains(f)) _batchStagingFiles.add(f);
+                                  }
+                                });
+                              },
+                              onAddFolder: () async {
+                                final files = await _collectBatchRecordings(
+                                  fromFolder: true,
+                                  extensions: _batchAutoscoreExtensions,
+                                  recursive: _batchStagingRecursive,
+                                  useWildcard: _batchStagingUseWildcard,
+                                  pattern: _batchStagingWildcardController.text,
+                                  title: 'Select a folder of recordings for batch AutoscoreNidra',
+                                );
+                                if (files.isEmpty || !mounted) return;
+                                setState(() {
+                                  for (final f in files) {
+                                    if (!_batchStagingFiles.contains(f)) _batchStagingFiles.add(f);
+                                  }
+                                });
+                              },
+                              hasItems: _batchStagingFiles.isNotEmpty,
+                              onSelectDeselect: () async {
+                                final selected = await showBatchFileSubSelectionDialog(
+                                  context: context,
+                                  title: 'Batch Autoscore File Selection',
+                                  files: List<String>.from(_batchStagingFiles),
+                                );
+                                if (selected != null && mounted) {
+                                  setState(() {
+                                    _batchStagingFiles
+                                      ..clear()
+                                      ..addAll(selected);
+                                  });
+                                }
+                              },
+                              onClear: () => setState(_batchStagingFiles.clear),
+                              recursive: _batchStagingRecursive,
+                              onRecursive: (v) => setState(() => _batchStagingRecursive = v),
+                              useWildcard: _batchStagingUseWildcard,
+                              onWildcard: (v) => setState(() => _batchStagingUseWildcard = v),
+                              wildcardController: _batchStagingWildcardController,
                             ),
                             const SizedBox(height: 16),
                             DropdownButtonFormField<String>(
@@ -5564,43 +6029,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                 isDense: true,
                                 border: OutlineInputBorder(),
                               ),
-                              items: const [
-                                DropdownMenuItem(
-                                  value: 'yasa',
-                                  child: Text('YASA LightGBM Consensus'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'usleep',
-                                  child: Text('Offline U-Sleep Consensus'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'luna',
-                                  child: Text('Luna POPS Stager'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'gssc',
-                                  child: Text('Greifswald Classifier (GSSC)'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'tinysleepnet',
-                                  child: Text('TinySleepNet (PhysioEx)'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'seqsleepnet',
-                                  child: Text('SeqSleepNet (PhysioEx)'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'sleeptansformer',
-                                  child: Text('SleepTransformer (PhysioEx)'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'dreamento',
-                                  child: Text('Dreamento (YASA-based)'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'sleepeegpy',
-                                  child: Text('SleepEEGpy (YASA-based)'),
-                                ),
+                              items: [
+                                for (final option in autoscoreAlgorithmOptions)
+                                  DropdownMenuItem(
+                                    value: option.$1,
+                                    child: Text(option.$2),
+                                  ),
                               ],
                               onChanged: (v) {
                                 if (v != null) {
@@ -5641,39 +6075,27 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                               style: TextStyle(fontWeight: FontWeight.bold),
                             ),
                             const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextFormField(
-                                    key: const Key('batch-autoscore-eeg-channels'),
-                                    controller: _batchStagingEegController,
-                                    decoration: InputDecoration(
-                                      labelText: 'EEG Channels (comma-separated)',
-                                      hintText: 'e.g. AF7,AF8 or F3,F4',
-                                      isDense: true,
-                                      border: const OutlineInputBorder(),
-                                      suffixIcon: IconButton(
-                                        icon: const Icon(Icons.playlist_add_check),
-                                        tooltip: 'Select channels from first recording…',
-                                        onPressed: _openBatchAutoscoreChannelSelector,
-                                      ),
-                                    ),
-                                  ),
+                            if (_batchStagingFiles.isNotEmpty) ...[
+                              Text(
+                                'Channel lists come from the first recording: ${_basename(_batchStagingFiles.first)}',
+                                style: TextStyle(fontSize: 11, color: Colors.grey.shade600, fontStyle: FontStyle.italic),
+                              ),
+                              const SizedBox(height: 6),
+                            ],
+                            TextFormField(
+                              key: const Key('batch-autoscore-eeg-channels'),
+                              controller: _batchStagingEegController,
+                              decoration: InputDecoration(
+                                labelText: 'EEG Channels (comma-separated)',
+                                hintText: 'e.g. C3,C4 or F3,F4 (blank = auto)',
+                                isDense: true,
+                                border: const OutlineInputBorder(),
+                                suffixIcon: _batchChannelPickerButton(
+                                  _batchStagingEegController,
+                                  _batchStagingFiles.isEmpty ? null : _batchStagingFiles.first,
+                                  'Select EEG Channels for AutoscoreNidra',
                                 ),
-                                if (_batchStagingFiles.isNotEmpty) ...[
-                                  const SizedBox(width: 8),
-                                  ElevatedButton.icon(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.purple.shade600,
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
-                                    ),
-                                    icon: const Icon(Icons.tune, size: 18),
-                                    label: const Text('Select from 1st File…'),
-                                    onPressed: _openBatchAutoscoreChannelSelector,
-                                  ),
-                                ],
-                              ],
+                              ),
                             ),
                             const SizedBox(height: 8),
                             TextFormField(
@@ -5681,32 +6103,47 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                 'batch-autoscore-reference-channels',
                               ),
                               controller: _batchStagingRefController,
-                              decoration: const InputDecoration(
+                              decoration: InputDecoration(
                                 labelText:
                                     'Reference Channels (comma-separated)',
-                                hintText: 'e.g. PPG or M1,M2',
+                                hintText: 'e.g. M2,M1 (blank = contralateral auto)',
                                 isDense: true,
-                                border: OutlineInputBorder(),
+                                border: const OutlineInputBorder(),
+                                suffixIcon: _batchChannelPickerButton(
+                                  _batchStagingRefController,
+                                  _batchStagingFiles.isEmpty ? null : _batchStagingFiles.first,
+                                  'Select Reference Channel(s) for AutoscoreNidra',
+                                ),
                               ),
                             ),
                             const SizedBox(height: 8),
                             TextFormField(
                               controller: _batchStagingEogController,
-                              decoration: const InputDecoration(
+                              decoration: InputDecoration(
                                 labelText: 'EOG Channels (optional)',
-                                hintText: 'e.g. LOC,ROC',
+                                hintText: 'e.g. LOC,ROC (blank = auto-detect)',
                                 isDense: true,
-                                border: OutlineInputBorder(),
+                                border: const OutlineInputBorder(),
+                                suffixIcon: _batchChannelPickerButton(
+                                  _batchStagingEogController,
+                                  _batchStagingFiles.isEmpty ? null : _batchStagingFiles.first,
+                                  'Select EOG Channel(s) for AutoscoreNidra',
+                                ),
                               ),
                             ),
                             const SizedBox(height: 8),
                             TextFormField(
                               controller: _batchStagingEmgController,
-                              decoration: const InputDecoration(
+                              decoration: InputDecoration(
                                 labelText: 'EMG Channels (optional)',
-                                hintText: 'e.g. EMG1,EMG2',
+                                hintText: 'e.g. Chin1-Chin2 (blank = auto-detect)',
                                 isDense: true,
-                                border: OutlineInputBorder(),
+                                border: const OutlineInputBorder(),
+                                suffixIcon: _batchChannelPickerButton(
+                                  _batchStagingEmgController,
+                                  _batchStagingFiles.isEmpty ? null : _batchStagingFiles.first,
+                                  'Select EMG Channel(s) for AutoscoreNidra',
+                                ),
                               ),
                             ),
                             const SizedBox(height: 8),
@@ -5823,7 +6260,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                           ),
                           const Divider(height: 24),
                           const Text(
-                            'File Mappings (EEG file <-> Scoring file):',
+                            'Recordings and their scoring files:',
                             style: TextStyle(fontWeight: FontWeight.bold),
                           ),
                           const SizedBox(height: 8),
@@ -5850,7 +6287,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                         dense: true,
                                         title: Text('EEG: ${_basename(eeg)}'),
                                         subtitle: Text(
-                                          'Scoring: ${_basename(scoring)}',
+                                          scoring.isEmpty
+                                              ? 'Scoring: not found — click the pencil to choose'
+                                              : 'Scoring: ${_basename(scoring)}',
+                                          style: scoring.isEmpty
+                                              ? const TextStyle(color: Colors.deepOrange)
+                                              : null,
                                         ),
                                         trailing: Row(
                                           mainAxisSize: MainAxisSize.min,
@@ -5905,274 +6347,104 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                   ),
                           ),
                           const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              ElevatedButton.icon(
-                                icon: const Icon(
-                                  Icons.add_circle_outline,
-                                  size: 16,
+                          _batchSourceControls(
+                            onAddFiles: () async {
+                              final files = await _collectBatchRecordings(
+                                fromFolder: false,
+                                extensions: _batchAnalyseExtensions,
+                                recursive: _batchAnalyseRecursive,
+                                useWildcard: _batchAnalyseUseWildcard,
+                                pattern: _batchAnalyseWildcardController.text,
+                                title: 'Select recordings for batch AnalyseNidra',
+                              );
+                              if (mounted) _addBatchAnalyseRecordings(files);
+                            },
+                            onAddFolder: () async {
+                              final files = await _collectBatchRecordings(
+                                fromFolder: true,
+                                extensions: _batchAnalyseExtensions,
+                                recursive: _batchAnalyseRecursive,
+                                useWildcard: _batchAnalyseUseWildcard,
+                                pattern: _batchAnalyseWildcardController.text,
+                                title: 'Select a folder of recordings for batch AnalyseNidra',
+                              );
+                              if (mounted) _addBatchAnalyseRecordings(files);
+                            },
+                            hasItems: _batchAnalysePairs.isNotEmpty,
+                            onSelectDeselect: () async {
+                              final eegFiles = _batchAnalysePairs
+                                  .map((p) => p['eegPath'] ?? '')
+                                  .where((e) => e.isNotEmpty)
+                                  .toList();
+                              final selected = await showBatchFileSubSelectionDialog(
+                                context: context,
+                                title: 'Batch AnalyseNidra File Selection',
+                                files: eegFiles,
+                              );
+                              if (selected != null && mounted) {
+                                final selectedSet = selected.toSet();
+                                setState(() {
+                                  _batchAnalysePairs.removeWhere(
+                                    (p) => !selectedSet.contains(p['eegPath']),
+                                  );
+                                });
+                              }
+                            },
+                            onClear: () => setState(() {
+                              _batchAnalysePairs.clear();
+                              _batchAnalyseAvailableChannels = const [];
+                            }),
+                            recursive: _batchAnalyseRecursive,
+                            onRecursive: (v) => setState(() => _batchAnalyseRecursive = v),
+                            useWildcard: _batchAnalyseUseWildcard,
+                            onWildcard: (v) => setState(() => _batchAnalyseUseWildcard = v),
+                            wildcardController: _batchAnalyseWildcardController,
+                            extraOptions: [
+                              _batchOptionCheckbox(
+                                'Auto-load scorings',
+                                _batchAnalyseAutoLoadScorings,
+                                (v) {
+                                  setState(() => _batchAnalyseAutoLoadScorings = v);
+                                  if (v) _rematchBatchScorings();
+                                },
+                              ),
+                              if (_batchAnalyseAutoLoadScorings)
+                                SizedBox(
+                                  width: 170,
+                                  child: TextField(
+                                    controller: _batchScoringPostfixController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Scoring postfix',
+                                      hintText: 'e.g. _scoring',
+                                      isDense: true,
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    onSubmitted: (_) => _rematchBatchScorings(),
+                                  ),
                                 ),
-                                label: const Text('Add EEG File…'),
-                                onPressed: () async {
-                                  final result = await FilePicker.pickFiles(
-                                    dialogTitle:
-                                        'Select EEG file (EDF/ORB/SIGNAL)',
-                                    type: FileType.custom,
-                                    allowedExtensions: ['edf', 'orb', 'signal'],
-                                  );
-                                  if (result != null &&
-                                      result.files.single.path != null) {
-                                    setState(() {
-                                      _batchAnalysePairs.add({
-                                        'eegPath': result.files.single.path!,
-                                        'scoringPath': '',
-                                      });
-                                    });
-                                    _autoInspectBatchAnalyseChannels();
-                                  }
-                                },
-                              ),
-                              ElevatedButton.icon(
-                                icon: const Icon(
-                                  Icons.settings_suggest,
-                                  size: 16,
-                                ),
-                                label: const Text('Auto-pair Directory…'),
-                                onPressed: () async {
-                                  final dir = await FilePicker.getDirectoryPath(
-                                    dialogTitle:
-                                        'Select directory to auto-pair files',
-                                  );
-                                  if (dir != null) {
-                                    final directory = Directory(dir);
-                                    if (directory.existsSync()) {
-                                      final files = directory.listSync(recursive: true);
-                                      final List<String> eegs = [];
-                                      final List<String> scorings = [];
-                                      for (final file in files) {
-                                        if (file is File) {
-                                          final ext = file.path
-                                              .split('.')
-                                              .last
-                                              .toLowerCase();
-                                          if (ext == 'edf' ||
-                                              ext == 'orb' ||
-                                              ext == 'signal') {
-                                            eegs.add(file.path);
-                                          } else if (ext == 'json' && !file.path.toLowerCase().endsWith('.config.json')) {
-                                            scorings.add(file.path);
-                                          }
-                                        }
-                                      }
-
-                                      final postfix = _batchScoringPostfixController.text.trim();
-
-                                      setState(() {
-                                        for (final eeg in eegs) {
-                                          final eegName = _basename(eeg).substring(0, _basename(eeg).lastIndexOf('.'));
-                                          String matchedScoring = '';
-                                          
-                                          final cand1 = postfix.isNotEmpty ? '$eegName$postfix.json' : '';
-                                          final cand2 = '$eegName.json';
-
-                                          for (final scoring in scorings) {
-                                            final scBase = _basename(scoring);
-                                            if ((cand1.isNotEmpty && scBase == cand1) || scBase == cand2) {
-                                              matchedScoring = scoring;
-                                              break;
-                                            }
-                                          }
-
-                                          if (matchedScoring.isEmpty) {
-                                            for (final scoring in scorings) {
-                                              final scName = _basename(scoring).split('.').first;
-                                              if (scName.contains(eegName) || eegName.contains(scName)) {
-                                                matchedScoring = scoring;
-                                                break;
-                                              }
-                                            }
-                                          }
-
-                                          _batchAnalysePairs.add({
-                                            'eegPath': eeg,
-                                            'scoringPath': matchedScoring,
-                                          });
-                                        }
-                                      });
-                                      _autoInspectBatchAnalyseChannels();
-                                    }
-                                  }
-                                },
-                              ),
-                              ElevatedButton.icon(
-                                icon: const Icon(Icons.manage_search, size: 16),
-                                label: const Text('Add by Pattern/Wildcard…'),
-                                onPressed: () async {
-                                  final dir = await FilePicker.getDirectoryPath(
-                                    dialogTitle: 'Select directory to search EEG recordings',
-                                  );
-                                  if (dir != null && mounted) {
-                                    final patternCtrl = TextEditingController(text: '*.edf');
-                                    if (!mounted) return;
-                                    final confirmedPattern = await showDialog<String>(
-                                      context: context,
-                                      builder: (ctx) => AlertDialog(
-                                        title: const Text('Search EEG Files by Pattern'),
-                                        content: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Text('Directory:\n$dir', style: const TextStyle(fontSize: 12)),
-                                            const SizedBox(height: 12),
-                                            TextField(
-                                              controller: patternCtrl,
-                                              decoration: const InputDecoration(
-                                                labelText: 'Wildcard Pattern',
-                                                hintText: 'e.g. *.edf, *sub_*_eeg.edf, **/*.edf',
-                                                border: OutlineInputBorder(),
-                                                isDense: true,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        actions: [
-                                          TextButton(
-                                            onPressed: () => Navigator.of(ctx).pop(null),
-                                            child: const Text('Cancel'),
-                                          ),
-                                          ElevatedButton(
-                                            onPressed: () => Navigator.of(ctx).pop(patternCtrl.text.trim()),
-                                            child: const Text('Search'),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-
-                                    if (confirmedPattern != null && confirmedPattern.isNotEmpty && mounted) {
-                                      final matched = await scanDirectoryWithPattern(
-                                        directoryPath: dir,
-                                        pattern: confirmedPattern,
-                                        allowedExtensions: ['edf', 'orb', 'signal'],
-                                      );
-                                      if (!mounted) return;
-                                      if (matched.isEmpty) {
-                                        if (mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            const SnackBar(content: Text('No EEG files matched pattern.')),
-                                          );
-                                        }
-                                        return;
-                                      }
-                                      if (!mounted) return;
-                                      final selected = await showBatchFileSubSelectionDialog(
-                                        context: context,
-                                        title: 'Select EEG Files ($confirmedPattern)',
-                                        files: matched,
-                                      );
-                                      if (selected != null && selected.isNotEmpty && mounted) {
-                                        setState(() {
-                                          for (final f in selected) {
-                                            if (!_batchAnalysePairs.any((p) => p['eegPath'] == f)) {
-                                              _batchAnalysePairs.add({
-                                                'eegPath': f,
-                                                'scoringPath': '',
-                                              });
-                                            }
-                                          }
-                                        });
-                                        _autoInspectBatchAnalyseChannels();
-                                      }
-                                    }
-                                  }
-                                },
-                              ),
-                              OutlinedButton.icon(
-                                icon: const Icon(Icons.checklist, size: 16),
-                                label: const Text('Select / Deselect…'),
-                                onPressed: _batchAnalysePairs.isEmpty
-                                    ? null
-                                    : () async {
-                                        final eegFiles = _batchAnalysePairs.map((p) => p['eegPath'] ?? '').where((e) => e.isNotEmpty).toList();
-                                        final selected = await showBatchFileSubSelectionDialog(
-                                          context: context,
-                                          title: 'Batch AnalyseNidra Pair Selection',
-                                          files: eegFiles,
-                                        );
-                                        if (selected != null && mounted) {
-                                          final selectedSet = selected.toSet();
-                                          setState(() {
-                                            _batchAnalysePairs.removeWhere((p) => !selectedSet.contains(p['eegPath']));
-                                          });
-                                        }
-                                      },
-                              ),
-                              OutlinedButton.icon(
-                                icon: const Icon(Icons.clear_all, size: 16),
-                                label: const Text('Clear All Mappings'),
-                                onPressed: _batchAnalysePairs.isEmpty
-                                    ? null
-                                    : () {
-                                        setState(() {
-                                          _batchAnalysePairs.clear();
-                                          _batchAnalyseAvailableChannels = const [];
-                                        });
-                                      },
-                              ),
                             ],
-                          ),
-                          const SizedBox(height: 16),
-                          TextFormField(
-                            controller: _batchScoringPostfixController,
-                            decoration: const InputDecoration(
-                              labelText: 'Scoring file postfix (optional)',
-                              hintText: 'e.g. _scoring',
-                              isDense: true,
-                              border: OutlineInputBorder(),
-                            ),
                           ),
                           const SizedBox(height: 16),
                           // EEG Channels
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Expanded(
-                                child: TextFormField(
-                                  controller: _batchAnalyseEegController,
-                                  decoration: InputDecoration(
-                                    labelText: 'EEG Channels for analysis (comma-separated)',
-                                    hintText: 'e.g. F3,F4,C3,C4 (or click Select from 1st File)',
-                                    isDense: true,
-                                    border: const OutlineInputBorder(),
-                                    suffixIcon: IconButton(
-                                      icon: const Icon(Icons.playlist_add_check),
-                                      tooltip: 'Select channels from first recording…',
-                                      onPressed: _openBatchAnalyseChannelSelector,
-                                    ),
-                                  ),
-                                  onChanged: (_) => setState(() {}),
-                                ),
+                          TextFormField(
+                            controller: _batchAnalyseEegController,
+                            decoration: InputDecoration(
+                              labelText: 'EEG Channels for analysis (comma-separated)',
+                              hintText: 'e.g. F3,F4,C3,C4',
+                              isDense: true,
+                              border: const OutlineInputBorder(),
+                              suffixIcon: IconButton(
+                                icon: const Icon(Icons.playlist_add_check),
+                                tooltip: 'Choose from the channel list of the first recording…',
+                                onPressed: _openBatchAnalyseChannelSelector,
                               ),
-                              if (_batchAnalysePairs.isNotEmpty) ...[
-                                const SizedBox(width: 8),
-                                ElevatedButton.icon(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.blue.shade600,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
-                                  ),
-                                  icon: const Icon(Icons.tune, size: 18),
-                                  label: const Text('Select from 1st File…'),
-                                  onPressed: _openBatchAnalyseChannelSelector,
-                                ),
-                              ],
-                            ],
+                            ),
+                            onChanged: (_) => setState(() {}),
                           ),
                           if (_batchAnalysePairs.isNotEmpty) ...[
                             const SizedBox(height: 4),
                             Text(
-                              'Available channels will come from 1st recording: ${_basename(_batchAnalysePairs.first['eegPath'] ?? '')}',
+                              'Channel lists come from the first recording: ${_basename(_batchAnalysePairs.first['eegPath'] ?? '')}',
                               style: TextStyle(fontSize: 11, color: Colors.grey.shade600, fontStyle: FontStyle.italic),
                             ),
                           ],
@@ -6216,7 +6488,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                               border: const OutlineInputBorder(),
                               suffixIcon: IconButton(
                                 icon: const Icon(Icons.playlist_add_check),
-                                tooltip: 'Select reference channel from first recording…',
+                                tooltip: 'Choose from the channel list of the first recording…',
                                 onPressed: _openBatchAnalyseRefSelector,
                               ),
                             ),
@@ -6755,7 +7027,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                 children: [
                                   _ScoringHeroSurface(
                                     viewport: viewport,
-                                    onJump: (epoch) => _jumpToEpoch(epoch),
+                                    onJump: _jumpToEpochCoalesced,
                                     swaSlider: _swaSlider,
                                     onSwaSlider: (v) =>
                                         setState(() => _swaSlider = v),
@@ -9728,11 +10000,20 @@ class _BatchPdfProgressDialogState extends State<_BatchPdfProgressDialog> {
         );
         final fullViewport = viewport.copyWith(scoredEvents: existingEvents);
 
+        final pages = widget.includePages;
+        final respiratoryReport = pages.length > 5 && pages[5]
+            ? await loadPsgReport(respiratoryReportPath(edfPath))
+            : null;
+        final plmReport = pages.length > 6 && pages[6]
+            ? await loadPsgReport(plmReportPath(edfPath))
+            : null;
         final bytes = buildPublicationSleepReport(
           viewport: fullViewport,
           recordingName: _basename(edfPath),
           regionalRows: job.regionalRows,
-          includePages: widget.includePages,
+          includePages: pages.length > 5 ? pages.sublist(0, 5) : pages,
+          respiratoryReport: respiratoryReport,
+          plmReport: plmReport,
           metadata: ReportMetadata(
             title: activeConfig.reportTitle,
             studySite: activeConfig.studySite,
@@ -11243,37 +11524,22 @@ class _BatchProgressDialogState extends State<BatchProgressDialog> {
   }
 
   Future<void> _startBatch() async {
-    const rustAlgorithms = {
-      'tinysleepnet_rust',
-      'tinysleepnet',
-      'yasa',
-      'usleep',
-      'seqsleepnet',
-      'sleeptransformer',
-      'gssc',
-    };
-    final bool isRustStaging = isAnalyseNidraAvailable() && rustAlgorithms.contains(widget.algorithm);
-    late final AutoscoreInvocation? invocation;
-    late final String? rustExecutable;
-
-    if (isRustStaging) {
-      rustExecutable = detectAnalyseNidraExecutable();
-      invocation = null;
-    } else {
-      rustExecutable = null;
-      try {
-        invocation = resolveAutoscoreInvocation();
-      } on StateError catch (error) {
-        for (final file in widget.files) {
-          _statuses[file] = 'Failed';
-        }
-        _addLog(error.message);
-        if (mounted) {
-          setState(() => _isFinished = true);
-        }
-        return;
+    if (!isAnalyseNidraAvailable()) {
+      for (final file in widget.files) {
+        _statuses[file] = 'Failed';
       }
+      _addLog(
+        'The native analyse-nidra engine was not found beside the application. '
+        'Reinstall CCS Sleep Studio to restore autoscoring.',
+      );
+      if (mounted) setState(() => _isFinished = true);
+      return;
     }
+    final rustExecutable = detectAnalyseNidraExecutable();
+    final algorithm = canonicalAutoscoreAlgorithm(widget.algorithm);
+    final outDir = (widget.outputDir != null && widget.outputDir!.trim().isNotEmpty)
+        ? widget.outputDir!.trim()
+        : null;
 
     final startTime = DateTime.now();
     final batchResults = <BatchFileResult>[];
@@ -11294,63 +11560,43 @@ class _BatchProgressDialogState extends State<BatchProgressDialog> {
       });
       _addLog('--- Starting AutoscoreNidra for ${_basename(file)} ---');
 
-      late final String fileExe;
-      late final List<String> fileArgs;
-      if (isRustStaging) {
-        fileExe = rustExecutable!;
-        final algoFlag = widget.algorithm == 'tinysleepnet_rust' ? 'tinysleepnet' : widget.algorithm;
-        final args = <String>['--stage', file, '--algorithm', algoFlag];
-        if (widget.correction.isNotEmpty && widget.correction != 'none') {
-          args.addAll(['--sequence-correction', widget.correction]);
-          if (widget.correction == 'sleepgpt') {
-            args.addAll(['--sleepgpt-alpha', widget.sleepgptAlpha.toString()]);
-            args.addAll(['--sleepgpt-ngram', widget.sleepgptNgram.toString()]);
-          }
-        }
-        if (widget.eegChannels.isNotEmpty) {
-          args.addAll(['--channel', widget.eegChannels.first]);
-        }
-        if (widget.refChannels.isNotEmpty) {
-          args.addAll(['--ref', widget.refChannels.first]);
-        }
-        if (widget.outputDir != null && widget.outputDir!.trim().isNotEmpty) {
-          args.addAll(['--out-dir', widget.outputDir!.trim()]);
-        }
-        fileArgs = args;
-      } else {
-        fileExe = invocation!.executable;
-        final args = <String>[file];
-        if (widget.outputDir != null && widget.outputDir!.trim().isNotEmpty) {
-          args.addAll(['--out-dir', widget.outputDir!.trim()]);
-        }
-        args.addAll(['--algorithm', widget.algorithm]);
-        args.addAll(['--sequence-correction', widget.correction]);
-        if (widget.eegChannels.isNotEmpty) {
-          args.addAll(['--eeg', widget.eegChannels.join(',')]);
-        }
-        if (widget.refChannels.isNotEmpty) {
-          args.addAll(['--ref', widget.refChannels.join(',')]);
-        }
-        if (widget.eogChannels.isNotEmpty) {
-          args.addAll(['--eog', widget.eogChannels.join(',')]);
-        }
-        if (widget.emgChannels.isNotEmpty) {
-          args.addAll(['--emg', widget.emgChannels.join(',')]);
-        }
-
-        if (widget.correction == 'sleepgpt') {
-          args.addAll(['--sleepgpt-alpha', widget.sleepgptAlpha.toString()]);
-          args.addAll(['--sleepgpt-ngram', widget.sleepgptNgram.toString()]);
-        }
-        fileArgs = invocation.argumentsFor(args);
-      }
-
       int fileExitCode = 1;
       final fileLogs = <String>[];
+      Directory? tempDir;
 
       try {
+        var stageInput = file;
+        String? explicitOut;
+        if (!analyseNidraReadsNatively(file)) {
+          _addLog('Converting ${_basename(file)} to a temporary EDF for the native engine…');
+          tempDir = await Directory.systemTemp.createTemp('ccs_autoscore_');
+          var stem = _basename(file);
+          final dot = stem.lastIndexOf('.');
+          if (dot > 0) stem = stem.substring(0, dot);
+          stageInput = '${tempDir.path}${Platform.pathSeparator}$stem.edf';
+          await processEdfFile(file, stageInput, EdfTransformOptions());
+          explicitOut = nativeStageOutputPath(
+            file,
+            algorithm,
+            sequenceCorrection: widget.correction,
+            outDir: outDir,
+          );
+        }
+        final fileArgs = buildNativeStageArgs(
+          inputPath: stageInput,
+          algorithm: algorithm,
+          sequenceCorrection: widget.correction,
+          sleepgptAlpha: widget.sleepgptAlpha,
+          sleepgptNgram: widget.sleepgptNgram,
+          eeg: widget.eegChannels,
+          ref: widget.refChannels,
+          eog: widget.eogChannels,
+          emg: widget.emgChannels,
+          outJson: explicitOut,
+          outDir: explicitOut == null ? outDir : null,
+        );
         final exitCode = await EegBackend().runCommandStreamAsync(
-          executable: fileExe,
+          executable: rustExecutable,
           arguments: fileArgs,
           onLine: (line) {
             fileLogs.add(line);
@@ -11399,6 +11645,12 @@ class _BatchProgressDialogState extends State<BatchProgressDialog> {
           });
           _addLog('\nException occurred: $e');
         }
+      }
+
+      if (tempDir != null) {
+        try {
+          await tempDir.delete(recursive: true);
+        } catch (_) {}
       }
 
       batchResults.add(

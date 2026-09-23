@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use std::path::PathBuf;
 use tract_onnx::prelude::*;
 
@@ -13,28 +13,16 @@ pub struct GsscModel {
 
 impl GsscModel {
     pub fn resolve_models() -> Result<Self> {
-        let candidates = [
-            PathBuf::from("assets/models/gssc"),
-            PathBuf::from("analyseNidra/assets/models/gssc"),
-            PathBuf::from("../assets/models/gssc"),
-        ];
-
-        let base_dir = candidates
-            .iter()
-            .find(|p| p.join("gssc_eeg_dynshape.onnx").exists())
-            .cloned()
-            .or_else(|| {
-                std::env::current_exe().ok().and_then(|mut exe| {
-                    exe.pop();
-                    let asset = exe.join("assets/models/gssc");
-                    if asset.join("gssc_eeg_dynshape.onnx").exists() {
-                        Some(asset)
-                    } else {
-                        None
-                    }
-                })
-            })
-            .context("Could not find GSSC models directory")?;
+        let base_dir = super::assets::require_model_dir(
+            "gssc",
+            "gssc_eeg_dynshape.onnx",
+            "GSSC models directory",
+        )?;
+        for file in ["gssc_eog_dynshape.onnx", "gssc_both_dynshape.onnx", "gssc_gru.onnx"] {
+            if !base_dir.join(file).exists() {
+                bail!("GSSC model file {} is missing from {}", file, base_dir.display());
+            }
+        }
 
         // Use the dynshape-patched variants: Tract handles [0,G,-1] Reshape incorrectly,
         // so we use models where that Reshape is replaced with dynamic Shape+Gather+Concat.
@@ -103,29 +91,11 @@ impl GsscModel {
     }
 
     pub fn encode_eeg(&self, plan: &RunnablePlan, eeg: &[f32], n_epochs: usize) -> Result<Vec<f32>> {
-        let mut all_reps = Vec::with_capacity(n_epochs * 512);
-        for ep in 0..n_epochs {
-            let ep_slice = &eeg[ep * 2560..(ep + 1) * 2560];
-            let tensor = tract_ndarray::Array3::from_shape_vec((1, 1, 2560), ep_slice.to_vec())?;
-            let tract_tensor: Tensor = tensor.into();
-            let outputs = plan.run(tvec!(tract_tensor.into()))?;
-            let output = outputs[0].to_array_view::<f32>()?;
-            all_reps.extend_from_slice(output.as_slice().unwrap_or(&[]));
-        }
-        Ok(all_reps)
+        encode_single(plan, eeg, n_epochs)
     }
 
     pub fn encode_eog(&self, plan: &RunnablePlan, eog: &[f32], n_epochs: usize) -> Result<Vec<f32>> {
-        let mut all_reps = Vec::with_capacity(n_epochs * 512);
-        for ep in 0..n_epochs {
-            let ep_slice = &eog[ep * 2560..(ep + 1) * 2560];
-            let tensor = tract_ndarray::Array3::from_shape_vec((1, 1, 2560), ep_slice.to_vec())?;
-            let tract_tensor: Tensor = tensor.into();
-            let outputs = plan.run(tvec!(tract_tensor.into()))?;
-            let output = outputs[0].to_array_view::<f32>()?;
-            all_reps.extend_from_slice(output.as_slice().unwrap_or(&[]));
-        }
-        Ok(all_reps)
+        encode_single(plan, eog, n_epochs)
     }
 
     pub fn encode_both(
@@ -135,19 +105,24 @@ impl GsscModel {
         eog: &[f32],
         n_epochs: usize,
     ) -> Result<Vec<f32>> {
-        let mut all_reps = Vec::with_capacity(n_epochs * 512);
-        for ep in 0..n_epochs {
-            let eeg_slice = &eeg[ep * 2560..(ep + 1) * 2560];
-            let eog_slice = &eog[ep * 2560..(ep + 1) * 2560];
-            let eeg_tensor = tract_ndarray::Array3::from_shape_vec((1, 1, 2560), eeg_slice.to_vec())?;
-            let eog_tensor = tract_ndarray::Array3::from_shape_vec((1, 1, 2560), eog_slice.to_vec())?;
-            let tract_eeg: Tensor = eeg_tensor.into();
-            let tract_eog: Tensor = eog_tensor.into();
-            let outputs = plan.run(tvec!(tract_eeg.into(), tract_eog.into()))?;
-            let output = outputs[0].to_array_view::<f32>()?;
-            all_reps.extend_from_slice(output.as_slice().unwrap_or(&[]));
-        }
-        Ok(all_reps)
+        use rayon::prelude::*;
+        // Epochs are independent: encode them in parallel (the per-epoch
+        // encoder was the dominant cost of GSSC staging).
+        let reps: Vec<Vec<f32>> = (0..n_epochs)
+            .into_par_iter()
+            .map(|ep| -> Result<Vec<f32>> {
+                let eeg_slice = &eeg[ep * 2560..(ep + 1) * 2560];
+                let eog_slice = &eog[ep * 2560..(ep + 1) * 2560];
+                let eeg_tensor = tract_ndarray::Array3::from_shape_vec((1, 1, 2560), eeg_slice.to_vec())?;
+                let eog_tensor = tract_ndarray::Array3::from_shape_vec((1, 1, 2560), eog_slice.to_vec())?;
+                let tract_eeg: Tensor = eeg_tensor.into();
+                let tract_eog: Tensor = eog_tensor.into();
+                let outputs = plan.run(tvec!(tract_eeg.into(), tract_eog.into()))?;
+                let output = outputs[0].to_array_view::<f32>()?;
+                Ok(output.iter().copied().collect())
+            })
+            .collect::<Result<_>>()?;
+        Ok(reps.concat())
     }
 
     pub fn run_gru(
@@ -174,6 +149,22 @@ impl GsscModel {
         }
         Ok(result)
     }
+}
+
+fn encode_single(plan: &RunnablePlan, signal: &[f32], n_epochs: usize) -> Result<Vec<f32>> {
+    use rayon::prelude::*;
+    let reps: Vec<Vec<f32>> = (0..n_epochs)
+        .into_par_iter()
+        .map(|ep| -> Result<Vec<f32>> {
+            let ep_slice = &signal[ep * 2560..(ep + 1) * 2560];
+            let tensor = tract_ndarray::Array3::from_shape_vec((1, 1, 2560), ep_slice.to_vec())?;
+            let tract_tensor: Tensor = tensor.into();
+            let outputs = plan.run(tvec!(tract_tensor.into()))?;
+            let output = outputs[0].to_array_view::<f32>()?;
+            Ok(output.iter().copied().collect())
+        })
+        .collect::<Result<_>>()?;
+    Ok(reps.concat())
 }
 
 /// Computes the consensus logits and winning permutation index per epoch
@@ -381,6 +372,7 @@ pub fn score_gssc_recording(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
 
     #[test]
     fn test_gssc_numerical_parity() -> Result<()> {

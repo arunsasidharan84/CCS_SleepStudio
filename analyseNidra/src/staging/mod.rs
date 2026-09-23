@@ -1,6 +1,9 @@
+pub mod assets;
 pub mod gssc;
 pub mod model;
 pub mod physioex;
+pub mod pops;
+mod src_fastest_coeffs;
 pub mod scorer;
 pub mod sleepgpt;
 pub mod usleep;

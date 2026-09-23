@@ -3,6 +3,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 
+import 'autoscore_command.dart';
+
 class MtKcdDialog extends StatefulWidget {
   const MtKcdDialog({
     super.key,
@@ -1091,7 +1093,7 @@ class AutoScoringDialog extends StatefulWidget {
 }
 
 class _AutoScoringDialogState extends State<AutoScoringDialog> {
-  String _algorithm = 'tinysleepnet_rust';
+  String _algorithm = 'tinysleepnet';
   String _correction = 'none';
   double _sleepgptAlpha = 0.1;
   int _sleepgptNgram = 30;
@@ -1166,77 +1168,12 @@ class _AutoScoringDialogState extends State<AutoScoringDialog> {
                               vertical: 8,
                             ),
                           ),
-                          items: const [
-                            DropdownMenuItem(
-                              value: 'tinysleepnet_rust',
-                              child: Text(
-                                'TinySleepNet (Native Rust ONNX, Zero-Python)',
-                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                          items: [
+                            for (final option in autoscoreAlgorithmOptions)
+                              DropdownMenuItem(
+                                value: option.$1,
+                                child: Text(option.$2, style: const TextStyle(fontSize: 13)),
                               ),
-                            ),
-                            DropdownMenuItem(
-                              value: 'yasa',
-                              child: Text(
-                                'YASA LightGBM Consensus',
-                                style: TextStyle(fontSize: 13),
-                              ),
-                            ),
-                            DropdownMenuItem(
-                              value: 'usleep',
-                              child: Text(
-                                'Offline U-Sleep Consensus',
-                                style: TextStyle(fontSize: 13),
-                              ),
-                            ),
-                            DropdownMenuItem(
-                              value: 'luna',
-                              child: Text(
-                                'Luna POPS Stager',
-                                style: TextStyle(fontSize: 13),
-                              ),
-                            ),
-                            DropdownMenuItem(
-                              value: 'gssc',
-                              child: Text(
-                                'Greifswald Classifier (GSSC)',
-                                style: TextStyle(fontSize: 13),
-                              ),
-                            ),
-                            DropdownMenuItem(
-                              value: 'tinysleepnet',
-                              child: Text(
-                                'TinySleepNet (PhysioEx)',
-                                style: TextStyle(fontSize: 13),
-                              ),
-                            ),
-                            DropdownMenuItem(
-                              value: 'seqsleepnet',
-                              child: Text(
-                                'SeqSleepNet (PhysioEx)',
-                                style: TextStyle(fontSize: 13),
-                              ),
-                            ),
-                            DropdownMenuItem(
-                              value: 'sleeptransformer',
-                              child: Text(
-                                'SleepTransformer (PhysioEx)',
-                                style: TextStyle(fontSize: 13),
-                              ),
-                            ),
-                            DropdownMenuItem(
-                              value: 'dreamento',
-                              child: Text(
-                                'Dreamento (YASA-based)',
-                                style: TextStyle(fontSize: 13),
-                              ),
-                            ),
-                            DropdownMenuItem(
-                              value: 'sleepeegpy',
-                              child: Text(
-                                'SleepEEGpy (YASA-based)',
-                                style: TextStyle(fontSize: 13),
-                              ),
-                            ),
                           ],
                           onChanged: (v) {
                             if (v != null) setState(() => _algorithm = v);
@@ -1975,7 +1912,7 @@ class _EditRegionMappingDialogState extends State<EditRegionMappingDialog> {
 }
 
 class _BatchAutoScoringDialogState extends State<BatchAutoScoringDialog> {
-  String _algorithm = 'tinysleepnet_rust';
+  String _algorithm = 'tinysleepnet';
   String _correction = 'none';
   double _sleepgptAlpha = 0.1;
   int _sleepgptNgram = 30;
@@ -2055,77 +1992,12 @@ class _BatchAutoScoringDialogState extends State<BatchAutoScoringDialog> {
                     vertical: 8,
                   ),
                 ),
-                items: const [
-                  DropdownMenuItem(
-                    value: 'tinysleepnet_rust',
-                    child: Text(
-                      'TinySleepNet (Native Rust ONNX, Zero-Python)',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                items: [
+                  for (final option in autoscoreAlgorithmOptions)
+                    DropdownMenuItem(
+                      value: option.$1,
+                      child: Text(option.$2, style: const TextStyle(fontSize: 13)),
                     ),
-                  ),
-                  DropdownMenuItem(
-                    value: 'yasa',
-                    child: Text(
-                      'YASA LightGBM Consensus',
-                      style: TextStyle(fontSize: 13),
-                    ),
-                  ),
-                  DropdownMenuItem(
-                    value: 'usleep',
-                    child: Text(
-                      'Offline U-Sleep Consensus',
-                      style: TextStyle(fontSize: 13),
-                    ),
-                  ),
-                  DropdownMenuItem(
-                    value: 'luna',
-                    child: Text(
-                      'Luna POPS Stager',
-                      style: TextStyle(fontSize: 13),
-                    ),
-                  ),
-                  DropdownMenuItem(
-                    value: 'gssc',
-                    child: Text(
-                      'Greifswald Classifier (GSSC)',
-                      style: TextStyle(fontSize: 13),
-                    ),
-                  ),
-                  DropdownMenuItem(
-                    value: 'tinysleepnet',
-                    child: Text(
-                      'TinySleepNet (PhysioEx)',
-                      style: TextStyle(fontSize: 13),
-                    ),
-                  ),
-                  DropdownMenuItem(
-                    value: 'seqsleepnet',
-                    child: Text(
-                      'SeqSleepNet (PhysioEx)',
-                      style: TextStyle(fontSize: 13),
-                    ),
-                  ),
-                  DropdownMenuItem(
-                    value: 'sleeptransformer',
-                    child: Text(
-                      'SleepTransformer (PhysioEx)',
-                      style: TextStyle(fontSize: 13),
-                    ),
-                  ),
-                  DropdownMenuItem(
-                    value: 'dreamento',
-                    child: Text(
-                      'Dreamento (YASA-based)',
-                      style: TextStyle(fontSize: 13),
-                    ),
-                  ),
-                  DropdownMenuItem(
-                    value: 'sleepeegpy',
-                    child: Text(
-                      'SleepEEGpy (YASA-based)',
-                      style: TextStyle(fontSize: 13),
-                    ),
-                  ),
                 ],
                 onChanged: (v) {
                   if (v != null) setState(() => _algorithm = v);

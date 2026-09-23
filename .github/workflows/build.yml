@@ -206,8 +206,15 @@ jobs:
           Copy-Item analyseNidra\target\release\analyse-nidra.exe frontend\build\windows\x64\runner\Release\
           if (-not (Test-Path frontend\build\windows\x64\runner\Release\analyse-nidra.exe)) { exit 1 }
 
+      - name: Read app version (Windows)
+        id: appver
+        shell: pwsh
+        run: |
+          $line = Select-String -Path frontend\pubspec.yaml -Pattern '^version:\s*([0-9.]+)' | Select-Object -First 1
+          "version=$($line.Matches[0].Groups[1].Value)" >> $env:GITHUB_OUTPUT
+
       - name: Package Windows app (Lite Installer)
-        run: iscc /F"CCSSleepStudio-lite-Installer" frontend/windows/installer-lite.iss
+        run: iscc /DAppVer=${{ steps.appver.outputs.version }} /F"CCSSleepStudio-lite-Installer" frontend/windows/installer-lite.iss
 
       # 2. Build and Package Full version
       - name: Build Windows app (Full)
@@ -218,11 +225,15 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item analyseNidra\target\release\analyse-nidra.exe frontend\build\windows\x64\runner\Release\
-          Copy-Item -Recurse analyseNidra\assets\models frontend\build\windows\x64\runner\Release\assets\
+          # Create assets\ first: Copy-Item -Recurse into a missing folder would
+          # rename models\ to assets\ instead of nesting it.
+          New-Item -ItemType Directory -Force -Path frontend\build\windows\x64\runner\Release\assets | Out-Null
+          Copy-Item -Recurse -Force analyseNidra\assets\models frontend\build\windows\x64\runner\Release\assets\
+          if (-not (Test-Path frontend\build\windows\x64\runner\Release\assets\models\pops\s2_trees.txt)) { exit 1 }
           if (-not (Test-Path frontend\build\windows\x64\runner\Release\analyse-nidra.exe)) { exit 1 }
 
       - name: Package Windows app (Full Installer)
-        run: iscc /F"CCSSleepStudio-Installer" frontend/windows/installer.iss
+        run: iscc /DAppVer=${{ steps.appver.outputs.version }} /F"CCSSleepStudio-Installer" frontend/windows/installer.iss
 
       # 3. Upload Artifacts
       - name: Upload Windows Full installer artifact

@@ -12,7 +12,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const VERSION: &str = "1.18.0";
+const VERSION: &str = "1.19.0";
 
 const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
 [core.json|-] [pac.json|-] [slow-waves.json|-] [spindles.json|-] [regional.csv|-] \
@@ -21,9 +21,16 @@ const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
    or: analyse-nidra --preprocess <recording.edf> [--out-dir <dir>] [--steps <stimartifact,filter,badchannel,interpolate,gedai,save>] \
 [--downsample-hz <hz>] [--bandpass-lo <lo>] [--bandpass-hi <hi>] [--notch-hz <notch>] [--suffix <_clean>] \
 [--stim-f0 <hz>] [--stim-win <sec>] [--stim-max-combs <n>]\n\
-   or: analyse-nidra --stage <recording.edf> [--algorithm <tinysleepnet|yasa|usleep|seqsleepnet|sleeptransformer|gssc>] [--sequence-correction <none|sleepgpt>] \
-[--channel <C4>] [--ref <M1>] [--out <output.json>] [--out-dir <dir>] [--sleepgpt-alpha <0.1>] [--sleepgpt-ngram <30>]\n\
-   or: analyse-nidra --apply-sleepgpt <scoring.json> [--out <output.json>] [--alpha <0.1>] [--ngram <30>]";
+   or: analyse-nidra --stage <recording.edf> [--algorithm <tinysleepnet|yasa|usleep|luna|gssc|seqsleepnet|sleeptransformer|dreamento|sleepeegpy>] \
+[--sequence-correction <none|sleepgpt>] [--eeg C4,C3] [--ref M1,M2] [--eog E1,E2] [--emg Chin1,Chin2] [--out <output.json>] [--out-dir <dir>] \
+[--sleepgpt-alpha <0.1>] [--sleepgpt-ngram <30>]\n\
+   or: analyse-nidra --apply-sleepgpt <scoring.json> [--out <output.json>] [--alpha <0.1>] [--ngram <30>]\n\
+   or: analyse-nidra --respiratory <recording.edf> [--scoring <s.json>] [--thermal ch] [--pressure ch] [--flow ch] [--thorax ch] \
+[--abdomen ch] [--effort-sum ch] [--spo2 ch] [--pulse ch] [--ecg ch] [--snore ch] [--position ch] [--supine-codes 6] \
+[--eeg C4-M1] [--chin ch] [--hypopnea-rule 3|4] [--auto-arousals yes|no] [--out <r.json>]\n\
+   or: analyse-nidra --plm <recording.edf> [--scoring <s.json>] [--left ch] [--right ch] [--respiratory-json <r.json>] \
+[--standard aasm|wasm] [--eeg C4-M1] [--auto-arousals yes|no] [--onset-uv 8] [--offset-uv 2] [--out <p.json>]\n\
+   or: analyse-nidra --list-signals <recording.edf>";
 
 #[derive(Debug)]
 struct Cli {
@@ -365,99 +372,251 @@ fn handle_preprocess_cli(args: impl IntoIterator<Item = OsString>) -> Result<()>
     Ok(())
 }
 
+fn split_channel_arg(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect()
+}
+
 fn handle_stage_cli(args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let mut edf_path: Option<PathBuf> = None;
-    let mut algorithm: Option<String> = None;
-    let mut sequence_correction: Option<String> = None;
-    let mut channel: Option<String> = None;
-    let mut reference: Option<String> = None;
-    let mut out_json: Option<PathBuf> = None;
-    let mut out_dir: Option<PathBuf> = None;
-    let mut sleepgpt_alpha: Option<f64> = None;
-    let mut sleepgpt_ngram: Option<usize> = None;
+    let mut opts = analyse_nidra::staging::scorer::StageOptions {
+        algorithm: "tinysleepnet".into(),
+        sequence_correction: "none".into(),
+        ..Default::default()
+    };
 
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
-        let s = arg.to_string_lossy();
-        if s == "--stage" {
-            if let Some(val) = it.next() {
-                if !val.to_string_lossy().starts_with("--") {
-                    edf_path = Some(PathBuf::from(val));
+        let s = arg.to_string_lossy().to_string();
+        let (key, inline) = match s.split_once('=') {
+            Some((k, v)) if k.starts_with("--") => (k.to_string(), Some(v.to_string())),
+            _ => (s.clone(), None),
+        };
+        let mut value = || -> Option<String> {
+            inline
+                .clone()
+                .or_else(|| it.next().map(|x| x.to_string_lossy().to_string()))
+        };
+        match key.as_str() {
+            "--stage" => {
+                if let Some(v) = value() {
+                    if !v.starts_with("--") {
+                        edf_path = Some(PathBuf::from(v));
+                    }
                 }
             }
-        } else if let Some(val) = s.strip_prefix("--stage=") {
-            edf_path = Some(PathBuf::from(val));
-        } else if s == "--algorithm" || s == "-a" || s == "--algo" || s == "--model" {
-            algorithm = it.next().map(|x| x.to_string_lossy().to_string());
-        } else if let Some(val) = s.strip_prefix("--algorithm=")
-            .or_else(|| s.strip_prefix("--algo="))
-            .or_else(|| s.strip_prefix("--model="))
-        {
-            algorithm = Some(val.to_string());
-        } else if s == "--sequence-correction" || s == "--seq-corr" {
-            sequence_correction = it.next().map(|x| x.to_string_lossy().to_string());
-        } else if let Some(val) = s.strip_prefix("--sequence-correction=")
-            .or_else(|| s.strip_prefix("--seq-corr="))
-        {
-            sequence_correction = Some(val.to_string());
-        } else if s == "--sleepgpt-alpha" {
-            if let Some(val) = it.next() {
-                sleepgpt_alpha = val.to_string_lossy().parse().ok();
+            "--algorithm" | "-a" | "--algo" | "--model" => {
+                if let Some(v) = value() {
+                    opts.algorithm = v;
+                }
             }
-        } else if let Some(val) = s.strip_prefix("--sleepgpt-alpha=") {
-            sleepgpt_alpha = val.parse().ok();
-        } else if s == "--sleepgpt-ngram" {
-            if let Some(val) = it.next() {
-                sleepgpt_ngram = val.to_string_lossy().parse().ok();
+            "--sequence-correction" | "--seq-corr" => {
+                if let Some(v) = value() {
+                    opts.sequence_correction = v;
+                }
             }
-        } else if let Some(val) = s.strip_prefix("--sleepgpt-ngram=") {
-            sleepgpt_ngram = val.parse().ok();
-        } else if s == "--channel" || s == "-c" {
-            channel = it.next().map(|x| x.to_string_lossy().to_string());
-        } else if let Some(val) = s.strip_prefix("--channel=") {
-            channel = Some(val.to_string());
-        } else if s == "--reference" || s == "--ref" {
-            reference = it.next().map(|x| x.to_string_lossy().to_string());
-        } else if let Some(val) = s.strip_prefix("--reference=") {
-            reference = Some(val.to_string());
-        } else if let Some(val) = s.strip_prefix("--ref=") {
-            reference = Some(val.to_string());
-        } else if s == "--out-dir" {
-            out_dir = it.next().map(PathBuf::from);
-        } else if let Some(val) = s.strip_prefix("--out-dir=") {
-            out_dir = Some(PathBuf::from(val));
-        } else if s == "--out" || s == "--output" || s == "-o" {
-            out_json = it.next().map(PathBuf::from);
-        } else if let Some(val) = s.strip_prefix("--out=")
-            .or_else(|| s.strip_prefix("--output="))
-        {
-            out_json = Some(PathBuf::from(val));
-        } else if !s.starts_with("--") && edf_path.is_none() {
-            edf_path = Some(PathBuf::from(arg));
+            "--sleepgpt-alpha" => opts.sleepgpt_alpha = value().and_then(|v| v.parse().ok()),
+            "--sleepgpt-ngram" => opts.sleepgpt_ngram = value().and_then(|v| v.parse().ok()),
+            "--channel" | "-c" | "--eeg" | "--channels" => {
+                if let Some(v) = value() {
+                    opts.eeg.extend(split_channel_arg(&v));
+                }
+            }
+            "--reference" | "--ref" | "--refs" | "--references" => {
+                if let Some(v) = value() {
+                    opts.refs.extend(split_channel_arg(&v));
+                }
+            }
+            "--eog" => {
+                if let Some(v) = value() {
+                    opts.eog.extend(split_channel_arg(&v));
+                }
+            }
+            "--emg" => {
+                if let Some(v) = value() {
+                    opts.emg.extend(split_channel_arg(&v));
+                }
+            }
+            "--out-dir" => opts.out_dir = value().map(PathBuf::from),
+            "--out" | "--output" | "-o" => opts.out_json = value().map(PathBuf::from),
+            other => {
+                if !other.starts_with("--") && edf_path.is_none() {
+                    edf_path = Some(PathBuf::from(other));
+                }
+            }
         }
     }
 
     let edf_path = edf_path.context("No input EDF file specified for --stage")?;
-    let computed_out = out_json.or_else(|| {
-        out_dir.map(|d| {
-            let stem = edf_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("recording");
-            d.join(format!("{stem}_scoring.json"))
-        })
-    });
+    analyse_nidra::staging::scorer::score_recording(&edf_path, &opts)?;
+    Ok(())
+}
 
-    analyse_nidra::staging::score_edf_file(
-        &edf_path,
-        algorithm.as_deref(),
-        sequence_correction.as_deref(),
-        channel.as_deref(),
-        reference.as_deref(),
-        computed_out.as_deref(),
-        sleepgpt_alpha,
-        sleepgpt_ngram,
-    )?;
+/// Generic `--key value` / `--key=value` parser for the PSG sub-commands.
+fn parse_kv(args: Vec<OsString>, positional_flag: &str) -> (Option<PathBuf>, BTreeMap<String, String>) {
+    let mut edf = None;
+    let mut map = BTreeMap::new();
+    let mut it = args.into_iter().map(|a| a.to_string_lossy().to_string()).peekable();
+    while let Some(a) = it.next() {
+        if a == positional_flag {
+            if let Some(v) = it.next() {
+                edf = Some(PathBuf::from(v));
+            }
+        } else if let Some(rest) = a.strip_prefix("--") {
+            if let Some((k, v)) = rest.split_once('=') {
+                map.insert(k.to_string(), v.to_string());
+            } else {
+                let takes_value = it.peek().map(|n| !n.starts_with("--")).unwrap_or(false);
+                let v = if takes_value { it.next().unwrap_or_default() } else { "true".to_string() };
+                map.insert(rest.to_string(), v);
+            }
+        } else if edf.is_none() {
+            edf = Some(PathBuf::from(a));
+        }
+    }
+    (edf, map)
+}
+
+fn yes(v: Option<&String>, default: bool) -> bool {
+    match v.map(|s| s.to_ascii_lowercase()) {
+        Some(s) => matches!(s.as_str(), "1" | "true" | "yes" | "y" | "on"),
+        None => default,
+    }
+}
+
+fn write_json_report<T: serde::Serialize>(report: &T, out: &Path) -> Result<()> {
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).ok();
+        }
+    }
+    let file = File::create(out).with_context(|| format!("creating {}", out.display()))?;
+    serde_json::to_writer_pretty(std::io::BufWriter::new(file), report)?;
+    Ok(())
+}
+
+fn default_sidecar(edf: &Path, out_dir: Option<&String>, suffix: &str) -> PathBuf {
+    let stem = edf.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "recording".into());
+    let name = format!("{stem}{suffix}");
+    match out_dir {
+        Some(d) if !d.trim().is_empty() => Path::new(d).join(name),
+        _ => edf.with_file_name(name),
+    }
+}
+
+fn handle_respiratory_cli(args: Vec<OsString>) -> Result<()> {
+    let (edf, kv) = parse_kv(args, "--respiratory");
+    let edf = edf.context("usage: analyse-nidra --respiratory <recording.edf> [--scoring s.json] [--thermal ch] [--pressure ch] ...")?;
+    let mut o = analyse_nidra::psg::respiratory::RespOptions::defaults();
+    let s = |k: &str| kv.get(k).cloned().filter(|v| !v.trim().is_empty());
+    o.scoring = s("scoring").map(PathBuf::from);
+    o.thermal = s("thermal");
+    o.pressure = s("pressure");
+    o.flow = s("flow");
+    o.thorax = s("thorax");
+    o.abdomen = s("abdomen");
+    o.effort_sum = s("effort-sum");
+    o.spo2 = s("spo2");
+    o.pulse = s("pulse");
+    o.ecg = s("ecg");
+    o.snore = s("snore");
+    o.position = s("position");
+    o.chin = s("chin");
+    o.eeg = s("eeg").map(|v| split_channel_arg(&v)).unwrap_or_default();
+    o.supine_codes = s("supine-codes")
+        .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+        .unwrap_or_default();
+    if let Some(r) = s("hypopnea-rule") {
+        o.hypopnea_rule = if r.trim().starts_with('4') { 4 } else { 3 };
+    }
+    o.auto_arousals = yes(kv.get("auto-arousals"), false);
+    if let Some(m) = s("arousals") {
+        o.arousal_mode = m;
+    }
+    if let Some(v) = s("apnea-threshold").and_then(|v| v.parse().ok()) {
+        o.apnea_threshold = v;
+    }
+    if let Some(v) = s("hypopnea-threshold").and_then(|v| v.parse().ok()) {
+        o.hypopnea_threshold = v;
+    }
+    o.lights_off = s("lights-off-sec").and_then(|v| v.parse().ok());
+    o.lights_on = s("lights-on-sec").and_then(|v| v.parse().ok());
+    let out = s("out").map(PathBuf::from).unwrap_or_else(|| default_sidecar(&edf, kv.get("out-dir"), "_respiratory.json"));
+    let started = Instant::now();
+    let report = analyse_nidra::psg::respiratory::analyse(&edf, &o)?;
+    println!("PROGRESS 0.95 Writing {}", out.display());
+    write_json_report(&report, &out)?;
+    for w in &report.warnings {
+        println!("WARNING {w}");
+    }
+    println!(
+        "AHI {:.1}/h ({}), ODI3 {:.1}/h, events {}",
+        report.summary.get("AHI").copied().unwrap_or(f64::NAN),
+        report.flags.get("severity").cloned().unwrap_or_default(),
+        report.summary.get("ODI3").copied().unwrap_or(f64::NAN),
+        report.events.iter().filter(|e| e.counted).count()
+    );
+    println!("OUTPUT_RESPIRATORY {}", out.display());
+    println!("PROGRESS 1.00 Done in {:.1}s", started.elapsed().as_secs_f64());
+    Ok(())
+}
+
+fn handle_plm_cli(args: Vec<OsString>) -> Result<()> {
+    let (edf, kv) = parse_kv(args, "--plm");
+    let edf = edf.context("usage: analyse-nidra --plm <recording.edf> [--scoring s.json] [--left ch] [--right ch] [--respiratory-json r.json]")?;
+    let s = |k: &str| kv.get(k).cloned().filter(|v| !v.trim().is_empty());
+    let mut o = analyse_nidra::psg::plm::PlmOptions {
+        scoring: s("scoring").map(PathBuf::from),
+        left: s("left"),
+        right: s("right"),
+        respiratory_json: s("respiratory-json")
+            .filter(|v| !(v.trim() == "-" || v.trim().eq_ignore_ascii_case("none")))
+            .map(PathBuf::from),
+        eeg: s("eeg").map(|v| split_channel_arg(&v)).unwrap_or_default(),
+        chin: s("chin"),
+        auto_arousals: yes(kv.get("auto-arousals"), false),
+        lights_off: s("lights-off-sec").and_then(|v| v.parse().ok()),
+        lights_on: s("lights-on-sec").and_then(|v| v.parse().ok()),
+        ..Default::default()
+    };
+    if let Some(m) = s("arousals") {
+        o.arousal_mode = m;
+    }
+    if let Some(st) = s("standard") {
+        o.standard = st.to_ascii_lowercase();
+    }
+    if let Some(v) = s("onset-uv").and_then(|v| v.parse().ok()) {
+        o.onset_uv = v;
+    }
+    if let Some(v) = s("offset-uv").and_then(|v| v.parse().ok()) {
+        o.offset_uv = v;
+    }
+    let resp_disabled = s("respiratory-json").is_some();
+    if o.respiratory_json.is_none() && !resp_disabled {
+        let sidecar = default_sidecar(&edf, kv.get("out-dir"), "_respiratory.json");
+        if sidecar.exists() {
+            o.respiratory_json = Some(sidecar);
+        }
+    }
+    let out = s("out").map(PathBuf::from).unwrap_or_else(|| default_sidecar(&edf, kv.get("out-dir"), "_plm.json"));
+    let started = Instant::now();
+    let report = analyse_nidra::psg::plm::analyse(&edf, &o)?;
+    println!("PROGRESS 0.95 Writing {}", out.display());
+    write_json_report(&report, &out)?;
+    for w in &report.warnings {
+        println!("WARNING {w}");
+    }
+    println!(
+        "PLMS index {:.1}/h ({}), LM {}",
+        report.summary.get("PLMS_index").copied().unwrap_or(f64::NAN),
+        report.flags.get("PLMS_severity").cloned().unwrap_or_default(),
+        report.summary.get("n_LM_total").copied().unwrap_or(0.0)
+    );
+    println!("OUTPUT_PLM {}", out.display());
+    println!("PROGRESS 1.00 Done in {:.1}s", started.elapsed().as_secs_f64());
     Ok(())
 }
 
@@ -537,6 +696,53 @@ fn main() -> Result<()> {
         s == "--apply-sleepgpt" || s.starts_with("--apply-sleepgpt=")
     }) {
         return handle_apply_sleepgpt_cli(raw_args);
+    }
+    if raw_args[0] == "--list-signals" {
+        let path = raw_args.get(1).context("usage: --list-signals <recording.edf>")?;
+        println!("{}", analyse_nidra::psg::list_signals_json(Path::new(path))?);
+        return Ok(());
+    }
+    if raw_args.iter().any(|a| a == "--respiratory") {
+        return handle_respiratory_cli(raw_args);
+    }
+    if raw_args.iter().any(|a| a == "--plm") {
+        return handle_plm_cli(raw_args);
+    }
+    if raw_args[0] == "--pops-debug" {
+        // analyse-nidra --pops-debug <edf> <eeg> <ref|-> <out.tsv>
+        let a: Vec<String> = raw_args.iter().map(|x| x.to_string_lossy().to_string()).collect();
+        if a.len() < 5 {
+            bail!("usage: --pops-debug <edf> <eeg> <ref|-> <out.tsv>");
+        }
+        let mut wanted = vec![a[2].clone()];
+        if a[3] != "-" {
+            wanted.push(a[3].clone());
+        }
+        let data = analyse_nidra::edf::read_selected(Path::new(&a[1]), &wanted)?;
+        let mut sig = data.data_uv[0].clone();
+        if data.data_uv.len() > 1 {
+            for (x, r) in sig.iter_mut().zip(&data.data_uv[1]) {
+                *x -= r;
+            }
+        }
+        let model = analyse_nidra::staging::pops::PopsModel::load_default()?;
+        let (kept, x, labels) = analyse_nidra::staging::pops::debug_features(&sig, data.sfreq, &model);
+        let probs = analyse_nidra::staging::pops::score_pops_channel(&sig, data.sfreq, &model)?;
+        let mut out = String::from("E\t");
+        out.push_str(&labels.join("\t"));
+        out.push_str("\tPW\tPN1\tPN2\tPN3\tPR\n");
+        for (k, e) in kept.iter().enumerate() {
+            out.push_str(&format!("{}", e + 1));
+            for v in &x[k] {
+                out.push_str(&format!("\t{v}"));
+            }
+            for v in probs[*e] {
+                out.push_str(&format!("\t{v}"));
+            }
+            out.push('\n');
+        }
+        std::fs::write(&a[4], out)?;
+        return Ok(());
     }
 
     let cli = parse_cli(raw_args)?;

@@ -29,78 +29,25 @@ impl StagingModel {
     pub fn resolve_model(model_arg: Option<&str>) -> Result<PathBuf> {
         if let Some(arg) = model_arg {
             let p = PathBuf::from(arg);
-            if p.exists() {
+            if p.is_file() {
                 return Ok(p);
             }
-            // Check known named presets
-            match arg.to_lowercase().as_str() {
-                "psg" | "psg_model" => {
-                    let candidates = [
-                        PathBuf::from("assets/models/tinysleepnet/psg_model.onnx"),
-                        PathBuf::from("../assets/models/tinysleepnet/psg_model.onnx"),
-                        PathBuf::from("analyseNidra/assets/models/tinysleepnet/psg_model.onnx"),
-                    ];
-                    for c in &candidates {
-                        if c.exists() {
-                            return Ok(c.clone());
-                        }
-                    }
-                }
-                "wearable" | "wearable_model" => {
-                    let candidates = [
-                        PathBuf::from("assets/models/tinysleepnet/wearable_model.onnx"),
-                        PathBuf::from("../assets/models/tinysleepnet/wearable_model.onnx"),
-                        PathBuf::from("analyseNidra/assets/models/tinysleepnet/wearable_model.onnx"),
-                    ];
-                    for c in &candidates {
-                        if c.exists() {
-                            return Ok(c.clone());
-                        }
-                    }
-                }
-                _ => {}
+            if matches!(arg.to_lowercase().as_str(), "wearable" | "wearable_model") {
+                return super::assets::require_model_file(
+                    "tinysleepnet/wearable_model.onnx",
+                    "TinySleepNet wearable ONNX model",
+                );
             }
         }
-
-        // Default candidate paths
-        let default_candidates = [
-            PathBuf::from("assets/models/tinysleepnet/psg_model.onnx"),
-            PathBuf::from("assets/models/tinysleepnet/model.onnx"),
-            PathBuf::from("analyseNidra/assets/models/tinysleepnet/psg_model.onnx"),
-            PathBuf::from("analyseNidra/assets/models/tinysleepnet/model.onnx"),
-            PathBuf::from("../assets/models/tinysleepnet/psg_model.onnx"),
-            PathBuf::from("../analyseNidra/assets/models/tinysleepnet/psg_model.onnx"),
-        ];
-
-        // Also check beside current executable
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(parent) = exe.parent() {
-                let exe_candidates = [
-                    parent.join("assets/models/tinysleepnet/psg_model.onnx"),
-                    parent.join("models/tinysleepnet/psg_model.onnx"),
-                    parent.join("../Resources/models/tinysleepnet/psg_model.onnx"),
-                    parent.join("../Resources/assets/models/tinysleepnet/psg_model.onnx"),
-                    parent.join("../Resources/flutter_assets/assets/models/tinysleepnet/psg_model.onnx"),
-                    parent.join("data/flutter_assets/assets/models/tinysleepnet/psg_model.onnx"),
-                    parent.join("../../analyseNidra/assets/models/tinysleepnet/psg_model.onnx"),
-                ];
-                for c in &exe_candidates {
-                    if c.exists() {
-                        return Ok(c.clone());
-                    }
-                }
-            }
-        }
-
-        for c in &default_candidates {
-            if c.exists() {
-                return Ok(c.clone());
-            }
-        }
-
-        anyhow::bail!(
-            "TinySleepNet ONNX model not found. Pass --model <path/to/model.onnx> or ensure assets/models/tinysleepnet/ exists."
-        )
+        super::assets::find_model_file("tinysleepnet/psg_model.onnx")
+            .or_else(|| super::assets::find_model_file("tinysleepnet/model.onnx"))
+            .map(Ok)
+            .unwrap_or_else(|| {
+                super::assets::require_model_file(
+                    "tinysleepnet/psg_model.onnx",
+                    "TinySleepNet ONNX model",
+                )
+            })
     }
 
     /// Scores a 20-epoch sequence of shape (20 * 3000 f32).

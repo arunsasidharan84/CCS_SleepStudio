@@ -78,6 +78,36 @@ reference Python implementation (`dbs_artifact_removal.py`) on a 3.3 h DBS
 recording: removed artefact correlation ≥ 0.998 and difference ≤ 0.5 µV RMS
 across channels.
 
+## Sleep staging, respiratory and PLM analysis
+
+```bash
+# Automated staging (all algorithms are native; multi-montage consensus)
+analyse-nidra --stage night.edf --algorithm luna \
+  [--eeg C4-A1,C3-A2] [--ref M1,M2] [--eog LOC] [--emg Chin] \
+  [--sequence-correction sleepgpt] [--out-dir DIR]
+# -> night_luna_scoring.json (never overwrites night_scoring.json)
+
+# Channel list with guessed PSG roles (JSON)
+analyse-nidra --list-signals night.edf
+
+# Respiratory events (AASM v3): apneas, hypopneas (1A/1B), RERAs, ODI,
+# T90, hypoxic burden, pulse response, positional / REM OSA, CSB
+analyse-nidra --respiratory night.edf --scoring night_scoring.json \
+  [--pressure "Flow Patient"] [--thermal Therm] [--thorax THO] [--abdomen ABD] \
+  [--spo2 SpO2] [--hypopnea-rule 3|4] [--arousals prefer-manual|auto|none]
+# -> night_respiratory.json
+
+# Periodic limb movements (AASM v3 default, --standard wasm for WASM 2016)
+analyse-nidra --plm night.edf --scoring night_scoring.json \
+  [--left LAT-L] [--right LAT-R] [--respiratory-json night_respiratory.json]
+# -> night_plm.json
+```
+
+Any channel option accepts `none` to switch that sensor off; omitted channels
+are auto-detected from their labels. Models are looked up beside the binary
+(`models/`, `assets/models/`, macOS `../Resources/models`) or in
+`$ANALYSE_NIDRA_MODELS`.
+
 ## Verification
 
 Implemented and verified:

@@ -34,6 +34,7 @@ __pycache__/
 !requirements.txt
 !*spectral.txt
 !**/CMakeLists.txt
+!analyseNidra/assets/models/**/*.txt
 *.edf
 *.lst
 scratch_out/

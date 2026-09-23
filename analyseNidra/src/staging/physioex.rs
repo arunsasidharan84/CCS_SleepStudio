@@ -31,40 +31,9 @@ impl PhysioExModel {
     }
 
     pub fn resolve_model(model_name: &str) -> Result<PathBuf> {
-        let filename = format!("{}.onnx", model_name);
-        let candidates = [
-            PathBuf::from(format!("assets/models/physioex/{}", filename)),
-            PathBuf::from(format!("analyseNidra/assets/models/physioex/{}", filename)),
-            PathBuf::from(format!("../assets/models/physioex/{}", filename)),
-            PathBuf::from(format!("../analyseNidra/assets/models/physioex/{}", filename)),
-        ];
-
-        for c in &candidates {
-            if c.exists() {
-                return Ok(c.clone());
-            }
-        }
-
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(parent) = exe.parent() {
-                let exe_candidates = [
-                    parent.join(format!("assets/models/physioex/{}", filename)),
-                    parent.join(format!("models/physioex/{}", filename)),
-                    parent.join(format!("../Resources/models/physioex/{}", filename)),
-                    parent.join(format!("../Resources/assets/models/physioex/{}", filename)),
-                ];
-                for c in &exe_candidates {
-                    if c.exists() {
-                        return Ok(c.clone());
-                    }
-                }
-            }
-        }
-
-        anyhow::bail!(
-            "PhysioEx ONNX model {} not found. Ensure assets/models/physioex/{}.onnx exists.",
-            model_name,
-            model_name
+        super::assets::require_model_file(
+            &format!("physioex/{model_name}.onnx"),
+            &format!("PhysioEx ONNX model '{model_name}'"),
         )
     }
 
@@ -262,13 +231,12 @@ pub fn score_physioex_channel(
     let specs = compute_xsleepnet_spectrograms(&epochs);
     let sequences = build_physioex_sequences(&specs);
 
-    let mut all_probs = Vec::with_capacity(sequences.len());
-    for seq in &sequences {
-        let probs = model.score_sequence(seq)?;
-        all_probs.push(probs);
-    }
-
-    Ok(all_probs)
+    use rayon::prelude::*;
+    // Sequences are independent: run them in parallel across cores.
+    sequences
+        .par_iter()
+        .map(|seq| model.score_sequence(seq))
+        .collect()
 }
 
 #[cfg(test)]

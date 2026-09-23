@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'models.dart';
+import 'psg_report_data.dart';
 
 class ReportMetadata {
   const ReportMetadata({
@@ -26,6 +27,8 @@ List<int> buildPublicationSleepReport({
   required List<Map<String, String>> regionalRows,
   List<bool> includePages = const [true, true, true, true, true],
   ReportMetadata metadata = const ReportMetadata(),
+  Map<String, dynamic>? respiratoryReport,
+  Map<String, dynamic>? plmReport,
 }) {
   final report = _PdfDocument();
   final architecture = regionalRows.isEmpty
@@ -33,7 +36,9 @@ List<int> buildPublicationSleepReport({
       : regionalRows.first;
   final regions = regionalRows.isEmpty ? <Map<String, String>>[] : regionalRows;
 
-  final totalPages = includePages.where((b) => b).length;
+  final totalPages = includePages.where((b) => b).length +
+      (respiratoryReport != null ? 1 : 0) +
+      (plmReport != null ? 1 : 0);
   var pageNum = 1;
 
   if (includePages[0]) {
@@ -47,6 +52,14 @@ List<int> buildPublicationSleepReport({
         totalPages,
       ),
     );
+  }
+  if (respiratoryReport != null) {
+    report.addPage(
+      _buildRespiratoryPage(viewport, respiratoryReport, pageNum++, totalPages),
+    );
+  }
+  if (plmReport != null) {
+    report.addPage(_buildPlmPage(viewport, plmReport, pageNum++, totalPages));
   }
   if (includePages[1]) {
     report.addPage(_buildMicrostructurePage(regions, pageNum++, totalPages));
@@ -1521,6 +1534,14 @@ _PdfColor _eventColor(int digit) {
     _PdfColor(1.00, 0.65, 0.00),
     _PdfColor(0.29, 0.00, 0.51),
     _PdfColor(1.00, 0.41, 0.71),
+    _PdfColor(0.78, 0.16, 0.16), // 13 obstructive apnea
+    _PdfColor(0.08, 0.40, 0.75), // 14 central apnea
+    _PdfColor(0.42, 0.11, 0.60), // 15 mixed apnea
+    _PdfColor(0.94, 0.42, 0.00), // 16 hypopnea
+    _PdfColor(0.98, 0.66, 0.15), // 17 RERA
+    _PdfColor(0.00, 0.59, 0.65), // 18 desaturation
+    _PdfColor(0.49, 0.70, 0.26), // 19 leg movement
+    _PdfColor(0.11, 0.37, 0.13), // 20 PLM
   ];
   return colors[digit.clamp(0, colors.length - 1)];
 }
@@ -1587,7 +1608,18 @@ class _PdfPage {
         .replaceAll(')', r'\)')
         .replaceAll('µ', 'u')
         .replaceAll('κ', 'k')
-        .replaceAll('π', 'pi');
+        .replaceAll('π', 'pi')
+        .replaceAll('₂', '2')
+        .replaceAll('≥', '>=')
+        .replaceAll('≤', '<=')
+        .replaceAll('–', '-')
+        .replaceAll('—', '-')
+        .replaceAll('−', '-')
+        .replaceAll('·', '.')
+        .replaceAll('Δ', 'delta ')
+        .replaceAll('↓', '')
+        .replaceAll('’', "'")
+        .replaceAll(RegExp(r'[^\x00-\xFF]'), '?');
     _commands.add('BT ${color.fill} $font $size Tf $x $y Td ($escaped) Tj ET');
   }
 
@@ -1704,4 +1736,298 @@ class _PdfDocument {
     );
     return buffer.toString().codeUnits;
   }
+}
+
+// ─── Respiratory & PLM pages (from analyse-nidra JSON sidecars) ─────────────
+
+double? _jsonNum(Map? map, String key) {
+  final v = map?[key];
+  return v is num && v.isFinite ? v.toDouble() : null;
+}
+
+String _jsonFmt(Map? map, String key, {int decimals = 1, String unit = ''}) {
+  final v = _jsonNum(map, key);
+  return v == null ? '-' : '${v.toStringAsFixed(decimals)}$unit';
+}
+
+void _psgCards(_PdfPage p, List<(String, String)> cards, double y) {
+  for (var i = 0; i < cards.length; i++) {
+    final x = 50.0 + i * 86;
+    p.rect(x, y, 80, 40, fill: i.isEven ? _paleBlue : _paleGreen);
+    p.text(cards[i].$1, x + 6, y + 27, size: 6.5, color: _slate);
+    p.text(cards[i].$2, x + 6, y + 9, bold: true, size: 11, color: _navy);
+  }
+}
+
+double _psgTable(
+  _PdfPage p,
+  List<(String, List<(String, String)>)> sections,
+  double x,
+  double y, {
+  double width = 250,
+}) {
+  for (final section in sections) {
+    p.text(section.$1, x, y, bold: true, size: 8, color: _navy);
+    y -= 4;
+    p.line(x, y, x + width, y, color: _lightGray);
+    y -= 10;
+    for (final row in section.$2) {
+      p.text(row.$1, x + 2, y, size: 6.8, color: _charcoal);
+      p.text(row.$2, x + width * 0.66, y, bold: true, size: 6.8, color: _charcoal);
+      y -= 8.8;
+    }
+    y -= 6;
+  }
+  return y;
+}
+
+/// Event raster rows aligned with the hypnogram above them.
+void _eventRaster(
+  _PdfPage p, {
+  required double x,
+  required double y,
+  required double width,
+  required double durationSec,
+  required List<(String, _PdfColor, List<(double, double)>)> rows,
+}) {
+  const rowHeight = 9.0;
+  for (var r = 0; r < rows.length; r++) {
+    final ry = y - r * rowHeight;
+    p.text(rows[r].$1, x - 31, ry + 1, size: 6.2, color: _slate);
+    p.line(x, ry + 3.5, x + width, ry + 3.5, color: _lightGray, width: 0.25);
+    for (final (a, b) in rows[r].$3) {
+      final s = a.clamp(0.0, durationSec);
+      final e = b.clamp(0.0, durationSec);
+      if (e < s) continue;
+      final x1 = x + width * s / durationSec;
+      final x2 = x + width * e / durationSec;
+      p.rect(x1, ry, math.max(0.8, x2 - x1), 7, fill: rows[r].$2);
+    }
+  }
+}
+
+List<(double, double)> _spans(Iterable<dynamic> items, bool Function(Map) keep) => [
+  for (final e in items)
+    if (e is Map && keep(e))
+      (
+        (e['start'] as num?)?.toDouble() ?? 0,
+        (e['end'] as num?)?.toDouble() ?? 0,
+      ),
+];
+
+String _buildRespiratoryPage(
+  EegViewport viewport,
+  Map<String, dynamic> report,
+  int pageNum,
+  int totalPages,
+) {
+  final p = _PdfPage();
+  _header(p, 'RESPIRATORY EVENTS & OXIMETRY', 'Page $pageNum of $totalPages');
+  final summary = report['summary'] as Map?;
+  final flags = report['flags'] as Map?;
+  final channels = report['channels'] as Map?;
+  p.text(
+    'AASM Scoring Manual v3 | ${flags?['hypopnea_rule'] ?? ''} | '
+    'apnea sensor: ${channels?['apnea_sensor'] ?? '-'} | hypopnea sensor: ${channels?['hypopnea_sensor'] ?? '-'}',
+    50,
+    704,
+    size: 6.8,
+    color: _slate,
+  );
+  _psgCards(p, [
+    ('AHI (/h)', _jsonFmt(summary, 'AHI')),
+    ('ODI 3% (/h)', _jsonFmt(summary, 'ODI3')),
+    ('T90 (% TST)', _jsonFmt(summary, 'T90_pct')),
+    ('SpO2 nadir', _jsonFmt(summary, 'SpO2_min_sleep', decimals: 0, unit: '%')),
+    ('Hypoxic burden', _jsonFmt(summary, 'hypoxic_burden_pct_min_per_h', decimals: 0)),
+    ('Pulse response', _jsonFmt(summary, 'delta_HR_bpm', unit: ' bpm')),
+  ], 650);
+  p.text(
+    'Severity: ${flags?['severity'] ?? '-'}   |   hypoxic burden in %min/h   |   pulse response = mean event-related heart-rate rise',
+    50,
+    638,
+    size: 6.5,
+    color: _slate,
+  );
+
+  p.section('Overnight respiratory timeline', 50, 622);
+  const x = 80.0;
+  const width = 480.0;
+  _hypnogram(p, viewport, x, 522, width, 88);
+  final duration = math.max(1.0, viewport.stages.length * 30.0);
+  final events = (report['events'] as List?) ?? const [];
+  bool counted(Map e) => e['counted'] == true;
+  String kind(Map e) => (e['kind'] ?? '').toString().toLowerCase();
+  _eventRaster(
+    p,
+    x: x,
+    y: 500,
+    width: width,
+    durationSec: duration,
+    rows: [
+      ('OA', _eventColor(kDigitObstructiveApnea), _spans(events, (e) => counted(e) && kind(e).contains('apnea') && !kind(e).contains('central') && !kind(e).contains('mixed'))),
+      ('CA', _eventColor(kDigitCentralApnea), _spans(events, (e) => counted(e) && kind(e).contains('central apnea'))),
+      ('MA', _eventColor(kDigitMixedApnea), _spans(events, (e) => counted(e) && kind(e).contains('mixed'))),
+      ('Hyp', _eventColor(kDigitHypopnea), _spans(events, (e) => counted(e) && kind(e).contains('hypopnea'))),
+      ('RERA', _eventColor(kDigitRera), _spans(events, (e) => counted(e) && kind(e).contains('rera'))),
+      ('Desat', _eventColor(kDigitDesaturation), _spans((report['desaturations'] as List?) ?? const [], (e) => e['in_sleep'] != false)),
+    ],
+  );
+
+  // SpO2 trace (per-epoch minimum) aligned with the hypnogram.
+  final epochs = report['epochs'] as Map?;
+  final spo2 = [
+    for (final v in (epochs?['spo2_min'] as List? ?? const []))
+      v is num && v.isFinite && v > 0 ? v.toDouble() : null,
+  ];
+  const sy = 368.0;
+  const sh = 70.0;
+  final present = spo2.whereType<double>().toList();
+  final lo = present.isEmpty ? 80.0 : math.min(88.0, (present.reduce(math.min) / 5).floor() * 5.0);
+  const hi = 100.0;
+  double py(double v) => sy + sh * (v.clamp(lo, hi) - lo) / (hi - lo);
+  p.rect(x, sy, width, sh, fill: _offWhite, stroke: _lightGray);
+  p.line(x, py(90), x + width, py(90), color: _red, width: 0.3);
+  p.text('90%', x + width + 3, py(90) - 2, size: 6, color: _red);
+  p.text('SpO2', x - 31, sy + sh - 8, size: 6.5);
+  p.text('${hi.toStringAsFixed(0)}%', x - 31, sy + sh - 17, size: 5.8, color: _slate);
+  p.text('${lo.toStringAsFixed(0)}%', x - 31, sy, size: 5.8, color: _slate);
+  if (spo2.isNotEmpty) {
+    final epochSec = 30.0;
+    var run = <(double, double)>[];
+    void flush() {
+      p.polyline(run, color: _teal, width: 0.6);
+      run = <(double, double)>[];
+    }
+    for (var i = 0; i < spo2.length; i++) {
+      final v = spo2[i];
+      if (v == null) {
+        flush();
+        continue;
+      }
+      final px = x + width * math.min(1.0, (i + 0.5) * epochSec / duration);
+      run.add((px, py(v)));
+    }
+    flush();
+  }
+
+  p.section('Recommended and novel respiratory parameters', 50, 350);
+  final sections = respiratorySummarySections(report);
+  _psgTable(p, sections.take(2).toList(), 50, 332);
+  _psgTable(p, sections.skip(2).toList(), 312, 332);
+
+  p.section('Interpretation', 50, 132);
+  _wrappedText(p, respiratoryInterpretation(report), 52, 116, maxCharacters: 118, size: 7.2, lineHeight: 10);
+  _footer(
+    p,
+    'Automated scoring (AASM v3 rules) by AnalyseNidra; review events against the raw signals before clinical use.',
+  );
+  return p.build();
+}
+
+String _buildPlmPage(
+  EegViewport viewport,
+  Map<String, dynamic> report,
+  int pageNum,
+  int totalPages,
+) {
+  final p = _PdfPage();
+  _header(p, 'PERIODIC LIMB MOVEMENTS', 'Page $pageNum of $totalPages');
+  final summary = report['summary'] as Map?;
+  final settings = report['settings'] as Map?;
+  final channels = report['channels'] as Map?;
+  p.text(
+    '${settings?['standard'] ?? 'AASM'} | left: ${channels?['left_leg'] ?? '-'} | right: ${channels?['right_leg'] ?? '-'} | '
+    'onset ${settings?['onset_uV'] ?? '8'} uV, offset ${settings?['offset_uV'] ?? '2'} uV above resting EMG',
+    50,
+    704,
+    size: 6.8,
+    color: _slate,
+  );
+  _psgCards(p, [
+    ('PLMS index (/h)', _jsonFmt(summary, 'PLMS_index')),
+    ('PLMW index (/h)', _jsonFmt(summary, 'PLMW_index')),
+    ('PLMS-arousal (/h)', _jsonFmt(summary, 'PLMS_arousal_index')),
+    ('Periodicity index', _jsonFmt(summary, 'periodicity_index', decimals: 2)),
+    ('LM index (/h)', _jsonFmt(summary, 'LM_index')),
+    ('PLM series (sleep)', _jsonFmt(summary, 'n_PLM_series_sleep', decimals: 0)),
+  ], 650);
+
+  p.section('Overnight limb-movement timeline', 50, 622);
+  const x = 80.0;
+  const width = 480.0;
+  _hypnogram(p, viewport, x, 522, width, 88);
+  final duration = math.max(1.0, viewport.stages.length * 30.0);
+  final moves = (report['movements'] as List?) ?? const [];
+  _eventRaster(
+    p,
+    x: x,
+    y: 500,
+    width: width,
+    durationSec: duration,
+    rows: [
+      ('PLM', _eventColor(kDigitPlm), _spans(moves, (m) => m['clm'] == true && m['periodic'] == true)),
+      ('LM', _eventColor(kDigitLegMovement), _spans(moves, (m) => m['clm'] == true && m['periodic'] != true)),
+      ('Resp', _eventColor(kDigitHypopnea), _spans(moves, (m) => m['respiratory'] == true)),
+    ],
+  );
+
+  // Inter-movement interval histogram.
+  final hist = [
+    for (final h in (report['imi_histogram'] as List? ?? const []))
+      if (h is List && h.length >= 2) (h[0].toString(), (h[1] as num?)?.toDouble() ?? 0.0),
+  ];
+  p.section('Inter-movement intervals (sleep)', 50, 460);
+  if (hist.isNotEmpty) {
+    const hx = 60.0;
+    const hy = 372.0;
+    const hw = 220.0;
+    const hh = 66.0;
+    final maxCount = math.max(1.0, hist.map((h) => h.$2).reduce(math.max));
+    final bw = hw / hist.length;
+    p.rect(hx, hy, hw, hh, stroke: _lightGray);
+    for (var i = 0; i < hist.length; i++) {
+      final bh = hh * hist[i].$2 / maxCount;
+      p.rect(hx + i * bw + 1, hy, bw - 2, bh, fill: _teal);
+      p.text(hist[i].$1.replaceAll(' s', ''), hx + i * bw, hy - 9, size: 5.2, color: _slate);
+      p.text(hist[i].$2.toStringAsFixed(0), hx + i * bw + 2, hy + bh + 2, size: 5.2);
+    }
+    p.text('seconds', hx + hw - 25, hy - 17, size: 5.8, color: _slate);
+  }
+  // PLMS index by hour of the night.
+  final hourly = [
+    for (final h in (report['hourly'] as List? ?? const []))
+      if (h is Map) (_jsonNum(h, 'hour') ?? 0, _jsonNum(h, 'PLMS_index') ?? 0.0),
+  ];
+  p.text('PLMS index by hour of sleep', 330, 446, bold: true, size: 7.5, color: _navy);
+  if (hourly.isNotEmpty) {
+    const hx = 330.0;
+    const hy = 372.0;
+    const hw = 220.0;
+    const hh = 66.0;
+    final maxV = math.max(15.0, hourly.map((h) => h.$2).reduce(math.max));
+    final bw = hw / hourly.length;
+    p.rect(hx, hy, hw, hh, stroke: _lightGray);
+    final y15 = hy + hh * 15 / maxV;
+    p.line(hx, y15, hx + hw, y15, color: _red, width: 0.3);
+    p.text('15/h', hx + hw + 3, y15 - 2, size: 5.8, color: _red);
+    for (var i = 0; i < hourly.length; i++) {
+      final bh = hh * hourly[i].$2 / maxV;
+      p.rect(hx + i * bw + 1, hy, bw - 2, bh, fill: _eventColor(kDigitPlm));
+      p.text(hourly[i].$1.toStringAsFixed(0), hx + i * bw + bw / 2 - 2, hy - 9, size: 5.8, color: _slate);
+    }
+  }
+
+  p.section('Recommended and novel PLM parameters', 50, 342);
+  final sections = plmSummarySections(report);
+  _psgTable(p, sections.take(2).toList(), 50, 324);
+  _psgTable(p, sections.skip(2).toList(), 312, 324);
+
+  p.section('Interpretation', 50, 132);
+  _wrappedText(p, plmInterpretation(report), 52, 116, maxCharacters: 118, size: 7.2, lineHeight: 10);
+  _footer(
+    p,
+    'Automated leg-movement scoring by AnalyseNidra; verify tibialis EMG quality and review scored movements before clinical use.',
+  );
+  return p.build();
 }

@@ -116,39 +116,9 @@ impl YasaClassifier {
     }
 
     pub fn resolve_model(model_name: &str) -> Result<PathBuf> {
-        let candidates = [
-            PathBuf::from(format!("assets/models/yasa/{model_name}.json")),
-            PathBuf::from(format!("analyseNidra/assets/models/yasa/{model_name}.json")),
-            PathBuf::from(format!("../assets/models/yasa/{model_name}.json")),
-            PathBuf::from(format!("../analyseNidra/assets/models/yasa/{model_name}.json")),
-        ];
-
-        for c in &candidates {
-            if c.exists() {
-                return Ok(c.clone());
-            }
-        }
-
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(parent) = exe.parent() {
-                let exe_candidates = [
-                    parent.join(format!("assets/models/yasa/{model_name}.json")),
-                    parent.join(format!("models/yasa/{model_name}.json")),
-                    parent.join(format!("../Resources/models/yasa/{model_name}.json")),
-                    parent.join(format!("../Resources/assets/models/yasa/{model_name}.json")),
-                ];
-                for c in &exe_candidates {
-                    if c.exists() {
-                        return Ok(c.clone());
-                    }
-                }
-            }
-        }
-
-        anyhow::bail!(
-            "YASA model {} not found. Ensure assets/models/yasa/{}.json exists.",
-            model_name,
-            model_name
+        super::assets::require_model_file(
+            &format!("yasa/{model_name}.json"),
+            &format!("YASA model '{model_name}'"),
         )
     }
 
@@ -408,12 +378,9 @@ fn past_rolling_4(values: &[f64]) -> Vec<f64> {
     out
 }
 
-/// Extracts full 65-feature matrix for single-channel EEG matching YASA's exact pipeline.
-pub fn extract_yasa_eeg_features(
-    raw_signal: &[f64],
-    sfreq: f64,
-    clf: &YasaClassifier,
-) -> Vec<Vec<f64>> {
+/// Resample to 100 Hz, apply YASA's 0.4-30 Hz FIR and compute the 21 base
+/// features for every complete 30-s epoch.
+fn yasa_base_feature_matrix(raw_signal: &[f64], sfreq: f64) -> Vec<Vec<f64>> {
     // 1. Resample to 100 Hz if necessary
     let resampled = if (sfreq - 100.0).abs() > 0.01 {
         crate::signal::mne_fft_resample(raw_signal, sfreq, 100.0)
@@ -434,89 +401,127 @@ pub fn extract_yasa_eeg_features(
 
     // 3. Segment into 30s epochs (3000 samples each)
     let n_epochs = filtered.len() / 3000;
+    let mut base_matrix = vec![vec![0.0f64; n_epochs]; 21];
     if n_epochs == 0 {
-        return Vec::new();
+        return base_matrix;
     }
 
     use rayon::prelude::*;
-    let epochs_data: Vec<&[f64]> = (0..n_epochs)
-        .map(|ep| &filtered[ep * 3000..(ep + 1) * 3000])
+    let all_base_feats: Vec<[f64; 21]> = (0..n_epochs)
+        .into_par_iter()
+        .map(|ep| calculate_epoch_base_features(&filtered[ep * 3000..(ep + 1) * 3000]))
         .collect();
-
-    let all_base_feats: Vec<[f64; 21]> = epochs_data
-        .par_iter()
-        .map(|&ep| calculate_epoch_base_features(ep))
-        .collect();
-
-    let mut base_matrix = vec![vec![0.0f64; n_epochs]; 21];
     for (ep, feats) in all_base_feats.iter().enumerate() {
         for f in 0..21 {
             base_matrix[f][ep] = feats[f];
         }
     }
+    base_matrix
+}
 
-    // 4. Smooth and normalize
-    let mut c7min_matrix = Vec::with_capacity(21);
-    let mut p2min_matrix = Vec::with_capacity(21);
+struct YasaChannelFeatures {
+    base: Vec<Vec<f64>>,
+    c7: Vec<Vec<f64>>,
+    p2: Vec<Vec<f64>>,
+}
 
-    for f in 0..21 {
-        let mut c7 = triangular_rolling_15(&base_matrix[f]);
-        robust_scale(&mut c7);
-        c7min_matrix.push(c7);
-
-        let mut p2 = past_rolling_4(&base_matrix[f]);
-        robust_scale(&mut p2);
-        p2min_matrix.push(p2);
+fn yasa_channel_features(raw_signal: &[f64], sfreq: f64, n_epochs: usize) -> YasaChannelFeatures {
+    let mut base = yasa_base_feature_matrix(raw_signal, sfreq);
+    for row in base.iter_mut() {
+        row.resize(n_epochs, 0.0);
     }
+    // 4. Smooth and normalize
+    let mut c7 = Vec::with_capacity(21);
+    let mut p2 = Vec::with_capacity(21);
+    for f in 0..21 {
+        let mut c = triangular_rolling_15(&base[f]);
+        robust_scale(&mut c);
+        c7.push(c);
+        let mut p = past_rolling_4(&base[f]);
+        robust_scale(&mut p);
+        p2.push(p);
+    }
+    YasaChannelFeatures { base, c7, p2 }
+}
 
-    // 5. Build feature map per epoch and align to classifier's feature_names
+fn yasa_epoch_count(signal: &[f64], sfreq: f64) -> usize {
+    ((signal.len() as f64 / sfreq) / 30.0 + 1e-9).floor() as usize
+}
+
+/// Extracts the YASA feature matrix for EEG with optional EOG and EMG
+/// channels. The classifier's `feature_names` decide which channel blocks are
+/// consumed (`eeg_*`, `eog_*`, `emg_*`, `time_*`).
+pub fn extract_yasa_features(
+    eeg: &[f64],
+    eog: Option<&[f64]>,
+    emg: Option<&[f64]>,
+    sfreq: f64,
+    clf: &YasaClassifier,
+) -> Vec<Vec<f64>> {
+    let mut n_epochs = yasa_epoch_count(eeg, sfreq);
+    if let Some(e) = eog {
+        n_epochs = n_epochs.min(yasa_epoch_count(e, sfreq));
+    }
+    if let Some(e) = emg {
+        n_epochs = n_epochs.min(yasa_epoch_count(e, sfreq));
+    }
+    // The FFT resampler can drop a trailing partial epoch; recompute from EEG.
+    let eeg_feats = yasa_channel_features(eeg, sfreq, n_epochs);
+    let n_epochs = n_epochs.min(eeg_feats.base[0].len());
+    if n_epochs == 0 {
+        return Vec::new();
+    }
+    let eog_feats = eog.map(|s| yasa_channel_features(s, sfreq, n_epochs));
+    let emg_feats = emg.map(|s| yasa_channel_features(s, sfreq, n_epochs));
+
     let mut feature_dict: HashMap<&str, usize> = HashMap::new();
     for (i, &name) in BASE_FEATURE_NAMES.iter().enumerate() {
         feature_dict.insert(name, i);
     }
 
-    let mut final_matrix = Vec::with_capacity(n_epochs);
-    let last_time = if n_epochs > 1 { (n_epochs - 1) as f64 * 30.0 } else { 30.0 };
+    let lookup = |feats: &YasaChannelFeatures, name: &str, ep: usize| -> f64 {
+        if let Some(n) = name.strip_suffix("_c7min_norm") {
+            feature_dict.get(n).map(|&i| feats.c7[i][ep]).unwrap_or(0.0)
+        } else if let Some(n) = name.strip_suffix("_p2min_norm") {
+            feature_dict.get(n).map(|&i| feats.p2[i][ep]).unwrap_or(0.0)
+        } else {
+            feature_dict.get(name).map(|&i| feats.base[i][ep]).unwrap_or(0.0)
+        }
+    };
 
+    let last_time = if n_epochs > 1 { (n_epochs - 1) as f64 * 30.0 } else { 30.0 };
+    let mut final_matrix = Vec::with_capacity(n_epochs);
     for ep in 0..n_epochs {
         let time_sec = ep as f64 * 30.0;
-        let time_hour = time_sec / 3600.0;
-        let time_norm = time_sec / last_time;
-
         let mut row = Vec::with_capacity(clf.feature_names.len());
-
         for target_name in &clf.feature_names {
-            if target_name == "time_hour" {
-                row.push(time_hour);
+            let value = if target_name == "time_hour" {
+                time_sec / 3600.0
             } else if target_name == "time_norm" {
-                row.push(time_norm);
-            } else if let Some(base_name) = target_name.strip_prefix("eeg_") {
-                if let Some(c7_name) = base_name.strip_suffix("_c7min_norm") {
-                    if let Some(&f_idx) = feature_dict.get(c7_name) {
-                        row.push(c7min_matrix[f_idx][ep]);
-                    } else {
-                        row.push(0.0);
-                    }
-                } else if let Some(p2_name) = base_name.strip_suffix("_p2min_norm") {
-                    if let Some(&f_idx) = feature_dict.get(p2_name) {
-                        row.push(p2min_matrix[f_idx][ep]);
-                    } else {
-                        row.push(0.0);
-                    }
-                } else if let Some(&f_idx) = feature_dict.get(base_name) {
-                    row.push(base_matrix[f_idx][ep]);
-                } else {
-                    row.push(0.0);
-                }
+                time_sec / last_time
+            } else if let Some(name) = target_name.strip_prefix("eeg_") {
+                lookup(&eeg_feats, name, ep)
+            } else if let Some(name) = target_name.strip_prefix("eog_") {
+                eog_feats.as_ref().map(|f| lookup(f, name, ep)).unwrap_or(0.0)
+            } else if let Some(name) = target_name.strip_prefix("emg_") {
+                emg_feats.as_ref().map(|f| lookup(f, name, ep)).unwrap_or(0.0)
             } else {
-                row.push(0.0);
-            }
+                0.0
+            };
+            row.push(value);
         }
-
         final_matrix.push(row);
     }
-
     final_matrix
+}
+
+/// Extracts full 65-feature matrix for single-channel EEG matching YASA's exact pipeline.
+pub fn extract_yasa_eeg_features(
+    raw_signal: &[f64],
+    sfreq: f64,
+    clf: &YasaClassifier,
+) -> Vec<Vec<f64>> {
+    extract_yasa_features(raw_signal, None, None, sfreq, clf)
 }
 
 #[cfg(test)]

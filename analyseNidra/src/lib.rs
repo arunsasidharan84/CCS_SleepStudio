@@ -6,6 +6,7 @@ pub mod hypnogram;
 pub mod nonlinear;
 pub mod pac;
 pub mod pipeline;
+pub mod psg;
 pub mod regional;
 pub mod signal;
 pub mod spectral;

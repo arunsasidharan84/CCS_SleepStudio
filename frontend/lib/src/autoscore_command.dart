@@ -156,3 +156,137 @@ bool isAnalyseNidraAvailable() {
   return File(exe).existsSync();
 }
 
+
+/// Maps UI / legacy algorithm identifiers onto the keys understood by the
+/// native `analyse-nidra --stage` engine.
+String canonicalAutoscoreAlgorithm(String algorithm) {
+  final key = algorithm.trim().toLowerCase().replaceAll('-', '_');
+  switch (key) {
+    case '':
+    case 'tinysleepnet_rust':
+    case 'tinysleepnet_physioex':
+      return 'tinysleepnet';
+    case 'sleeptansformer':
+      return 'sleeptransformer';
+    case 'pops':
+    case 'luna_pops':
+      return 'luna';
+    default:
+      return key;
+  }
+}
+
+/// Human readable name for an autoscoring algorithm key.
+String autoscoreAlgorithmLabel(String algorithm) {
+  switch (canonicalAutoscoreAlgorithm(algorithm)) {
+    case 'tinysleepnet':
+      return 'TinySleepNet';
+    case 'yasa':
+      return 'YASA';
+    case 'usleep':
+      return 'U-Sleep';
+    case 'luna':
+      return 'Luna POPS';
+    case 'gssc':
+      return 'GSSC';
+    case 'seqsleepnet':
+      return 'SeqSleepNet';
+    case 'sleeptransformer':
+      return 'SleepTransformer';
+    case 'dreamento':
+      return 'Dreamento';
+    case 'sleepeegpy':
+      return 'SleepEEGpy';
+    default:
+      return algorithm;
+  }
+}
+
+/// File extensions the native engine can read directly.
+bool analyseNidraReadsNatively(String path) {
+  final lower = path.toLowerCase();
+  return lower.endsWith('.edf') || lower.endsWith('.rec');
+}
+
+/// Builds the `analyse-nidra --stage` argument list.
+List<String> buildNativeStageArgs({
+  required String inputPath,
+  required String algorithm,
+  String? sequenceCorrection,
+  Object? sleepgptAlpha,
+  Object? sleepgptNgram,
+  List<String> eeg = const [],
+  List<String> ref = const [],
+  List<String> eog = const [],
+  List<String> emg = const [],
+  String? outJson,
+  String? outDir,
+}) {
+  List<String> clean(List<String> values) =>
+      values.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+  final args = <String>[
+    '--stage',
+    inputPath,
+    '--algorithm',
+    canonicalAutoscoreAlgorithm(algorithm),
+  ];
+  final correction = sequenceCorrection?.trim() ?? '';
+  if (correction.isNotEmpty && correction != 'none') {
+    args.addAll(['--sequence-correction', correction]);
+    if (correction == 'sleepgpt') {
+      if (sleepgptAlpha != null) {
+        args.addAll(['--sleepgpt-alpha', sleepgptAlpha.toString()]);
+      }
+      if (sleepgptNgram != null) {
+        args.addAll(['--sleepgpt-ngram', sleepgptNgram.toString()]);
+      }
+    }
+  }
+  final eegList = clean(eeg);
+  final refList = clean(ref);
+  final eogList = clean(eog);
+  final emgList = clean(emg);
+  if (eegList.isNotEmpty) args.addAll(['--eeg', eegList.join(',')]);
+  if (refList.isNotEmpty) args.addAll(['--ref', refList.join(',')]);
+  if (eogList.isNotEmpty) args.addAll(['--eog', eogList.join(',')]);
+  if (emgList.isNotEmpty) args.addAll(['--emg', emgList.join(',')]);
+  if (outJson != null && outJson.isNotEmpty) args.addAll(['--out', outJson]);
+  if (outDir != null && outDir.isNotEmpty) args.addAll(['--out-dir', outDir]);
+  return args;
+}
+
+/// Default output path for a native autoscoring run on [inputPath]; this
+/// mirrors the naming used by `analyse-nidra --stage` so that non-EDF inputs
+/// (converted to a temporary EDF first) land beside the original recording.
+String nativeStageOutputPath(
+  String inputPath,
+  String algorithm, {
+  String? sequenceCorrection,
+  String? outDir,
+}) {
+  final sep = Platform.pathSeparator;
+  final normalized = inputPath.replaceAll('\\', '/');
+  final slash = normalized.lastIndexOf('/');
+  final dir = outDir ??
+      (slash >= 0 ? inputPath.substring(0, slash) : Directory.current.path);
+  var name = slash >= 0 ? normalized.substring(slash + 1) : normalized;
+  final dot = name.lastIndexOf('.');
+  if (dot > 0) name = name.substring(0, dot);
+  var postfix = canonicalAutoscoreAlgorithm(algorithm);
+  if (sequenceCorrection == 'sleepgpt') postfix = '${postfix}_sleepgpt';
+  return '$dir$sep${name}_${postfix}_scoring.json';
+}
+
+/// Autoscoring algorithms offered in every AutoscoreNidra dialog, all run by
+/// the native `analyse-nidra` engine: (key, label).
+const List<(String, String)> autoscoreAlgorithmOptions = [
+  ('tinysleepnet', 'TinySleepNet'),
+  ('yasa', 'YASA LightGBM'),
+  ('usleep', 'U-Sleep'),
+  ('luna', 'Luna POPS'),
+  ('gssc', 'Greifswald Sleep Stage Classifier (GSSC)'),
+  ('seqsleepnet', 'SeqSleepNet (PhysioEx)'),
+  ('sleeptransformer', 'SleepTransformer (PhysioEx)'),
+  ('dreamento', 'Dreamento (YASA-based)'),
+  ('sleepeegpy', 'SleepEEGpy (YASA-based)'),
+];

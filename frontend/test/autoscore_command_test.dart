@@ -86,4 +86,36 @@ void main() {
       throwsStateError,
     );
   });
+
+  test('maps legacy algorithm ids onto native engine keys', () {
+    expect(canonicalAutoscoreAlgorithm('tinysleepnet_rust'), 'tinysleepnet');
+    expect(canonicalAutoscoreAlgorithm('sleeptansformer'), 'sleeptransformer');
+    expect(canonicalAutoscoreAlgorithm('LUNA'), 'luna');
+    expect(canonicalAutoscoreAlgorithm('sleepeegpy'), 'sleepeegpy');
+  });
+
+  test('builds native stage arguments with all channel groups', () {
+    final args = buildNativeStageArgs(
+      inputPath: '/data/s1.edf',
+      algorithm: 'yasa',
+      sequenceCorrection: 'sleepgpt',
+      sleepgptAlpha: 0.1,
+      sleepgptNgram: 30,
+      eeg: const ['C3', 'C4'],
+      ref: const ['A2', 'A1'],
+      eog: const ['LOC'],
+      emg: const ['Chin'],
+    );
+    expect(args.take(4), ['--stage', '/data/s1.edf', '--algorithm', 'yasa']);
+    expect(args, containsAllInOrder(['--eeg', 'C3,C4', '--ref', 'A2,A1']));
+    expect(args, containsAllInOrder(['--eog', 'LOC', '--emg', 'Chin']));
+    expect(args, containsAllInOrder(['--sequence-correction', 'sleepgpt']));
+  });
+
+  test('every offered algorithm is a canonical native key', () {
+    for (final option in autoscoreAlgorithmOptions) {
+      expect(canonicalAutoscoreAlgorithm(option.$1), option.$1);
+    }
+  });
 }
+

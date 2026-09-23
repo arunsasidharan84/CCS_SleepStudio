@@ -353,13 +353,13 @@ Future<List<String>> extractRecordingChannels(String filePath) async {
       final len = await raf.length();
       if (len < 256) return [];
       final header = await raf.read(256);
-      final countStr = ascii.decode(header.sublist(252, 256)).trim();
+      final countStr = latin1.decode(header.sublist(252, 256)).trim();
       final count = int.tryParse(countStr) ?? 0;
       if (count <= 0) return [];
       final labelBytes = await raf.read(count * 16);
       final labels = <String>[];
       for (var i = 0; i < count; i++) {
-        final raw = ascii.decode(labelBytes.sublist(i * 16, (i + 1) * 16)).trim();
+        final raw = latin1.decode(labelBytes.sublist(i * 16, (i + 1) * 16)).trim();
         if (raw.isNotEmpty &&
             !raw.toLowerCase().contains('status') &&
             !raw.toLowerCase().contains('annotation')) {

@@ -47,6 +47,37 @@ Optional positional outputs after the EDF and scoring JSON are:
 
 Use `-` to skip an earlier output.
 
+## Stimulation artefact removal (preprocessing step `stimartifact`)
+
+Recordings from patients with deep brain stimulators (or other periodic
+neurostimulators) carry a large, strictly periodic waveform: the ~130–185 Hz
+pulses are aliased by the amplifier to a low fundamental (e.g. 2.04, 2.21, 3.00
+or 17.99 Hz) plus harmonics. `src/cleaning/stim_artifact.rs` removes it with an
+adaptive harmonic comb:
+
+1. whole-night median-Welch PSD (0.01 Hz) → strongest narrow line, checked for
+   sub-harmonics and refined from its harmonics;
+2. the fundamental is tracked in 2-min blocks and integrated to a phase;
+3. each harmonic is synchronously demodulated, averaged over ~20 s (movement
+   bursts down-weighted) and subtracted, so only a very narrow band around each
+   harmonic is touched;
+4. the residual spectrum is searched again for further combs (up to 3).
+
+Channels without the comb are left unchanged, and nothing is removed when no
+artefact line is found. Run it first, before filtering and bad-channel detection
+(the artefact otherwise makes RANSAC flag every channel as bad):
+
+```bash
+analyse-nidra --preprocess recording.edf --steps stimartifact,filter,badchannel,interpolate,gedai \
+  [--stim-f0 <hz>] [--stim-win <sec, default 20>] [--stim-max-combs <n, default 3>]
+```
+
+The detected combs, per-channel artefact RMS and first-harmonic prominence
+before/after are written to `stim_artifact` in the `*_log.json`. Parity with the
+reference Python implementation (`dbs_artifact_removal.py`) on a 3.3 h DBS
+recording: removed artefact correlation ≥ 0.998 and difference ≤ 0.5 µV RMS
+across channels.
+
 ## Verification
 
 Implemented and verified:

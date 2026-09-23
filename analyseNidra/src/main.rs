@@ -12,14 +12,15 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const VERSION: &str = "1.17.1";
+const VERSION: &str = "1.18.0";
 
 const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
 [core.json|-] [pac.json|-] [slow-waves.json|-] [spindles.json|-] [regional.csv|-] \
 [--out-dir <path>] [--channels F3,F4,C3,C4,O1,O2] [--references M1,M2] \
 [--lights-off-sec SEC] [--lights-on-sec SEC] [--per-channel] [--region-map <json_or_file>] [--version]\n\
-   or: analyse-nidra --preprocess <recording.edf> [--out-dir <dir>] [--steps <filter,badchannel,interpolate,gedai,save>] \
-[--downsample-hz <hz>] [--bandpass-lo <lo>] [--bandpass-hi <hi>] [--notch-hz <notch>] [--suffix <_clean>]\n\
+   or: analyse-nidra --preprocess <recording.edf> [--out-dir <dir>] [--steps <stimartifact,filter,badchannel,interpolate,gedai,save>] \
+[--downsample-hz <hz>] [--bandpass-lo <lo>] [--bandpass-hi <hi>] [--notch-hz <notch>] [--suffix <_clean>] \
+[--stim-f0 <hz>] [--stim-win <sec>] [--stim-max-combs <n>]\n\
    or: analyse-nidra --stage <recording.edf> [--algorithm <tinysleepnet|yasa|usleep|seqsleepnet|sleeptransformer|gssc>] [--sequence-correction <none|sleepgpt>] \
 [--channel <C4>] [--ref <M1>] [--out <output.json>] [--out-dir <dir>] [--sleepgpt-alpha <0.1>] [--sleepgpt-ngram <30>]\n\
    or: analyse-nidra --apply-sleepgpt <scoring.json> [--out <output.json>] [--alpha <0.1>] [--ngram <30>]";
@@ -278,6 +279,7 @@ fn handle_preprocess_cli(args: impl IntoIterator<Item = OsString>) -> Result<()>
     let mut ransac_thresh = 0.80;
     let mut eeg_channels = None;
     let mut suffix = "_clean".to_string();
+    let mut stim = analyse_nidra::cleaning::stim_artifact::StimArtifactConfig::default();
 
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
@@ -327,6 +329,18 @@ fn handle_preprocess_cli(args: impl IntoIterator<Item = OsString>) -> Result<()>
             if let Some(val) = it.next() {
                 suffix = val.to_string_lossy().to_string();
             }
+        } else if s == "--stim-f0" {
+            if let Some(val) = it.next() {
+                stim.f0_hz = val.to_string_lossy().parse().ok().filter(|v: &f64| *v > 0.0);
+            }
+        } else if s == "--stim-win" {
+            if let Some(val) = it.next() {
+                stim.win_sec = val.to_string_lossy().parse().unwrap_or(20.0);
+            }
+        } else if s == "--stim-max-combs" {
+            if let Some(val) = it.next() {
+                stim.max_families = val.to_string_lossy().parse().unwrap_or(3);
+            }
         } else if !s.starts_with("--") && edf_path.is_none() {
             edf_path = Some(PathBuf::from(arg));
         }
@@ -345,6 +359,7 @@ fn handle_preprocess_cli(args: impl IntoIterator<Item = OsString>) -> Result<()>
     cfg.ransac_corr_thresh = ransac_thresh;
     cfg.eeg_channels = eeg_channels;
     cfg.suffix = suffix;
+    cfg.stim = stim;
 
     analyse_nidra::cleaning::run_preprocessing(&edf_path, &out_dir, &cfg)?;
     Ok(())

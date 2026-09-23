@@ -3,11 +3,13 @@ pub mod gedai;
 pub mod montage;
 pub mod ransac;
 pub mod spline;
+pub mod stim_artifact;
 
 use anyhow::{Context, Result};
 use export::{write_edf_file, write_json_log, PreprocessingLog};
 use gedai::{gedai_denoise, GedaiConfig};
 use ransac::{detect_bad_channels, interpolate_bad_channels, RansacConfig};
+use stim_artifact::{remove_stimulation_artifact, StimArtifactConfig, StimArtifactReport};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -22,6 +24,8 @@ pub struct PreprocessingPipelineConfig {
     pub ransac_corr_thresh: f64,
     pub eeg_channels: Option<Vec<String>>,
     pub suffix: String,
+    /// Settings for the "stimartifact" step (stimulation artefact removal).
+    pub stim: StimArtifactConfig,
 }
 
 impl Default for PreprocessingPipelineConfig {
@@ -40,6 +44,7 @@ impl Default for PreprocessingPipelineConfig {
             ransac_corr_thresh: 0.80,
             eeg_channels: None,
             suffix: "_clean".to_string(),
+            stim: StimArtifactConfig::default(),
         }
     }
 }
@@ -49,6 +54,15 @@ pub struct PreprocessingReport {
     pub output_log: Option<PathBuf>,
     pub bad_channels: Vec<String>,
     pub duration_seconds: f64,
+    pub stim_artifact: Option<StimArtifactReport>,
+}
+
+/// Returns true for any accepted spelling of the stimulation-artefact step name.
+pub fn is_stim_artifact_step(step: &str) -> bool {
+    matches!(
+        step.to_ascii_lowercase().as_str(),
+        "stimartifact" | "stim_artifact" | "stimulation_artifact" | "stimulation_artefact" | "dbs"
+    )
 }
 
 /// Runs the complete native Rust EEG epoch preprocessing pipeline.
@@ -79,8 +93,25 @@ pub fn run_preprocessing(
 
     let mut detected_bads = Vec::new();
     let mut bad_indices = Vec::new();
+    let mut stim_report: Option<StimArtifactReport> = None;
 
     for step in &config.steps {
+        if is_stim_artifact_step(step) {
+            println!(
+                "PROGRESS 0.25 Stimulation artefact removal (adaptive harmonic comb, {} Hz)...",
+                sfreq
+            );
+            let report = remove_stimulation_artifact(&channel_names, &mut signals, sfreq, &config.stim);
+            if !report.cleaned_channels.is_empty() {
+                println!(
+                    "  Removed stimulation artefact from {} channel(s): {:?}",
+                    report.cleaned_channels.len(),
+                    report.cleaned_channels
+                );
+            }
+            stim_report = Some(report);
+            continue;
+        }
         match step.as_str() {
             "downsample" => {
                 if let Some(target_freq) = config.downsample_freq {
@@ -162,6 +193,7 @@ pub fn run_preprocessing(
             original_channels: channel_names,
             bad_channels: detected_bads.clone(),
             duration_seconds: raw_edf.duration_seconds,
+            stim_artifact: stim_report.clone(),
             timestamp: {
                 let secs = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -182,5 +214,6 @@ pub fn run_preprocessing(
         output_log: out_log_path,
         bad_channels: detected_bads,
         duration_seconds: start_time.elapsed().as_secs_f64(),
+        stim_artifact: stim_report,
     })
 }

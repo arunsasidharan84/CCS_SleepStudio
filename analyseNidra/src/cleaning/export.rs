@@ -13,6 +13,9 @@ pub struct PreprocessingLog {
     pub original_channels: Vec<String>,
     pub bad_channels: Vec<String>,
     pub duration_seconds: f64,
+    /// Present when the "stimartifact" step ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stim_artifact: Option<super::stim_artifact::StimArtifactReport>,
     pub timestamp: String,
 }
 

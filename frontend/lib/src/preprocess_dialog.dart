@@ -28,9 +28,11 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
   late TextEditingController _bpHiController;
   late TextEditingController _notchController;
   late TextEditingController _suffixController;
+  late TextEditingController _stimF0Controller;
 
   String _engine = 'rust';
 
+  bool _stepStimArtifact = false;
   bool _stepDownsample = false;
   bool _stepFilter = true;
   bool _stepBadChannel = true;
@@ -54,6 +56,7 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
     _bpHiController = TextEditingController(text: '40.0');
     _notchController = TextEditingController(text: '50.0');
     _suffixController = TextEditingController(text: '_clean');
+    _stimF0Controller = TextEditingController(text: '');
   }
 
   @override
@@ -65,6 +68,7 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
     _bpHiController.dispose();
     _notchController.dispose();
     _suffixController.dispose();
+    _stimF0Controller.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -103,7 +107,17 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
       _outputEdfPath = null;
     });
 
+    final bool isRust = _engine == 'rust';
     final steps = <String>[];
+    // Stimulation artefact removal runs first, on the raw signal, so that filtering and
+    // RANSAC bad-channel detection are not driven by the periodic DBS artefact.
+    if (_stepStimArtifact) {
+      if (isRust) {
+        steps.add('stimartifact');
+      } else {
+        _addLog('WARNING: Stimulation artefact removal is only available with the Native Rust engine — step skipped.');
+      }
+    }
     if (_stepDownsample) steps.add('downsample');
     if (_stepFilter) steps.add('filter');
     if (_stepBadChannel) steps.add('badchannel');
@@ -144,6 +158,11 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
       }
     }
 
+    if (_stepStimArtifact && isRust) {
+      final f0 = double.tryParse(_stimF0Controller.text.trim());
+      if (f0 != null && f0 > 0) rawArgs.addAll(['--stim-f0', f0.toString()]);
+    }
+
     if (_stepFilter) {
       final lo = double.tryParse(_bpLoController.text.trim());
       final hi = double.tryParse(_bpHiController.text.trim());
@@ -153,7 +172,6 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
       if (notch != null) rawArgs.addAll(['--notch-hz', notch.toString()]);
     }
 
-    final bool isRust = _engine == 'rust';
     String executable;
     List<String> commandArgs = [];
 
@@ -289,6 +307,35 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
                     const SizedBox(height: 12),
                     const Text('Pipeline Steps (ccstools / GEDAI):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                     const SizedBox(height: 4),
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Stimulation Artefact Removal (DBS / neurostimulator)', style: TextStyle(fontSize: 12)),
+                      subtitle: Text(
+                        _engine == 'rust'
+                            ? 'Adaptive harmonic comb; auto-detects the aliased stimulation frequency'
+                            : 'Requires the Native Rust engine',
+                        style: const TextStyle(fontSize: 10),
+                      ),
+                      value: _stepStimArtifact,
+                      onChanged: _isProcessing ? null : (v) => setState(() => _stepStimArtifact = v ?? false),
+                    ),
+                    if (_stepStimArtifact)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 32, bottom: 6),
+                        child: TextFormField(
+                          controller: _stimF0Controller,
+                          enabled: !_isProcessing,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'Artefact frequency (Hz)',
+                            hintText: 'blank = auto-detect',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
                     CheckboxListTile(
                       dense: true,
                       contentPadding: EdgeInsets.zero,

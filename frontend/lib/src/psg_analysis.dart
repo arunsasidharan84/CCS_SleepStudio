@@ -14,6 +14,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'eeg_backend.dart';
+import 'psg_report_data.dart';
 
 export 'psg_report_data.dart';
 
@@ -566,10 +567,13 @@ List<String> buildPlmArgs({
 }) {
   final args = <String>['--plm', edfPath];
   if (scoringPath != null) args.addAll(['--scoring', scoringPath]);
-  final left = settings['left']?.toString() ?? '';
-  final right = settings['right']?.toString() ?? '';
-  args.addAll(['--left', left.isEmpty ? 'none' : left]);
-  args.addAll(['--right', right.isEmpty ? 'none' : right]);
+  // A key that is present but empty switches that leg off; an absent key
+  // lets the engine pick the channel automatically.
+  for (final side in ['left', 'right']) {
+    if (!settings.containsKey(side)) continue;
+    final v = settings[side]?.toString() ?? '';
+    args.addAll(['--$side', v.isEmpty ? 'none' : v]);
+  }
   args.addAll(['--standard', settings['standard']?.toString() ?? 'aasm']);
   args.addAll(['--onset-uv', '${settings['onset'] ?? 8.0}']);
   args.addAll(['--offset-uv', '${settings['offset'] ?? 2.0}']);
@@ -750,4 +754,310 @@ Future<void> showPsgSummaryDialog(
       ],
     ),
   );
+}
+
+// ─── CAP dialog ─────────────────────────────────────────────────────────────
+
+class CapAnalysisDialog extends StatefulWidget {
+  const CapAnalysisDialog({
+    super.key,
+    required this.signals,
+    required this.hasHypnogram,
+    required this.hasManualAPhases,
+    required this.hasRespiratoryReport,
+    required this.hasPlmReport,
+  });
+
+  final List<PsgSignal> signals;
+  final bool hasHypnogram;
+  final bool hasManualAPhases;
+  final bool hasRespiratoryReport;
+  final bool hasPlmReport;
+
+  @override
+  State<CapAnalysisDialog> createState() => _CapAnalysisDialogState();
+}
+
+class _CapAnalysisDialogState extends State<CapAnalysisDialog> {
+  String? _eeg;
+  String _sensitivity = 'standard';
+  late String _source = widget.hasManualAPhases ? 'prefer-manual' : 'auto';
+  bool _showAPhases = true;
+  bool _showSequences = true;
+  bool _showIsolated = false;
+  late bool _useResp = widget.hasRespiratoryReport;
+  late bool _usePlm = widget.hasPlmReport;
+
+  @override
+  void initState() {
+    super.initState();
+    final central = widget.signals.where((s) => s.role == 'eeg_central').toList();
+    String? prefer(String root) {
+      for (final s in central) {
+        if (s.label.toUpperCase().replaceAll('EEG', '').trim().startsWith(root)) return s.label;
+      }
+      return null;
+    }
+
+    _eeg = prefer('C4') ??
+        prefer('C3') ??
+        (central.isNotEmpty ? central.first.label : null) ??
+        _firstWithRole(widget.signals, 'eeg');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Cyclic Alternating Pattern (CAP) Analysis'),
+      content: SizedBox(
+        width: 580,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                widget.hasHypnogram
+                    ? 'CAP is scored in NREM sleep (Terzano et al. 2001 rules) using the current hypnogram.'
+                    : 'A hypnogram is required: score or autoscore the recording first.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: widget.hasHypnogram ? Colors.black54 : Colors.red,
+                ),
+              ),
+              _sectionTitle('EEG derivation'),
+              _ChannelDropdown(
+                label: 'EEG channel (C4-A1 / C3-A2 recommended)',
+                helper: 'Unreferenced C3/C4 are referenced to the contralateral mastoid automatically',
+                signals: widget.signals,
+                value: _eeg,
+                onChanged: (v) => setState(() => _eeg = v),
+              ),
+              _sectionTitle('A-phase detection'),
+              DropdownButtonFormField<String>(
+                value: _source,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'A-phase source',
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  if (widget.hasManualAPhases)
+                    const DropdownMenuItem(
+                      value: 'prefer-manual',
+                      child: Text('Use my A1/A2/A3 markers'),
+                    ),
+                  const DropdownMenuItem(
+                    value: 'auto',
+                    child: Text('Automatic detection'),
+                  ),
+                ],
+                onChanged: (v) => setState(() => _source = v ?? 'auto'),
+              ),
+              if (_source == 'auto') ...[
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: _sensitivity,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Detector sensitivity',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'conservative', child: Text('Conservative (fewer, clearer A-phases)')),
+                    DropdownMenuItem(value: 'standard', child: Text('Standard (calibrated to normative values)')),
+                    DropdownMenuItem(value: 'sensitive', child: Text('Sensitive (more A-phases)')),
+                  ],
+                  onChanged: (v) => setState(() => _sensitivity = v ?? 'standard'),
+                ),
+              ],
+              _sectionTitle('Coupling with other events'),
+              CheckboxListTile(
+                dense: true,
+                value: _useResp,
+                onChanged: widget.hasRespiratoryReport ? (v) => setState(() => _useResp = v ?? false) : null,
+                title: const Text('Relate A-phases to respiratory events'),
+                subtitle: widget.hasRespiratoryReport ? null : const Text('Run Respiratory / OSA analysis first to enable'),
+              ),
+              CheckboxListTile(
+                dense: true,
+                value: _usePlm,
+                onChanged: widget.hasPlmReport ? (v) => setState(() => _usePlm = v ?? false) : null,
+                title: const Text('Relate A-phases to leg movements'),
+                subtitle: widget.hasPlmReport ? null : const Text('Run PLM analysis first to enable'),
+              ),
+              _sectionTitle('Show on waveform and hypnogram'),
+              CheckboxListTile(
+                dense: true,
+                value: _showAPhases,
+                onChanged: (v) => setState(() => _showAPhases = v ?? true),
+                title: const Text('A-phases (A1 / A2 / A3)'),
+              ),
+              if (_showAPhases)
+                CheckboxListTile(
+                  dense: true,
+                  value: _showIsolated,
+                  onChanged: (v) => setState(() => _showIsolated = v ?? false),
+                  title: const Text('Also show isolated A-phases (outside CAP sequences)'),
+                ),
+              CheckboxListTile(
+                dense: true,
+                value: _showSequences,
+                onChanged: (v) => setState(() => _showSequences = v ?? true),
+                title: const Text('CAP sequences'),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.waves),
+          label: const Text('Analyse'),
+          onPressed: widget.hasHypnogram && _eeg != null
+              ? () => Navigator.of(context).pop(<String, dynamic>{
+                  'eeg': _eeg,
+                  'sensitivity': _sensitivity,
+                  'source': _source,
+                  'useRespiratory': _useResp,
+                  'usePlm': _usePlm,
+                  'showAPhases': _showAPhases,
+                  'showIsolated': _showIsolated,
+                  'showSequences': _showSequences,
+                })
+              : null,
+        ),
+      ],
+    );
+  }
+}
+
+List<String> buildCapArgs({
+  required String edfPath,
+  required Map<String, dynamic> settings,
+  String? scoringPath,
+  String? respiratoryJson,
+  String? plmJson,
+  double? lightsOffSeconds,
+  double? lightsOnSeconds,
+  String? outPath,
+}) {
+  final args = <String>['--cap', edfPath];
+  if (scoringPath != null) args.addAll(['--scoring', scoringPath]);
+  final eeg = settings['eeg']?.toString() ?? '';
+  if (eeg.isNotEmpty) args.addAll(['--eeg', eeg]);
+  args.addAll(['--sensitivity', settings['sensitivity']?.toString() ?? 'standard']);
+  args.addAll(['--a-phases', settings['source']?.toString() ?? 'prefer-manual']);
+  args.addAll([
+    '--respiratory-json',
+    settings['useRespiratory'] != false && respiratoryJson != null ? respiratoryJson : 'none',
+  ]);
+  args.addAll([
+    '--plm-json',
+    settings['usePlm'] != false && plmJson != null ? plmJson : 'none',
+  ]);
+  if (lightsOffSeconds != null) {
+    args.addAll(['--lights-off-sec', lightsOffSeconds.toString()]);
+  }
+  if (lightsOnSeconds != null) {
+    args.addAll(['--lights-on-sec', lightsOnSeconds.toString()]);
+  }
+  if (outPath != null) args.addAll(['--out', outPath]);
+  return args;
+}
+
+// ─── Show / remove analysis markers ─────────────────────────────────────────
+
+/// Marker groups the user can show or remove on the waveform and hypnogram.
+enum PsgMarkerGroup {
+  respiratory('Respiratory events (apneas, hypopneas, RERAs)'),
+  desaturations('Oxygen desaturations'),
+  limbMovements('Leg movements / PLMs'),
+  capAPhases('CAP A-phases (A1 / A2 / A3)'),
+  capSequences('CAP sequences');
+
+  const PsgMarkerGroup(this.label);
+  final String label;
+
+  bool matches(int digit) => switch (this) {
+    PsgMarkerGroup.respiratory =>
+      isRespiratoryEventDigit(digit) && digit != kDigitDesaturation,
+    PsgMarkerGroup.desaturations => digit == kDigitDesaturation,
+    PsgMarkerGroup.limbMovements => isLimbMovementDigit(digit),
+    PsgMarkerGroup.capAPhases => isCapAPhaseDigit(digit),
+    PsgMarkerGroup.capSequences => isCapSequenceDigit(digit),
+  };
+}
+
+/// Lets the user choose which analysis marker groups are displayed. Returns
+/// the groups to show (null when cancelled).
+class PsgMarkerManagerDialog extends StatefulWidget {
+  const PsgMarkerManagerDialog({
+    super.key,
+    required this.shown,
+    required this.available,
+  });
+
+  /// groups currently present on the plots
+  final Set<PsgMarkerGroup> shown;
+
+  /// groups for which saved results exist (can be (re)loaded)
+  final Set<PsgMarkerGroup> available;
+
+  @override
+  State<PsgMarkerManagerDialog> createState() => _PsgMarkerManagerDialogState();
+}
+
+class _PsgMarkerManagerDialogState extends State<PsgMarkerManagerDialog> {
+  late final Set<PsgMarkerGroup> _selected = {...widget.shown};
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Show / Remove Analysis Markers'),
+      content: SizedBox(
+        width: 480,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Ticked groups are drawn on the waveform and hypnogram; unticked groups are removed. '
+              'Saved results can be shown again at any time.',
+              style: TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+            const SizedBox(height: 8),
+            for (final g in PsgMarkerGroup.values)
+              CheckboxListTile(
+                dense: true,
+                value: _selected.contains(g),
+                onChanged: widget.available.contains(g) || widget.shown.contains(g)
+                    ? (v) => setState(() => v == true ? _selected.add(g) : _selected.remove(g))
+                    : null,
+                title: Text(g.label),
+                subtitle: widget.available.contains(g) || widget.shown.contains(g)
+                    ? null
+                    : const Text('Not analysed yet'),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.of(context).pop(_selected),
+          child: const Text('Apply'),
+        ),
+      ],
+    );
+  }
 }

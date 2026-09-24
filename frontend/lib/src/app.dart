@@ -124,6 +124,29 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   bool _batchAnalyseAutoLoadScorings = true;
   final TextEditingController _batchAnalyseWildcardController =
       TextEditingController(text: '*.edf');
+
+  // Batch PSG (OSA / PLM / CAP) State
+  final List<Map<String, String>> _batchPsgPairs = [];
+  bool _batchPsgRecursive = true;
+  bool _batchPsgUseWildcard = false;
+  bool _batchPsgAutoLoadScorings = true;
+  bool _batchPsgRespiratory = true;
+  bool _batchPsgPlm = true;
+  bool _batchPsgCap = true;
+  int _batchPsgHypopneaRule = 3;
+  String _batchPsgPlmStandard = 'aasm';
+  String _batchPsgCapSensitivity = 'standard';
+  final TextEditingController _batchPsgWildcardController =
+      TextEditingController(text: '*.edf');
+  final TextEditingController _batchPsgPostfixController =
+      TextEditingController(text: '_scoring');
+  final TextEditingController _batchPsgPressureController = TextEditingController();
+  final TextEditingController _batchPsgThermalController = TextEditingController();
+  final TextEditingController _batchPsgSpo2Controller = TextEditingController();
+  final TextEditingController _batchPsgLeftLegController = TextEditingController();
+  final TextEditingController _batchPsgRightLegController = TextEditingController();
+  final TextEditingController _batchPsgCapEegController = TextEditingController();
+  final TextEditingController _batchPsgOutDirController = TextEditingController();
   Map<String, String> _batchAnalyseCustomRegionMap = {};
 
   // Video Sync State
@@ -180,6 +203,19 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     _batchScoringPostfixController.dispose();
     _batchStagingWildcardController.dispose();
     _batchAnalyseWildcardController.dispose();
+    for (final c in [
+      _batchPsgWildcardController,
+      _batchPsgPostfixController,
+      _batchPsgPressureController,
+      _batchPsgThermalController,
+      _batchPsgSpo2Controller,
+      _batchPsgLeftLegController,
+      _batchPsgRightLegController,
+      _batchPsgCapEegController,
+      _batchPsgOutDirController,
+    ]) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -3771,6 +3807,178 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     }
   }
 
+  static final RegExp _manualAPhaseLabel = RegExp(
+    r'^(m?cap[\s_-]*)?a[123]\b',
+    caseSensitive: false,
+  );
+
+  Future<void> _runCapAnalysis() async {
+    final v = _viewport;
+    final path = _activePath;
+    if (v == null || path == null) {
+      _setStatus('Load a PSG recording first');
+      return;
+    }
+    if (!isAnalyseNidraAvailable()) {
+      _showTextDialog(
+        'CAP analysis unavailable',
+        'The native analyse-nidra engine was not found beside the application.',
+      );
+      return;
+    }
+    final executable = detectAnalyseNidraExecutable();
+    Directory? tempDir;
+    try {
+      _setStatus('Reading PSG channels…');
+      final (edf, tmp) = await _nativeEdfFor(path);
+      tempDir = tmp;
+      final signals = await listPsgSignals(executable, edf);
+      if (!mounted) return;
+      final respPath = respiratoryReportPath(path);
+      final plmPath = plmReportPath(path);
+      final hasResp = File(respPath).existsSync();
+      final hasPlm = File(plmPath).existsSync();
+      final manualCount = v.scoredEvents
+          .where(
+            (e) =>
+                !isCapDigit(e.digit) &&
+                !e.label.toUpperCase().startsWith('CAP A') &&
+                _manualAPhaseLabel.hasMatch(e.label.trim()),
+          )
+          .length;
+      final settings = await showDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (_) => CapAnalysisDialog(
+          signals: signals,
+          hasHypnogram: v.stages.any((s) => s.isScored),
+          hasManualAPhases: manualCount >= 10,
+          hasRespiratoryReport: hasResp,
+          hasPlmReport: hasPlm,
+        ),
+      );
+      if (settings == null || !mounted) {
+        _setStatus('CAP analysis cancelled');
+        return;
+      }
+      final scoringPath = await _saveScoringForPsg(path, v);
+      final outPath = capReportPath(path);
+      final args = buildCapArgs(
+        edfPath: edf,
+        settings: settings,
+        scoringPath: scoringPath,
+        respiratoryJson: hasResp ? respPath : null,
+        plmJson: hasPlm ? plmPath : null,
+        lightsOffSeconds: _config.lightsOffSeconds,
+        lightsOnSeconds: _config.lightsOnSeconds,
+        outPath: outPath,
+      );
+      if (!mounted) return;
+      final (exitCode, logs) = await runAnalyseNidraWithProgress(
+        context: context,
+        title: 'Cyclic Alternating Pattern Analysis',
+        executable: executable,
+        arguments: args,
+      );
+      final report = exitCode == 0 ? await loadPsgReport(outPath) : null;
+      if (report == null) {
+        _setStatus('CAP analysis failed');
+        _showTextDialog(
+          'CAP analysis failed',
+          'analyse-nidra returned exit code $exitCode.\n\n${logs.join('\n')}',
+        );
+        return;
+      }
+      final events = capEventsFromReport(
+        report,
+        aPhases: settings['showAPhases'] != false,
+        sequences: settings['showSequences'] != false,
+        includeIsolated: settings['showIsolated'] == true,
+      );
+      final rate = (report['summary'] as Map?)?['CAP_rate'];
+      _replacePsgEvents(
+        isCapDigit,
+        events,
+        'CAP analysis: CAP rate ${rate is num ? rate.toStringAsFixed(1) : '—'}%, '
+        '${events.length} markers added',
+      );
+      if (!mounted) return;
+      await showPsgSummaryDialog(
+        context,
+        title: 'CAP Analysis — ${_basename(path)}',
+        sections: capSummarySections(report),
+        warnings: [
+          for (final w in (report['warnings'] as List? ?? const [])) w.toString(),
+        ],
+        reportPath: outPath,
+      );
+    } catch (e) {
+      _setStatus('CAP analysis failed: $e');
+      if (mounted) _showTextDialog('CAP analysis failed', '$e');
+    } finally {
+      if (tempDir != null) {
+        try {
+          await tempDir.delete(recursive: true);
+        } catch (_) {}
+      }
+    }
+  }
+
+  /// Show or remove respiratory, limb-movement and CAP markers on the
+  /// waveform and hypnogram; removed groups can be restored from the saved
+  /// analysis results (also those produced by batch analysis).
+  Future<void> _managePsgMarkers() async {
+    final v = _viewport;
+    final path = _activePath;
+    if (v == null || path == null) {
+      _setStatus('Load a PSG recording first');
+      return;
+    }
+    final resp = await loadPsgReport(respiratoryReportPath(path));
+    final plm = await loadPsgReport(plmReportPath(path));
+    final cap = await loadPsgReport(capReportPath(path));
+    final shown = {
+      for (final g in PsgMarkerGroup.values)
+        if (v.scoredEvents.any((e) => g.matches(e.digit))) g,
+    };
+    final available = {
+      if (resp != null) ...[PsgMarkerGroup.respiratory, PsgMarkerGroup.desaturations],
+      if (plm != null) PsgMarkerGroup.limbMovements,
+      if (cap != null) ...[PsgMarkerGroup.capAPhases, PsgMarkerGroup.capSequences],
+    };
+    if (!mounted) return;
+    final selected = await showDialog<Set<PsgMarkerGroup>>(
+      context: context,
+      builder: (_) => PsgMarkerManagerDialog(shown: shown, available: available),
+    );
+    if (selected == null) return;
+    final fresh = <ScoredEvent>[];
+    final replace = <PsgMarkerGroup>{};
+    for (final g in PsgMarkerGroup.values) {
+      final want = selected.contains(g);
+      final has = shown.contains(g);
+      if (want == has) continue;
+      replace.add(g);
+      if (!want) continue;
+      final List<ScoredEvent> source = switch (g) {
+        PsgMarkerGroup.respiratory || PsgMarkerGroup.desaturations =>
+          resp == null ? const <ScoredEvent>[] : respiratoryEventsFromReport(resp),
+        PsgMarkerGroup.limbMovements =>
+          plm == null ? const <ScoredEvent>[] : plmEventsFromReport(plm),
+        PsgMarkerGroup.capAPhases =>
+          cap == null ? const <ScoredEvent>[] : capEventsFromReport(cap, sequences: false),
+        PsgMarkerGroup.capSequences =>
+          cap == null ? const <ScoredEvent>[] : capEventsFromReport(cap, aPhases: false),
+      };
+      fresh.addAll(source.where((e) => g.matches(e.digit)));
+    }
+    if (replace.isEmpty) return;
+    _replacePsgEvents(
+      (digit) => replace.any((g) => g.matches(digit)),
+      fresh,
+      'Analysis markers updated',
+    );
+  }
+
   String _getStageLatency(EegViewport v, SleepStage target) {
     for (var i = 0; i < v.stages.length; i++) {
       if (v.stages[i] == target) {
@@ -3804,6 +4012,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   Future<List<bool>?> _showPageSelectionDialog({
     bool? hasRespiratory,
     bool? hasPlm,
+    bool? hasCap,
   }) async {
     final List<String> pageNames = [
       'Page 1: Macrostructure & Sleep Architecture',
@@ -3817,6 +4026,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       hasPlm == null
           ? 'Periodic Limb Movements (when analysed)'
           : 'Periodic Limb Movements',
+      hasCap == null
+          ? 'Cyclic Alternating Pattern (when analysed)'
+          : 'Cyclic Alternating Pattern',
     ];
     final List<bool> selected = [
       true,
@@ -3826,6 +4038,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       true,
       hasRespiratory ?? true,
       hasPlm ?? true,
+      hasCap ?? true,
     ];
     final List<bool> enabled = [
       true,
@@ -3835,6 +4048,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       true,
       hasRespiratory ?? true,
       hasPlm ?? true,
+      hasCap ?? true,
     ];
 
     return showDialog<List<bool>>(
@@ -3896,9 +4110,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         ? null
         : respiratoryReportPath(activeForReport);
     final plmPath = activeForReport == null ? null : plmReportPath(activeForReport);
+    final capPath = activeForReport == null ? null : capReportPath(activeForReport);
     final selectedPages = await _showPageSelectionDialog(
       hasRespiratory: respiratoryPath != null && File(respiratoryPath).existsSync(),
       hasPlm: plmPath != null && File(plmPath).existsSync(),
+      hasCap: capPath != null && File(capPath).existsSync(),
     );
     if (selectedPages == null) {
       _setStatus('Report export cancelled');
@@ -3935,6 +4151,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final plmReport = selectedPages[6] && plmPath != null
         ? await loadPsgReport(plmPath)
         : null;
+    final capReport = selectedPages.length > 7 && selectedPages[7] && capPath != null
+        ? await loadPsgReport(capPath)
+        : null;
     final bytes = buildPublicationSleepReport(
       viewport: viewport,
       recordingName: _basename(_activePath ?? viewport.sourceDescription),
@@ -3942,6 +4161,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       includePages: selectedPages.sublist(0, 5),
       respiratoryReport: respiratoryReport,
       plmReport: plmReport,
+      capReport: capReport,
       metadata: ReportMetadata(
         title: _config.reportTitle,
         studySite: _config.studySite,
@@ -5406,6 +5626,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             onSelected: _runPlmAnalysis,
           ),
           PlatformMenuItem(
+            label: 'Cyclic Alternating Pattern (CAP) Analysis…',
+            onSelected: _runCapAnalysis,
+          ),
+          PlatformMenuItem(
+            label: 'Show / Remove OSA, PLM & CAP Markers…',
+            onSelected: _managePsgMarkers,
+          ),
+          PlatformMenuItem(
             label: 'Find similar epochs from current epoch…',
             onSelected: _showSimilarEpochDialog,
           ),
@@ -5750,6 +5978,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 child: const Text('Periodic Limb Movement (PLMS) Analysis…'),
               ),
               MenuItemButton(
+                onPressed: _runCapAnalysis,
+                child: const Text('Cyclic Alternating Pattern (CAP) Analysis…'),
+              ),
+              MenuItemButton(
+                onPressed: _managePsgMarkers,
+                child: const Text('Show / Remove OSA, PLM & CAP Markers…'),
+              ),
+              MenuItemButton(
                 onPressed: _showSimilarEpochDialog,
                 child: const Text('Find similar epochs from current epoch…'),
               ),
@@ -5871,6 +6107,364 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             child: const Text('Help'),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _batchPsgField(TextEditingController c, String label, String title) {
+    final first = _batchPsgPairs.isEmpty ? null : _batchPsgPairs.first['eegPath'];
+    return SizedBox(
+      width: 250,
+      child: TextField(
+        controller: c,
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: 'blank = auto-detect',
+          isDense: true,
+          border: const OutlineInputBorder(),
+          suffixIcon: _batchChannelPickerButton(c, first, title),
+        ),
+      ),
+    );
+  }
+
+  void _addBatchPsgRecordings(List<String> files) {
+    if (files.isEmpty) return;
+    final postfix = _batchPsgPostfixController.text.trim();
+    setState(() {
+      for (final f in files) {
+        if (_batchPsgPairs.any((p) => p['eegPath'] == f)) continue;
+        _batchPsgPairs.add({
+          'eegPath': f,
+          'scoringPath': _batchPsgAutoLoadScorings ? _findScoringForRecording(f, postfix) : '',
+        });
+      }
+    });
+  }
+
+  Widget _buildBatchPsgCard() {
+    final anyAnalysis = _batchPsgRespiratory || _batchPsgPlm || _batchPsgCap;
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: const BorderSide(color: Color(0xFFD0D0D0)),
+      ),
+      color: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.monitor_heart, color: Colors.teal),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'PSG Batch Analysis — Respiratory (OSA), PLM and CAP',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            const Divider(height: 24),
+            const Text(
+              'Recordings and their scoring files (a hypnogram is needed for AHI/PLMS indices and for CAP):',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              height: 140,
+              decoration: BoxDecoration(
+                border: Border.all(color: const Color(0xFFD0D0D0)),
+                borderRadius: BorderRadius.circular(4),
+                color: const Color(0xFFF9F9F9),
+              ),
+              child: _batchPsgPairs.isEmpty
+                  ? const Center(child: Text('No recordings selected'))
+                  : ListView.builder(
+                      itemCount: _batchPsgPairs.length,
+                      itemBuilder: (context, index) {
+                        final pair = _batchPsgPairs[index];
+                        final scoring = pair['scoringPath'] ?? '';
+                        return ListTile(
+                          dense: true,
+                          title: Text(_basename(pair['eegPath'] ?? '')),
+                          subtitle: Text(
+                            scoring.isEmpty
+                                ? 'Scoring: not found — click the pencil to choose'
+                                : 'Scoring: ${_basename(scoring)}',
+                            style: scoring.isEmpty ? const TextStyle(color: Colors.deepOrange) : null,
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.edit, size: 16, color: Colors.grey),
+                                tooltip: 'Select scoring file',
+                                onPressed: () async {
+                                  final result = await FilePicker.pickFiles(
+                                    dialogTitle: 'Select scoring JSON file',
+                                    type: FileType.custom,
+                                    allowedExtensions: ['json'],
+                                  );
+                                  final picked = result?.files.single.path;
+                                  if (picked != null) {
+                                    setState(() => pair['scoringPath'] = picked);
+                                  }
+                                },
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete, size: 16, color: Colors.red),
+                                onPressed: () => setState(() => _batchPsgPairs.removeAt(index)),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            const SizedBox(height: 8),
+            _batchSourceControls(
+              onAddFiles: () async {
+                final files = await _collectBatchRecordings(
+                  fromFolder: false,
+                  extensions: _batchAutoscoreExtensions,
+                  recursive: _batchPsgRecursive,
+                  useWildcard: _batchPsgUseWildcard,
+                  pattern: _batchPsgWildcardController.text,
+                  title: 'Select PSG recordings',
+                );
+                if (mounted) _addBatchPsgRecordings(files);
+              },
+              onAddFolder: () async {
+                final files = await _collectBatchRecordings(
+                  fromFolder: true,
+                  extensions: _batchAutoscoreExtensions,
+                  recursive: _batchPsgRecursive,
+                  useWildcard: _batchPsgUseWildcard,
+                  pattern: _batchPsgWildcardController.text,
+                  title: 'Select a folder of PSG recordings',
+                );
+                if (mounted) _addBatchPsgRecordings(files);
+              },
+              hasItems: _batchPsgPairs.isNotEmpty,
+              onSelectDeselect: () async {
+                final selected = await showBatchFileSubSelectionDialog(
+                  context: context,
+                  title: 'PSG Batch File Selection',
+                  files: [for (final p in _batchPsgPairs) p['eegPath'] ?? ''],
+                );
+                if (selected != null && mounted) {
+                  final keep = selected.toSet();
+                  setState(() => _batchPsgPairs.removeWhere((p) => !keep.contains(p['eegPath'])));
+                }
+              },
+              onClear: () => setState(_batchPsgPairs.clear),
+              recursive: _batchPsgRecursive,
+              onRecursive: (v) => setState(() => _batchPsgRecursive = v),
+              useWildcard: _batchPsgUseWildcard,
+              onWildcard: (v) => setState(() => _batchPsgUseWildcard = v),
+              wildcardController: _batchPsgWildcardController,
+              extraOptions: [
+                _batchOptionCheckbox('Auto-load scorings', _batchPsgAutoLoadScorings, (v) {
+                  setState(() => _batchPsgAutoLoadScorings = v);
+                  if (v) {
+                    final postfix = _batchPsgPostfixController.text.trim();
+                    setState(() {
+                      for (final pair in _batchPsgPairs) {
+                        if ((pair['scoringPath'] ?? '').isEmpty) {
+                          pair['scoringPath'] = _findScoringForRecording(pair['eegPath'] ?? '', postfix);
+                        }
+                      }
+                    });
+                  }
+                }),
+                if (_batchPsgAutoLoadScorings)
+                  SizedBox(
+                    width: 170,
+                    child: TextField(
+                      controller: _batchPsgPostfixController,
+                      decoration: const InputDecoration(
+                        labelText: 'Scoring postfix',
+                        hintText: 'e.g. _scoring',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Text('Analyses', style: TextStyle(fontWeight: FontWeight.bold)),
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                _batchOptionCheckbox('Respiratory / OSA (AASM)', _batchPsgRespiratory,
+                    (v) => setState(() => _batchPsgRespiratory = v)),
+                SizedBox(
+                  width: 190,
+                  child: DropdownButtonFormField<int>(
+                    value: _batchPsgHypopneaRule,
+                    isExpanded: true,
+                    isDense: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Hypopnea rule',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 3, child: Text('1A (3%/arousal)')),
+                      DropdownMenuItem(value: 4, child: Text('1B (4%)')),
+                    ],
+                    onChanged: (v) => setState(() => _batchPsgHypopneaRule = v ?? 3),
+                  ),
+                ),
+                _batchOptionCheckbox('Periodic limb movements', _batchPsgPlm,
+                    (v) => setState(() => _batchPsgPlm = v)),
+                SizedBox(
+                  width: 170,
+                  child: DropdownButtonFormField<String>(
+                    value: _batchPsgPlmStandard,
+                    isExpanded: true,
+                    isDense: true,
+                    decoration: const InputDecoration(
+                      labelText: 'PLM standard',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'aasm', child: Text('AASM v3')),
+                      DropdownMenuItem(value: 'wasm', child: Text('WASM 2016')),
+                    ],
+                    onChanged: (v) => setState(() => _batchPsgPlmStandard = v ?? 'aasm'),
+                  ),
+                ),
+                _batchOptionCheckbox('Cyclic alternating pattern', _batchPsgCap,
+                    (v) => setState(() => _batchPsgCap = v)),
+                SizedBox(
+                  width: 190,
+                  child: DropdownButtonFormField<String>(
+                    value: _batchPsgCapSensitivity,
+                    isExpanded: true,
+                    isDense: true,
+                    decoration: const InputDecoration(
+                      labelText: 'CAP detector',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'conservative', child: Text('Conservative')),
+                      DropdownMenuItem(value: 'standard', child: Text('Standard')),
+                      DropdownMenuItem(value: 'sensitive', child: Text('Sensitive')),
+                    ],
+                    onChanged: (v) => setState(() => _batchPsgCapSensitivity = v ?? 'standard'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              _batchPsgPairs.isEmpty
+                  ? 'Channels (optional — detected automatically in each recording)'
+                  : 'Channels (optional — lists come from the first recording: ${_basename(_batchPsgPairs.first['eegPath'] ?? '')})',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _batchPsgField(_batchPsgPressureController, 'Nasal pressure', 'Select nasal pressure channel'),
+                _batchPsgField(_batchPsgThermalController, 'Oronasal thermal', 'Select thermal airflow channel'),
+                _batchPsgField(_batchPsgSpo2Controller, 'SpO₂', 'Select SpO2 channel'),
+                _batchPsgField(_batchPsgLeftLegController, 'Left leg EMG', 'Select left tibialis channel'),
+                _batchPsgField(_batchPsgRightLegController, 'Right leg EMG', 'Select right tibialis channel'),
+                _batchPsgField(_batchPsgCapEegController, 'CAP EEG', 'Select EEG channel for CAP'),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: _batchPsgOutDirController,
+                    decoration: const InputDecoration(
+                      labelText: 'Folder for the batch summary CSV and logs (optional — default: first recording\'s folder)',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  icon: const Icon(Icons.folder_open),
+                  tooltip: 'Select folder',
+                  onPressed: () async {
+                    final dir = await FilePicker.getDirectoryPath(dialogTitle: 'Folder for the PSG batch summary');
+                    if (dir != null) setState(() => _batchPsgOutDirController.text = dir);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Per-recording results are saved beside each recording (…_respiratory.json, …_plm.json, …_cap.json) so they appear as markers '
+              '(Utilities → Show / Remove OSA, PLM & CAP Markers) and in the PDF report.',
+              style: TextStyle(fontSize: 11, color: Colors.black54),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              height: 40,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: _batchPsgPairs.isEmpty || !anyAnalysis ? null : _runBatchPsg,
+                child: const Text('Run PSG Batch Analysis', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _runBatchPsg() {
+    if (!isAnalyseNidraAvailable()) {
+      _showTextDialog(
+        'PSG batch analysis unavailable',
+        'The native analyse-nidra engine was not found beside the application.',
+      );
+      return;
+    }
+    String? opt(TextEditingController c) => c.text.trim().isEmpty ? null : c.text.trim();
+    final settings = _BatchPsgSettings(
+      respiratory: _batchPsgRespiratory,
+      plm: _batchPsgPlm,
+      cap: _batchPsgCap,
+      hypopneaRule: _batchPsgHypopneaRule,
+      plmStandard: _batchPsgPlmStandard,
+      capSensitivity: _batchPsgCapSensitivity,
+      pressure: opt(_batchPsgPressureController),
+      thermal: opt(_batchPsgThermalController),
+      spo2: opt(_batchPsgSpo2Controller),
+      leftLeg: opt(_batchPsgLeftLegController),
+      rightLeg: opt(_batchPsgRightLegController),
+      capEeg: opt(_batchPsgCapEegController),
+      outputDir: opt(_batchPsgOutDirController),
+    );
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _BatchPsgDialog(
+        jobs: [for (final p in _batchPsgPairs) Map<String, String>.from(p)],
+        settings: settings,
       ),
     );
   }
@@ -6731,6 +7325,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 ),
               ],
             ),
+            const SizedBox(height: 16),
+            _buildBatchPsgCard(),
             const SizedBox(height: 16),
             Card(
               elevation: 0,
@@ -10007,6 +10603,9 @@ class _BatchPdfProgressDialogState extends State<_BatchPdfProgressDialog> {
         final plmReport = pages.length > 6 && pages[6]
             ? await loadPsgReport(plmReportPath(edfPath))
             : null;
+        final capReport = pages.length > 7 && pages[7]
+            ? await loadPsgReport(capReportPath(edfPath))
+            : null;
         final bytes = buildPublicationSleepReport(
           viewport: fullViewport,
           recordingName: _basename(edfPath),
@@ -10014,6 +10613,7 @@ class _BatchPdfProgressDialogState extends State<_BatchPdfProgressDialog> {
           includePages: pages.length > 5 ? pages.sublist(0, 5) : pages,
           respiratoryReport: respiratoryReport,
           plmReport: plmReport,
+          capReport: capReport,
           metadata: ReportMetadata(
             title: activeConfig.reportTitle,
             studySite: activeConfig.studySite,
@@ -12318,5 +12918,388 @@ class SimplePdfDoc {
       'trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n$xrefOffset\n%%EOF\n',
     );
     return buffer.toString().codeUnits;
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PSG batch analysis (respiratory / PLM / CAP)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _BatchPsgSettings {
+  const _BatchPsgSettings({
+    required this.respiratory,
+    required this.plm,
+    required this.cap,
+    required this.hypopneaRule,
+    required this.plmStandard,
+    required this.capSensitivity,
+    this.pressure,
+    this.thermal,
+    this.spo2,
+    this.leftLeg,
+    this.rightLeg,
+    this.capEeg,
+    this.outputDir,
+  });
+
+  final bool respiratory;
+  final bool plm;
+  final bool cap;
+  final int hypopneaRule;
+  final String plmStandard;
+  final String capSensitivity;
+  final String? pressure;
+  final String? thermal;
+  final String? spo2;
+  final String? leftLeg;
+  final String? rightLeg;
+  final String? capEeg;
+  final String? outputDir;
+}
+
+/// Summary columns written to the batch CSV: (analysis, JSON section, key).
+const List<(String, String, String)> _kBatchPsgColumns = [
+  ('respiratory', 'summary', 'TST_min'),
+  ('respiratory', 'summary', 'AHI'),
+  ('respiratory', 'flags', 'severity'),
+  ('respiratory', 'summary', 'AHI_3a'),
+  ('respiratory', 'summary', 'AHI_4'),
+  ('respiratory', 'summary', 'OAI'),
+  ('respiratory', 'summary', 'CAI'),
+  ('respiratory', 'summary', 'MAI'),
+  ('respiratory', 'summary', 'HI'),
+  ('respiratory', 'summary', 'RDI'),
+  ('respiratory', 'summary', 'AHI_REM'),
+  ('respiratory', 'summary', 'AHI_NREM'),
+  ('respiratory', 'summary', 'AHI_supine'),
+  ('respiratory', 'summary', 'AHI_nonsupine'),
+  ('respiratory', 'summary', 'ODI3'),
+  ('respiratory', 'summary', 'ODI4'),
+  ('respiratory', 'summary', 'T90_pct'),
+  ('respiratory', 'summary', 'SpO2_min_sleep'),
+  ('respiratory', 'summary', 'hypoxic_burden_pct_min_per_h'),
+  ('respiratory', 'summary', 'delta_HR_bpm'),
+  ('respiratory', 'summary', 'ventilatory_burden_pct_min_per_h'),
+  ('respiratory', 'summary', 'CSB_pct_TST'),
+  ('respiratory', 'flags', 'REM_related_OSA'),
+  ('respiratory', 'flags', 'positional_OSA'),
+  ('plm', 'summary', 'PLMS_index'),
+  ('plm', 'flags', 'PLMS_severity'),
+  ('plm', 'summary', 'PLMW_index'),
+  ('plm', 'summary', 'PLMS_arousal_index'),
+  ('plm', 'summary', 'LM_index'),
+  ('plm', 'summary', 'respiratory_LM_index'),
+  ('plm', 'summary', 'periodicity_index'),
+  ('plm', 'summary', 'n_PLMS'),
+  ('plm', 'summary', 'IMI_median_s'),
+  ('cap', 'summary', 'CAP_rate'),
+  ('cap', 'summary', 'CAP_rate_N1'),
+  ('cap', 'summary', 'CAP_rate_N2'),
+  ('cap', 'summary', 'CAP_rate_N3'),
+  ('cap', 'summary', 'A_index'),
+  ('cap', 'summary', 'A1_index'),
+  ('cap', 'summary', 'A2_index'),
+  ('cap', 'summary', 'A3_index'),
+  ('cap', 'summary', 'A1_pct'),
+  ('cap', 'summary', 'n_CAP_sequences'),
+  ('cap', 'summary', 'CAP_cycle_duration_mean_s'),
+  ('cap', 'summary', 'B_phase_duration_mean_s'),
+  ('cap', 'summary', 'isolated_A_index'),
+  ('cap', 'summary', 'A_phases_respiratory_pct'),
+  ('cap', 'summary', 'A_phases_with_LM_pct'),
+];
+
+class _BatchPsgDialog extends StatefulWidget {
+  const _BatchPsgDialog({required this.jobs, required this.settings});
+
+  final List<Map<String, String>> jobs;
+  final _BatchPsgSettings settings;
+
+  @override
+  State<_BatchPsgDialog> createState() => _BatchPsgDialogState();
+}
+
+class _BatchPsgDialogState extends State<_BatchPsgDialog> {
+  final List<String> _log = [];
+  final Map<String, String> _status = {};
+  final ScrollController _scroll = ScrollController();
+  int _current = 0;
+  double _progress = 0;
+  String _label = 'Starting…';
+  bool _finished = false;
+  bool _cancelled = false;
+  String? _summaryPath;
+
+  @override
+  void initState() {
+    super.initState();
+    for (final j in widget.jobs) {
+      _status[j['eegPath'] ?? ''] = 'Waiting';
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _run());
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _add(String line) {
+    if (!mounted) return;
+    final m = RegExp(r'PROGRESS\s+([01](?:\.\d+)?)\s+(.+)').firstMatch(line);
+    setState(() {
+      _log.add(line);
+      if (_log.length > 2000) _log.removeRange(0, _log.length - 2000);
+      if (m != null) {
+        _progress = double.tryParse(m.group(1)!) ?? _progress;
+        _label = m.group(2)!.trim();
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    });
+  }
+
+  Future<void> _run() async {
+    final exe = detectAnalyseNidraExecutable();
+    final cfg = widget.settings;
+    final started = DateTime.now();
+    final results = <BatchFileResult>[];
+    final rows = <List<String>>[];
+    final firstDir = widget.jobs.isEmpty ? Directory.current.path : File(widget.jobs.first['eegPath']!).parent.path;
+    final outDir = cfg.outputDir ?? firstDir;
+
+    for (var i = 0; i < widget.jobs.length; i++) {
+      if (_cancelled || !mounted) break;
+      final job = widget.jobs[i];
+      final path = job['eegPath'] ?? '';
+      final scoring = (job['scoringPath'] ?? '').isEmpty ? null : job['scoringPath'];
+      setState(() {
+        _current = i;
+        _status[path] = 'Running…';
+        _progress = 0;
+      });
+      _add('--- ${_basename(path)} ---');
+      if (scoring == null) {
+        _add('No scoring file: indices use monitoring time and CAP is skipped.');
+      }
+      final fileLogs = <String>[];
+      void log(String l) {
+        fileLogs.add(l);
+        _add(l);
+      }
+
+      var failed = false;
+      Directory? tempDir;
+      final reports = <String, Map<String, dynamic>?>{};
+      try {
+        var edf = path;
+        if (!analyseNidraReadsNatively(path)) {
+          log('Converting to a temporary EDF…');
+          tempDir = await Directory.systemTemp.createTemp('ccs_psg_batch_');
+          var stem = _basename(path);
+          final dot = stem.lastIndexOf('.');
+          if (dot > 0) stem = stem.substring(0, dot);
+          edf = '${tempDir.path}${Platform.pathSeparator}$stem.edf';
+          await processEdfFile(path, edf, EdfTransformOptions());
+        }
+        final respOut = respiratoryReportPath(path);
+        final plmOut = plmReportPath(path);
+        final capOut = capReportPath(path);
+        Future<bool> step(String name, List<String> args, String out) async {
+          if (_cancelled) return false;
+          log('> $name');
+          final code = await EegBackend().runCommandStreamAsync(executable: exe, arguments: args, onLine: log);
+          if (code != 0) {
+            log('$name failed (exit $code)');
+            return false;
+          }
+          reports[name] = await loadPsgReport(out);
+          return true;
+        }
+
+        if (cfg.respiratory) {
+          final ok = await step('respiratory', buildRespiratoryArgs(
+            edfPath: edf,
+            scoringPath: scoring,
+            outPath: respOut,
+            settings: {
+              'channels': {
+                if (cfg.pressure != null) 'pressure': cfg.pressure,
+                if (cfg.thermal != null) 'thermal': cfg.thermal,
+                if (cfg.spo2 != null) 'spo2': cfg.spo2,
+              },
+              'hypopneaRule': cfg.hypopneaRule,
+              'arousalMode': 'prefer-manual',
+            },
+          ), respOut);
+          failed |= !ok;
+        }
+        final haveResp = File(respOut).existsSync();
+        if (cfg.plm) {
+          final ok = await step('plm', buildPlmArgs(
+            edfPath: edf,
+            scoringPath: scoring,
+            outPath: plmOut,
+            respiratoryJson: haveResp ? respOut : null,
+            settings: {
+              if (cfg.leftLeg != null) 'left': cfg.leftLeg,
+              if (cfg.rightLeg != null) 'right': cfg.rightLeg,
+              'standard': cfg.plmStandard,
+              'useRespiratory': haveResp,
+            },
+          ), plmOut);
+          failed |= !ok;
+        }
+        if (cfg.cap && scoring != null) {
+          final ok = await step('cap', buildCapArgs(
+            edfPath: edf,
+            scoringPath: scoring,
+            outPath: capOut,
+            respiratoryJson: haveResp ? respOut : null,
+            plmJson: File(plmOut).existsSync() ? plmOut : null,
+            settings: {
+              if (cfg.capEeg != null) 'eeg': cfg.capEeg,
+              'sensitivity': cfg.capSensitivity,
+              'source': 'prefer-manual',
+            },
+          ), capOut);
+          failed |= !ok;
+        }
+      } catch (e) {
+        log('Exception: $e');
+        failed = true;
+      } finally {
+        if (tempDir != null) {
+          try {
+            await tempDir.delete(recursive: true);
+          } catch (_) {}
+        }
+      }
+
+      String cell(String analysis, String section, String key) {
+        final v = (reports[analysis]?[section] as Map?)?[key];
+        if (v == null) return '';
+        if (v is num) return v.isFinite ? v.toStringAsFixed(3) : '';
+        return v.toString();
+      }
+
+      rows.add([
+        path,
+        scoring ?? '',
+        for (final c in _kBatchPsgColumns) cell(c.$1, c.$2, c.$3),
+      ]);
+      results.add(BatchFileResult(filePath: path, exitCode: failed ? 1 : 0, logs: fileLogs));
+      await writeBatchFileLog(
+        outputFolder: outDir,
+        originalFilePath: path,
+        jobType: 'psg',
+        exitCode: failed ? 1 : 0,
+        logLines: fileLogs,
+      );
+      if (mounted) setState(() => _status[path] = failed ? 'Completed with errors' : 'Completed');
+    }
+
+    if (rows.isNotEmpty) {
+      String esc(String v) => v.contains(RegExp(r'[,"\n]')) ? '"${v.replaceAll('"', '""')}"' : v;
+      final header = [
+        'recording',
+        'scoring',
+        for (final c in _kBatchPsgColumns) '${c.$1}_${c.$3}',
+      ];
+      final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
+      final csvPath = '$outDir${Platform.pathSeparator}psg_batch_summary_$stamp.csv';
+      try {
+        await Directory(outDir).create(recursive: true);
+        await File(csvPath).writeAsString(
+          [header, ...rows].map((r) => r.map(esc).join(',')).join('\n'),
+        );
+        _summaryPath = csvPath;
+        _add('\nSummary table written to: $csvPath');
+      } catch (e) {
+        _add('Could not write summary CSV: $e');
+      }
+      await writeBatchRunSummaryLog(
+        outputFolder: outDir,
+        jobType: 'psg',
+        startTime: started,
+        endTime: DateTime.now(),
+        results: results,
+      );
+    }
+    if (mounted) setState(() => _finished = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(_finished ? 'PSG Batch Analysis Finished' : 'Running PSG Batch Analysis…'),
+      content: SizedBox(
+        width: 820,
+        height: 480,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              width: 260,
+              child: ListView(
+                children: [
+                  for (var i = 0; i < widget.jobs.length; i++)
+                    ListTile(
+                      dense: true,
+                      selected: i == _current && !_finished,
+                      title: Text(_basename(widget.jobs[i]['eegPath'] ?? ''), overflow: TextOverflow.ellipsis),
+                      subtitle: Text(_status[widget.jobs[i]['eegPath'] ?? ''] ?? ''),
+                    ),
+                ],
+              ),
+            ),
+            const VerticalDivider(),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _finished ? (_summaryPath == null ? 'Done' : 'Summary: ${_basename(_summaryPath!)}') : _label,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 6),
+                  LinearProgressIndicator(value: _finished ? 1 : (_progress > 0 ? _progress : null)),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: Container(
+                      color: Colors.black87,
+                      padding: const EdgeInsets.all(6),
+                      child: ListView.builder(
+                        controller: _scroll,
+                        itemCount: _log.length,
+                        itemBuilder: (_, i) => Text(
+                          _log[i],
+                          style: const TextStyle(color: Colors.lightGreenAccent, fontFamily: 'Courier', fontSize: 11),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        if (!_finished)
+          TextButton(
+            onPressed: _cancelled ? null : () => setState(() => _cancelled = true),
+            child: Text(_cancelled ? 'Stopping after this recording…' : 'Cancel'),
+          ),
+        if (_finished)
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+      ],
+    );
   }
 }

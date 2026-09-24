@@ -101,7 +101,20 @@ analyse-nidra --respiratory night.edf --scoring night_scoring.json \
 analyse-nidra --plm night.edf --scoring night_scoring.json \
   [--left LAT-L] [--right LAT-R] [--respiratory-json night_respiratory.json]
 # -> night_plm.json
+
+# Cyclic alternating pattern (Terzano 2001); uses night_respiratory.json and
+# night_plm.json automatically for coupling measures when present
+analyse-nidra --cap night.edf --scoring night_scoring.json \
+  [--eeg C4-A1] [--sensitivity conservative|standard|sensitive] \
+  [--a-phases prefer-manual|manual|auto]
+# -> night_cap.json
 ```
+
+Slow oscillation–spindle coupling in the slow-wave outputs now includes, per
+event and per channel, `MVL` (amplitude-normalised mean vector length,
+Canolty 2006), `PLV` (phase locking between the SO phase and the SO-band phase
+of the sigma envelope, Penny 2008) and `PhaseConsistency` (resultant length of
+the spindle-peak phases across events), next to `ndPAC`, PAC MI and gcPAC.
 
 Any channel option accepts `none` to switch that sensor off; omitted channels
 are auto-detected from their labels. Models are looked up beside the binary

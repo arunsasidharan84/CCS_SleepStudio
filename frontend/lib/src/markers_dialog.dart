@@ -26,6 +26,10 @@ Color _eventColor(int digit) {
     Color(0xFF0097A7), // 18 Desaturation
     Color(0xFF7CB342), // 19 Leg movement
     Color(0xFF1B5E20), // 20 PLM
+    Color(0xFF03A9F4), // 21 CAP A1
+    Color(0xFFFF9800), // 22 CAP A2
+    Color(0xFFE91E63), // 23 CAP A3
+    Color(0xFF795548), // 24 CAP sequence
   ];
   return colors[digit.clamp(0, colors.length - 1)];
 }

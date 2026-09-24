@@ -2310,6 +2310,10 @@ Color _eventColor(int digit) {
     Color.fromARGB(110, 0, 151, 167), // 18 desaturation
     Color.fromARGB(110, 124, 179, 66), // 19 leg movement
     Color.fromARGB(130, 27, 94, 32), // 20 PLM
+    Color.fromARGB(110, 3, 169, 244), // 21 CAP A1
+    Color.fromARGB(120, 255, 152, 0), // 22 CAP A2
+    Color.fromARGB(120, 233, 30, 99), // 23 CAP A3
+    Color.fromARGB(60, 121, 85, 72), // 24 CAP sequence
   ];
   return colors[digit.clamp(0, colors.length - 1)];
 }

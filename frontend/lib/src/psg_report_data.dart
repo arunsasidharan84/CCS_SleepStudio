@@ -1,5 +1,5 @@
-// Pure-Dart helpers for the respiratory (OSA) and PLM reports written by
-// `analyse-nidra --respiratory` / `--plm`: event digits, sidecar paths,
+// Pure-Dart helpers for the respiratory (OSA), PLM and CAP reports written by
+// `analyse-nidra --respiratory` / `--plm` / `--cap`: event digits, sidecar paths,
 // marker conversion and the summary tables shared by the app and the PDF.
 
 import 'dart:convert';
@@ -16,11 +16,19 @@ const int kDigitRera = 17;
 const int kDigitDesaturation = 18;
 const int kDigitLegMovement = 19;
 const int kDigitPlm = 20;
+const int kDigitCapA1 = 21;
+const int kDigitCapA2 = 22;
+const int kDigitCapA3 = 23;
+const int kDigitCapSequence = 24;
 
 bool isRespiratoryEventDigit(int digit) =>
     digit >= kDigitObstructiveApnea && digit <= kDigitDesaturation;
 bool isLimbMovementDigit(int digit) =>
     digit == kDigitLegMovement || digit == kDigitPlm;
+bool isCapAPhaseDigit(int digit) =>
+    digit >= kDigitCapA1 && digit <= kDigitCapA3;
+bool isCapSequenceDigit(int digit) => digit == kDigitCapSequence;
+bool isCapDigit(int digit) => isCapAPhaseDigit(digit) || isCapSequenceDigit(digit);
 
 /// Default marker names for the PSG digits (used when no custom name is set).
 const Map<int, String> kPsgEventNames = {
@@ -32,6 +40,10 @@ const Map<int, String> kPsgEventNames = {
   kDigitDesaturation: 'Desaturation',
   kDigitLegMovement: 'Leg Movement',
   kDigitPlm: 'PLM',
+  kDigitCapA1: 'CAP A1',
+  kDigitCapA2: 'CAP A2',
+  kDigitCapA3: 'CAP A3',
+  kDigitCapSequence: 'CAP Sequence',
 };
 
 String psgSidecarBase(String recordingPath) {
@@ -45,6 +57,9 @@ String respiratoryReportPath(String recordingPath) =>
 
 String plmReportPath(String recordingPath) =>
     '${psgSidecarBase(recordingPath)}_plm.json';
+
+String capReportPath(String recordingPath) =>
+    '${psgSidecarBase(recordingPath)}_cap.json';
 
 Future<Map<String, dynamic>?> loadPsgReport(String path) async {
   try {
@@ -334,5 +349,141 @@ String plmInterpretation(Map<String, dynamic> report) {
     parts.add('${resp.toStringAsFixed(1)} leg movements per hour were respiratory-related and excluded from the PLM count.');
   }
   if (parts.isEmpty) parts.add('No limb-movement summary metrics were available.');
+  return parts.join(' ');
+}
+
+// ─── Cyclic alternating pattern (CAP) ───────────────────────────────────────
+
+/// A-phases (A1/A2/A3) and CAP sequences as markers. By default only
+/// A-phases that belong to CAP sequences are shown (isolated A-phases are not
+/// part of CAP); pass [includeIsolated] to show every detected A-phase.
+List<ScoredEvent> capEventsFromReport(
+  Map<String, dynamic> report, {
+  bool aPhases = true,
+  bool sequences = true,
+  bool includeIsolated = false,
+}) {
+  final out = <ScoredEvent>[];
+  if (aPhases) {
+    for (final p in (report['a_phases'] as List? ?? const [])) {
+      if (p is! Map) continue;
+      if (!includeIsolated && p['in_sequence'] != true) continue;
+      final sub = p['subtype']?.toString() ?? 'A1';
+      final digit = sub == 'A3'
+          ? kDigitCapA3
+          : sub == 'A2'
+          ? kDigitCapA2
+          : kDigitCapA1;
+      out.add(
+        ScoredEvent(
+          digit: digit,
+          key: 'F$digit',
+          label: kPsgEventNames[digit]!,
+          type: 'CAP',
+          startSec: _num(p['start'], 0),
+          endSec: _num(p['end'], 0),
+        ),
+      );
+    }
+  }
+  if (sequences) {
+    for (final q in (report['sequences'] as List? ?? const [])) {
+      if (q is! Map) continue;
+      out.add(
+        ScoredEvent(
+          digit: kDigitCapSequence,
+          key: 'F$kDigitCapSequence',
+          label: kPsgEventNames[kDigitCapSequence]!,
+          type: 'CAP',
+          startSec: _num(q['start'], 0),
+          endSec: _num(q['end'], 0),
+        ),
+      );
+    }
+  }
+  return out;
+}
+
+List<(String, List<(String, String)>)> capSummarySections(
+  Map<String, dynamic> report,
+) {
+  final s = (report['summary'] as Map?) ?? const {};
+  final f = (report['flags'] as Map?) ?? const {};
+  String v(String k, {int d = 1, String u = ''}) => _fmt(s[k], digits: d, suffix: u);
+  return [
+    (
+      'CAP macro-parameters',
+      [
+        ('CAP rate (CAP time / NREM time)', v('CAP_rate', u: '%')),
+        ('Level', f['CAP_rate_level']?.toString() ?? '-'),
+        ('CAP rate N1 / N2 / N3', '${v('CAP_rate_N1', u: '%')} / ${v('CAP_rate_N2', u: '%')} / ${v('CAP_rate_N3', u: '%')}'),
+        ('CAP time / NCAP time', '${v('CAP_time_min')} / ${v('NCAP_time_min')} min'),
+        ('NREM time', '${v('NREM_min')} min'),
+        ('CAP sequences / mean duration', '${v('n_CAP_sequences', d: 0)} / ${v('CAP_sequence_duration_mean_s', d: 0)} s'),
+        ('CAP cycles / mean duration', '${v('n_CAP_cycles', d: 0)} / ${v('CAP_cycle_duration_mean_s')} s'),
+        ('Cycles per sequence', v('CAP_cycles_per_sequence_mean')),
+      ],
+    ),
+    (
+      'A-phases (within CAP sequences)',
+      [
+        ('A-phase index (/h NREM)', v('A_index')),
+        ('A1 / A2 / A3 index (/h)', '${v('A1_index')} / ${v('A2_index')} / ${v('A3_index')}'),
+        ('A1 / A2 / A3 (% of A-phases)', '${v('A1_pct', d: 0)} / ${v('A2_pct', d: 0)} / ${v('A3_pct', d: 0)} %'),
+        ('A2+A3 index (/h)', v('A2A3_index')),
+        ('Mean A1 / A2 / A3 duration', '${v('A1_duration_mean_s')} / ${v('A2_duration_mean_s')} / ${v('A3_duration_mean_s')} s'),
+        ('Mean B-phase duration', v('B_phase_duration_mean_s', u: ' s')),
+      ],
+    ),
+    (
+      'Novel & coupling markers',
+      [
+        ('CAP rate first / second half', '${v('CAP_rate_first_half', u: '%')} / ${v('CAP_rate_second_half', u: '%')}'),
+        ('Isolated A-phase index (/h)', v('isolated_A_index')),
+        ('A1 : (A2+A3) ratio', v('A1_to_A2A3_ratio', d: 2)),
+        ('Median A-A interval', v('A_A_interval_median_s', u: ' s')),
+        ('Cycle-duration variability (CV)', v('CAP_cycle_duration_cv', d: 2)),
+        ('A2/A3 with scored arousal', v('A2A3_with_arousal_pct', u: '%')),
+        ('A-phases after respiratory events', v('A_phases_respiratory_pct', u: '%')),
+        ('Respiratory events followed by A-phase', v('respiratory_events_with_A_phase_pct', u: '%')),
+        ('A-phases with leg movement', v('A_phases_with_LM_pct', u: '%')),
+        ('Leg movements within A-phases', v('LMs_with_A_phase_pct', u: '%')),
+      ],
+    ),
+  ];
+}
+
+String capInterpretation(Map<String, dynamic> report) {
+  final flags = (report['flags'] as Map?) ?? const {};
+  final rate = _val(report, 'CAP_rate');
+  final parts = <String>[];
+  if (rate != null) {
+    parts.add(
+      'Cyclic alternating pattern occupied ${rate.toStringAsFixed(1)}% of NREM sleep'
+      '${flags['CAP_rate_level'] == null ? '' : ' (${flags['CAP_rate_level']})'}. '
+      'CAP rate rises with age and with sleep instability; values are typically about 25-45% in healthy adults.',
+    );
+  }
+  final a1 = _val(report, 'A1_pct');
+  final a23 = (_val(report, 'A2_pct') ?? 0) + (_val(report, 'A3_pct') ?? 0);
+  if (a1 != null) {
+    parts.add(
+      a1 >= 50
+          ? 'A1 phases (slow, synchronised bursts that help build and maintain deep sleep) predominated (${a1.toStringAsFixed(0)}%).'
+          : 'Arousal-like A2/A3 phases made up ${a23.toStringAsFixed(0)}% of A-phases, indicating a more fragmented, arousal-prone NREM sleep.',
+    );
+  }
+  final resp = _val(report, 'A_phases_respiratory_pct');
+  if (resp != null && resp >= 20) {
+    parts.add('${resp.toStringAsFixed(0)}% of A-phases followed respiratory events, linking sleep instability to disordered breathing.');
+  }
+  final lm = _val(report, 'A_phases_with_LM_pct');
+  if (lm != null && lm >= 20) {
+    parts.add('${lm.toStringAsFixed(0)}% of A-phases coincided with leg movements.');
+  }
+  if (flags['method']?.toString().startsWith('automatic') ?? false) {
+    parts.add('A-phases were detected automatically and should be reviewed on the EEG.');
+  }
+  if (parts.isEmpty) parts.add('No CAP summary metrics were available.');
   return parts.join(' ');
 }

@@ -292,6 +292,18 @@ pub fn compile(
                 "sw_all_ndPAC".into(),
                 slow_wave.map_or(f64::NAN, |value| value.nd_pac),
             ),
+            (
+                "sw_all_MVL".into(),
+                slow_wave.map_or(f64::NAN, |value| value.mvl),
+            ),
+            (
+                "sw_all_PLV".into(),
+                slow_wave.map_or(f64::NAN, |value| value.plv),
+            ),
+            (
+                "sw_all_PhaseConsistency".into(),
+                slow_wave.map_or(f64::NAN, |value| value.phase_consistency),
+            ),
             ("pac_all_max_MI".into(), pac_value.maximum),
             ("pac_all_max_sp".into(), pac_value.amplitude_frequency),
             ("pac_all_max_sw".into(), pac_value.phase_frequency),
@@ -370,6 +382,9 @@ fn event_columns() -> Vec<String> {
         "sw_all_Frequency",
         "sw_all_PhaseAtSigmaPeak",
         "sw_all_ndPAC",
+        "sw_all_MVL",
+        "sw_all_PLV",
+        "sw_all_PhaseConsistency",
         "pac_all_max_MI",
         "pac_all_max_sp",
         "pac_all_max_sw",

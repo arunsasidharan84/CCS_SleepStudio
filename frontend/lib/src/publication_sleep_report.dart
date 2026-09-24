@@ -29,6 +29,7 @@ List<int> buildPublicationSleepReport({
   ReportMetadata metadata = const ReportMetadata(),
   Map<String, dynamic>? respiratoryReport,
   Map<String, dynamic>? plmReport,
+  Map<String, dynamic>? capReport,
 }) {
   final report = _PdfDocument();
   final architecture = regionalRows.isEmpty
@@ -38,7 +39,8 @@ List<int> buildPublicationSleepReport({
 
   final totalPages = includePages.where((b) => b).length +
       (respiratoryReport != null ? 1 : 0) +
-      (plmReport != null ? 1 : 0);
+      (plmReport != null ? 1 : 0) +
+      (capReport != null ? 1 : 0);
   var pageNum = 1;
 
   if (includePages[0]) {
@@ -60,6 +62,9 @@ List<int> buildPublicationSleepReport({
   }
   if (plmReport != null) {
     report.addPage(_buildPlmPage(viewport, plmReport, pageNum++, totalPages));
+  }
+  if (capReport != null) {
+    report.addPage(_buildCapPage(viewport, capReport, pageNum++, totalPages));
   }
   if (includePages[1]) {
     report.addPage(_buildMicrostructurePage(regions, pageNum++, totalPages));
@@ -331,21 +336,40 @@ String _buildMicrostructurePage(
 
   p.section('Phasic spindle-slow wave coupling', 50, 480);
   p.text('Region', 52, 457, bold: true, size: 7);
-  p.text('PAC MI', 130, 457, bold: true, size: 7);
-  p.text('ndPAC', 195, 457, bold: true, size: 7);
-  p.text('Spindle carrier Hz', 260, 457, bold: true, size: 7);
-  p.text('SW driver Hz', 365, 457, bold: true, size: 7);
-  p.text('Sigma peak phase (rad)', 450, 457, bold: true, size: 7);
+  p.text('PAC MI', 106, 457, bold: true, size: 7);
+  p.text('gcPAC', 156, 457, bold: true, size: 7);
+  p.text('ndPAC', 204, 457, bold: true, size: 7);
+  p.text('MVL', 252, 457, bold: true, size: 7);
+  p.text('PLV', 296, 457, bold: true, size: 7);
+  p.text('Phase R', 340, 457, bold: true, size: 7);
+  p.text('Sp / SW Hz', 388, 457, bold: true, size: 7);
+  p.text('Sigma-peak phase', 470, 457, bold: true, size: 7);
   y = 435;
-  for (final row in rows.take(8)) {
+  for (final row in rows.take(6)) {
     p.text(row['Chan'] ?? '-', 52, y, bold: true, size: 7.5);
-    p.text(_metric(row, 'pac_all_max_MI', decimals: 4), 130, y, size: 7.5);
-    p.text(_metric(row, 'sw_all_ndPAC', decimals: 4), 195, y, size: 7.5);
-    p.text(_metric(row, 'pac_all_max_sp'), 260, y, size: 7.5);
-    p.text(_metric(row, 'pac_all_max_sw'), 365, y, size: 7.5);
-    p.text(_metric(row, 'sw_all_PhaseAtSigmaPeak'), 450, y, size: 7.5);
+    p.text(_metric(row, 'pac_all_max_MI', decimals: 4), 106, y, size: 7.2);
+    p.text(_metric(row, 'pac_all_max_gcPAC', decimals: 4), 156, y, size: 7.2);
+    p.text(_metric(row, 'sw_all_ndPAC', decimals: 4), 204, y, size: 7.2);
+    p.text(_metric(row, 'sw_all_MVL', decimals: 3), 252, y, size: 7.2);
+    p.text(_metric(row, 'sw_all_PLV', decimals: 3), 296, y, size: 7.2);
+    p.text(_metric(row, 'sw_all_PhaseConsistency', decimals: 3), 340, y, size: 7.2);
+    p.text(
+      '${_metric(row, 'pac_all_max_sp')} / ${_metric(row, 'pac_all_max_sw')}',
+      388,
+      y,
+      size: 7.2,
+    );
+    p.text(_metric(row, 'sw_all_PhaseAtSigmaPeak'), 470, y, size: 7.2);
     y -= 18;
   }
+  p.text(
+    'MVL: amplitude-normalised mean vector length (Canolty 2006); PLV: SO phase vs sigma-envelope phase locking (Penny 2008); '
+    'Phase R: consistency of the spindle-peak phase across slow oscillations.',
+    50,
+    y + 6,
+    size: 6,
+    color: _slate,
+  );
 
   p.section('Spatial coupling comparison', 50, 315);
   final selected = rows.take(3).toList();
@@ -376,6 +400,16 @@ String _buildMicrostructurePage(
     p.text(row['Chan'] ?? 'Region', cx - 26, 266, bold: true, size: 9);
     p.text('MI ${mi.toStringAsFixed(4)}', cx - 32, 141, size: 7.5);
     p.text('ndPAC ${ndPac.toStringAsFixed(4)}', cx - 38, 129, size: 7.5);
+    final mvl = _number(row, 'sw_all_MVL');
+    final plv = _number(row, 'sw_all_PLV');
+    if (mvl != null || plv != null) {
+      p.text(
+        'MVL ${mvl?.toStringAsFixed(3) ?? '-'} | PLV ${plv?.toStringAsFixed(3) ?? '-'}',
+        cx - 44,
+        117,
+        size: 7.5,
+      );
+    }
   }
   p.text(
     'Polar vectors indicate sigma peak phase on the slow-wave cycle. Rightward = 0 rad; upward = pi/2 rad.',
@@ -868,6 +902,10 @@ String _microstructureInterpretation(
       'slow-wave density ${slowWaveDensity.toStringAsFixed(2)}/NREM min',
     if (mi != null) 'PAC MI ${mi.toStringAsFixed(4)}',
     if (ndPac != null) 'ndPAC ${ndPac.toStringAsFixed(4)}',
+    if (_rowMean(rows, 'sw_all_MVL') != null)
+      'mean vector length ${_rowMean(rows, 'sw_all_MVL')!.toStringAsFixed(3)}',
+    if (_rowMean(rows, 'sw_all_PLV') != null)
+      'phase-locking value ${_rowMean(rows, 'sw_all_PLV')!.toStringAsFixed(3)}',
     if (phase != null) 'sigma-peak phase ${phase.toStringAsFixed(2)} rad',
   ];
   if (values.isEmpty) {
@@ -1542,6 +1580,10 @@ _PdfColor _eventColor(int digit) {
     _PdfColor(0.00, 0.59, 0.65), // 18 desaturation
     _PdfColor(0.49, 0.70, 0.26), // 19 leg movement
     _PdfColor(0.11, 0.37, 0.13), // 20 PLM
+    _PdfColor(0.01, 0.66, 0.96), // 21 CAP A1
+    _PdfColor(1.00, 0.60, 0.00), // 22 CAP A2
+    _PdfColor(0.91, 0.12, 0.39), // 23 CAP A3
+    _PdfColor(0.47, 0.33, 0.28), // 24 CAP sequence
   ];
   return colors[digit.clamp(0, colors.length - 1)];
 }
@@ -2028,6 +2070,132 @@ String _buildPlmPage(
   _footer(
     p,
     'Automated leg-movement scoring by AnalyseNidra; verify tibialis EMG quality and review scored movements before clinical use.',
+  );
+  return p.build();
+}
+
+void _barChart(
+  _PdfPage p, {
+  required double x,
+  required double y,
+  required double width,
+  required double height,
+  required List<(String, double?)> bars,
+  required _PdfColor color,
+  double? minMax,
+  String unit = '',
+}) {
+  p.rect(x, y, width, height, stroke: _lightGray);
+  if (bars.isEmpty) return;
+  final values = bars.map((b) => b.$2 ?? 0.0).toList();
+  final maxV = math.max(minMax ?? 1.0, values.reduce(math.max));
+  final bw = width / bars.length;
+  for (var i = 0; i < bars.length; i++) {
+    final v = bars[i].$2;
+    final bh = v == null ? 0.0 : height * v / maxV;
+    p.rect(x + i * bw + 2, y, bw - 4, bh, fill: color);
+    p.text(bars[i].$1, x + i * bw + 2, y - 9, size: 5.8, color: _slate);
+    p.text(v == null ? '-' : '${v.toStringAsFixed(0)}$unit', x + i * bw + 2, y + bh + 2, size: 5.6);
+  }
+}
+
+String _buildCapPage(
+  EegViewport viewport,
+  Map<String, dynamic> report,
+  int pageNum,
+  int totalPages,
+) {
+  final p = _PdfPage();
+  _header(p, 'CYCLIC ALTERNATING PATTERN (CAP)', 'Page $pageNum of $totalPages');
+  final summary = report['summary'] as Map?;
+  final settings = report['settings'] as Map?;
+  final channels = report['channels'] as Map?;
+  final flags = report['flags'] as Map?;
+  p.text(
+    'Terzano 2001 rules | ${flags?['method'] ?? ''} | EEG: ${channels?['eeg'] ?? '-'}'
+    '${settings?['sensitivity'] == null ? '' : ' | sensitivity: ${settings?['sensitivity']}'}',
+    50,
+    704,
+    size: 6.8,
+    color: _slate,
+  );
+  _psgCards(p, [
+    ('CAP rate', _jsonFmt(summary, 'CAP_rate', unit: '%')),
+    ('A-phase index (/h)', _jsonFmt(summary, 'A_index')),
+    ('A1 share', _jsonFmt(summary, 'A1_pct', decimals: 0, unit: '%')),
+    ('A2+A3 index (/h)', _jsonFmt(summary, 'A2A3_index')),
+    ('CAP sequences', _jsonFmt(summary, 'n_CAP_sequences', decimals: 0)),
+    ('Mean cycle (s)', _jsonFmt(summary, 'CAP_cycle_duration_mean_s')),
+  ], 650);
+
+  p.section('Overnight CAP timeline', 50, 622);
+  const x = 80.0;
+  const width = 480.0;
+  _hypnogram(p, viewport, x, 522, width, 88);
+  final duration = math.max(1.0, viewport.stages.length * 30.0);
+  final phases = (report['a_phases'] as List?) ?? const [];
+  bool inSeq(Map a) => a['in_sequence'] == true;
+  String sub(Map a) => a['subtype']?.toString() ?? '';
+  _eventRaster(
+    p,
+    x: x,
+    y: 500,
+    width: width,
+    durationSec: duration,
+    rows: [
+      ('CAP', _eventColor(kDigitCapSequence), _spans((report['sequences'] as List?) ?? const [], (_) => true)),
+      ('A1', _eventColor(kDigitCapA1), _spans(phases, (a) => inSeq(a) && sub(a) == 'A1')),
+      ('A2', _eventColor(kDigitCapA2), _spans(phases, (a) => inSeq(a) && sub(a) == 'A2')),
+      ('A3', _eventColor(kDigitCapA3), _spans(phases, (a) => inSeq(a) && sub(a) == 'A3')),
+      ('Isol.', _lightGray, _spans(phases, (a) => !inSeq(a))),
+    ],
+  );
+
+  p.section('CAP rate by NREM stage', 50, 446);
+  _barChart(
+    p,
+    x: 60,
+    y: 372,
+    width: 220,
+    height: 56,
+    bars: [
+      ('NREM', _jsonNum(summary, 'CAP_rate')),
+      ('N1', _jsonNum(summary, 'CAP_rate_N1')),
+      ('N2', _jsonNum(summary, 'CAP_rate_N2')),
+      ('N3', _jsonNum(summary, 'CAP_rate_N3')),
+      ('1st half', _jsonNum(summary, 'CAP_rate_first_half')),
+      ('2nd half', _jsonNum(summary, 'CAP_rate_second_half')),
+    ],
+    color: _eventColor(kDigitCapA1),
+    minMax: 60,
+    unit: '%',
+  );
+  p.text('CAP rate by hour of the night', 330, 446, bold: true, size: 7.5, color: _navy);
+  final hourly = [
+    for (final h in (report['hourly'] as List? ?? const []))
+      if (h is Map) ((_jsonNum(h, 'hour') ?? 0).toStringAsFixed(0), _jsonNum(h, 'CAP_rate')),
+  ];
+  _barChart(
+    p,
+    x: 330,
+    y: 372,
+    width: 220,
+    height: 56,
+    bars: hourly,
+    color: _eventColor(kDigitCapSequence),
+    minMax: 60,
+  );
+
+  p.section('Recommended and novel CAP parameters', 50, 342);
+  final sections = capSummarySections(report);
+  _psgTable(p, sections.take(2).toList(), 50, 324);
+  _psgTable(p, sections.skip(2).toList(), 312, 324);
+
+  p.section('Interpretation', 50, 132);
+  _wrappedText(p, capInterpretation(report), 52, 116, maxCharacters: 118, size: 7.2, lineHeight: 10);
+  _footer(
+    p,
+    'CAP rate = CAP time / NREM time; A-phase indices count A-phases within CAP sequences per hour of NREM sleep.',
   );
   return p.build();
 }

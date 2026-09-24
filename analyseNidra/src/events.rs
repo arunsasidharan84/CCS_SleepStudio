@@ -77,6 +77,15 @@ pub struct SlowWaveEvent {
     pub phase_at_sigma_peak: f64,
     #[serde(rename = "ndPAC")]
     pub nd_pac: f64,
+    /// Normalised mean vector length (Canolty et al. 2006):
+    /// |sum(A e^{i phi})| / sum(A) over the +-2 s event window.
+    #[serde(rename = "MVL")]
+    pub mvl: f64,
+    /// Phase-locking value (Penny et al. 2008): consistency between the
+    /// slow-oscillation phase and the phase of the SO-band-filtered sigma
+    /// envelope over the +-2 s event window.
+    #[serde(rename = "PLV")]
+    pub plv: f64,
     pub stage: i8,
     pub channel: String,
     pub idx_channel: usize,
@@ -97,6 +106,13 @@ pub struct SlowWaveSummary {
     pub phase_at_sigma_peak: f64,
     #[serde(rename = "ndPAC")]
     pub nd_pac: f64,
+    #[serde(rename = "MVL")]
+    pub mvl: f64,
+    #[serde(rename = "PLV")]
+    pub plv: f64,
+    /// Resultant vector length of the sigma-peak phases across events
+    /// (0 = random timing, 1 = every spindle peak at the same SO phase).
+    pub phase_consistency: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -537,6 +553,35 @@ fn ndpac(phases: &[f64], amplitudes: &[f64]) -> f64 {
         / phases.len() as f64
 }
 
+/// Normalised mean vector length |sum(A e^{i phi})| / sum(A).
+fn mean_vector_length(phases: &[f64], amplitudes: &[f64]) -> f64 {
+    let total: f64 = amplitudes.iter().sum();
+    if total <= 0.0 {
+        return f64::NAN;
+    }
+    phases
+        .iter()
+        .zip(amplitudes)
+        .map(|(&phase, &amplitude)| Complex64::from_polar(amplitude, phase))
+        .sum::<Complex64>()
+        .norm()
+        / total
+}
+
+/// Phase-locking value |mean(e^{i (phi_a - phi_b)})|.
+fn phase_locking_value(phase_a: &[f64], phase_b: &[f64]) -> f64 {
+    if phase_a.is_empty() {
+        return f64::NAN;
+    }
+    phase_a
+        .iter()
+        .zip(phase_b)
+        .map(|(&a, &b)| Complex64::from_polar(1.0, a - b))
+        .sum::<Complex64>()
+        .norm()
+        / phase_a.len() as f64
+}
+
 fn channel_slow_waves(
     name: &str,
     channel_index: usize,
@@ -555,6 +600,11 @@ fn channel_slow_waves(
     let sigma_amplitude = analytic_signal_padded(&sigma, fft_size)
         .into_iter()
         .map(|value| value.norm())
+        .collect::<Vec<_>>();
+    // Phase of the sigma envelope's slow-oscillation component (for the PLV).
+    let envelope_phase = analytic_signal_padded(&mne_overlap_add(&sigma_amplitude, &filters.slow_wave), fft_size)
+        .into_iter()
+        .map(|value| value.arg())
         .collect::<Vec<_>>();
 
     let included = |index: usize| matches!(stages[index], 2 | 3);
@@ -653,6 +703,14 @@ fn channel_slow_waves(
                 &phase[epoch_start..epoch_end],
                 &sigma_amplitude[epoch_start..epoch_end],
             ),
+            mvl: mean_vector_length(
+                &phase[epoch_start..epoch_end],
+                &sigma_amplitude[epoch_start..epoch_end],
+            ),
+            plv: phase_locking_value(
+                &phase[epoch_start..epoch_end],
+                &envelope_phase[epoch_start..epoch_end],
+            ),
             stage: stages[neg],
             channel: name.to_string(),
             idx_channel: channel_index,
@@ -671,6 +729,12 @@ fn channel_slow_waves(
 
 fn mean(events: &[SlowWaveEvent], value: impl Fn(&SlowWaveEvent) -> f64) -> f64 {
     events.iter().map(value).sum::<f64>() / events.len() as f64
+}
+
+fn phase_consistency(events: &[SlowWaveEvent]) -> f64 {
+    let sine = mean(events, |event| event.phase_at_sigma_peak.sin());
+    let cosine = mean(events, |event| event.phase_at_sigma_peak.cos());
+    sine.hypot(cosine)
 }
 
 fn circular_mean(events: &[SlowWaveEvent]) -> f64 {
@@ -728,6 +792,9 @@ pub fn slow_waves(recording: &LoadedRecording) -> SlowWaveResults {
             frequency: mean(&events, |event| event.frequency),
             phase_at_sigma_peak: circular_mean(&events),
             nd_pac: mean(&events, |event| event.nd_pac),
+            mvl: mean(&events, |event| event.mvl),
+            plv: mean(&events, |event| event.plv),
+            phase_consistency: phase_consistency(&events),
         })
         .collect();
     SlowWaveResults { events, summary }

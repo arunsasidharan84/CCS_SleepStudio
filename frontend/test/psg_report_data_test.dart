@@ -71,7 +71,40 @@ Map<String, dynamic> _plmReport() => {
   ],
 };
 
+Map<String, dynamic> _capReport() => {
+  'analysis': 'cap',
+  'channels': {'eeg': 'C4-A1'},
+  'settings': {'sensitivity': 'standard'},
+  'flags': {'method': 'automatic A-phase detection', 'CAP_rate_level': 'within the usual adult range (20-45 %)'},
+  'summary': {'CAP_rate': 34.5, 'A_index': 41.2, 'A1_pct': 62.0, 'A2_pct': 25.0, 'A3_pct': 13.0},
+  'hourly': [
+    {'hour': 1.0, 'CAP_rate': 30.0},
+    {'hour': 2.0, 'CAP_rate': 40.0},
+  ],
+  'a_phases': [
+    {'start': 30.0, 'end': 35.0, 'subtype': 'A1', 'in_sequence': true},
+    {'start': 55.0, 'end': 60.0, 'subtype': 'A2', 'in_sequence': true},
+    {'start': 80.0, 'end': 86.0, 'subtype': 'A3', 'in_sequence': true},
+    {'start': 200.0, 'end': 204.0, 'subtype': 'A1', 'in_sequence': false},
+  ],
+  'sequences': [
+    {'start': 30.0, 'end': 86.0, 'n_cycles': 2},
+  ],
+};
+
 void main() {
+  test('converts CAP A-phases and sequences into markers', () {
+    final events = capEventsFromReport(_capReport());
+    expect(events.map((e) => e.digit).toList(), [
+      kDigitCapA1,
+      kDigitCapA2,
+      kDigitCapA3,
+      kDigitCapSequence,
+    ]);
+    expect(capEventsFromReport(_capReport(), includeIsolated: true, sequences: false).length, 4);
+    expect(capInterpretation(_capReport()), contains('34.5'));
+  });
+
   test('converts counted respiratory events and sleep desaturations', () {
     final events = respiratoryEventsFromReport(_respiratoryReport());
     expect(events.map((e) => e.digit).toList(), [
@@ -117,9 +150,11 @@ void main() {
       includePages: const [true, false, false, false, false],
       respiratoryReport: _respiratoryReport(),
       plmReport: _plmReport(),
+      capReport: _capReport(),
     );
     final text = latin1.decode(bytes);
-    expect(text, contains('/Count 3'));
+    expect(text, contains('/Count 4'));
+    expect(text, contains('CYCLIC ALTERNATING PATTERN'));
     expect(text, contains('RESPIRATORY EVENTS & OXIMETRY'));
     expect(text, contains('PERIODIC LIMB MOVEMENTS'));
     expect(bytes.every((b) => b >= 0 && b <= 255), isTrue);

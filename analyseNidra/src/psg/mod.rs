@@ -1,5 +1,7 @@
-//! Cardio-respiratory (sleep apnea) and periodic limb movement analyses.
+//! Cardio-respiratory (sleep apnea), periodic limb movement and cyclic
+//! alternating pattern (CAP) analyses.
 
+pub mod cap;
 pub mod common;
 pub mod plm;
 pub mod respiratory;

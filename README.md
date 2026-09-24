@@ -10,7 +10,7 @@
   <b>National Institute of Mental Health and Neurosciences (NIMHANS)</b>, Bangalore, India.
 </p>
 
-**Version:** 1.19.0
+**Version:** 1.20.0
 
 Welcome to **CCS Sleep Studio**, a high-performance, cross-platform desktop application designed to assist researchers and clinicians in sleep EEG visualization, event annotation, sleep scoring, automated staging, and advanced EEG analysis.
 
@@ -18,6 +18,12 @@ CCS Sleep Studio is comprised of the following key modules:
 *   **ScoringNidra**: Interactive sleep scoring and event annotation module supporting EDF, Brain Products (.vhdr / .vmrk), Nihon Kohden (.EEG / .LOG), EMBLA (.ebm), Orbit (.orb), and R09 (.r09).
 *   **AutoscoreNidra**: Automated sleep scoring module with both interactive and batch modes.
 *   **AnalyseNidra**: Automated sleep EEG analysis and reporting module operating in both interactive and batch modes.
+
+### 🌟 New in Version 1.20.0
+*   **Cyclic alternating pattern (CAP) analysis (Utilities menu and batch)** following Terzano et al. (2001): automatic A-phase detection (or your own A1/A2/A3 markers), A1/A2/A3 subtyping, CAP cycles and sequences, CAP rate overall, per NREM stage, per hour and per half of the night, A-phase indices and durations, B-phase duration, isolated A-phases, cycle variability, and coupling of A-phases with arousals, respiratory events and leg movements. A-phases and CAP sequences are drawn on the waveforms and hypnogram, and a CAP page is added to the PDF report.
+*   **Show / Remove OSA, PLM & CAP Markers** (Utilities): switch each group of analysis markers on or off; saved results (including batch results) can be shown again at any time.
+*   **PSG batch analysis** (Batch tab): run Respiratory/OSA, PLM and CAP analysis over many recordings, with auto-loaded scorings and optional channel overrides; writes per-recording results and one summary CSV.
+*   **Slow oscillation–spindle coupling**: mean vector length (MVL), phase-locking value (PLV) and phase consistency are added alongside PAC MI, gcPAC and ndPAC in AnalyseNidra outputs and the PDF report.
 
 ### 🌟 New in Version 1.19.0
 *   **Respiratory / OSA analysis (Utilities menu)** following the AASM Scoring Manual v3: apneas (obstructive / central / mixed), hypopneas with the 1A (3 % or arousal) or 1B (4 %) rule, RERAs, alternative-sensor fallback when the flow sensor fails, ODI, T90/T88, hypoxic burden, pulse-rate response, ventilatory burden, REM-related and positional OSA and Cheyne-Stokes breathing. Events are shown as markers on the waveforms and hypnogram, and a Respiratory page is added to the PDF report.

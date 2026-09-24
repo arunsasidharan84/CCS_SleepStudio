@@ -12,7 +12,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const VERSION: &str = "1.19.0";
+const VERSION: &str = "1.20.0";
 
 const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
 [core.json|-] [pac.json|-] [slow-waves.json|-] [spindles.json|-] [regional.csv|-] \
@@ -30,6 +30,9 @@ const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
 [--eeg C4-M1] [--chin ch] [--hypopnea-rule 3|4] [--auto-arousals yes|no] [--out <r.json>]\n\
    or: analyse-nidra --plm <recording.edf> [--scoring <s.json>] [--left ch] [--right ch] [--respiratory-json <r.json>] \
 [--standard aasm|wasm] [--eeg C4-M1] [--auto-arousals yes|no] [--onset-uv 8] [--offset-uv 2] [--out <p.json>]\n\
+   or: analyse-nidra --cap <recording.edf> --scoring <s.json> [--eeg C4-M1] [--respiratory-json <r.json>] \
+[--plm-json <p.json>] [--arousals prefer-manual|none] [--sensitivity conservative|standard|sensitive] \
+[--a-phases prefer-manual|manual|auto] [--out <c.json>]\n\
    or: analyse-nidra --list-signals <recording.edf>";
 
 #[derive(Debug)]
@@ -620,6 +623,61 @@ fn handle_plm_cli(args: Vec<OsString>) -> Result<()> {
     Ok(())
 }
 
+fn handle_cap_cli(args: Vec<OsString>) -> Result<()> {
+    let (edf, kv) = parse_kv(args, "--cap");
+    let edf = edf.context("usage: analyse-nidra --cap <recording.edf> --scoring s.json [--eeg C4-M1]")?;
+    let s = |k: &str| kv.get(k).cloned().filter(|v| !v.trim().is_empty());
+    let disabled = |v: &String| v.trim() == "-" || v.trim().eq_ignore_ascii_case("none");
+    let mut o = analyse_nidra::psg::cap::CapOptions {
+        scoring: s("scoring").map(PathBuf::from),
+        eeg: s("eeg").filter(|v| !disabled(v)).map(|v| split_channel_arg(&v)).unwrap_or_default(),
+        respiratory_json: s("respiratory-json").filter(|v| !disabled(v)).map(PathBuf::from),
+        plm_json: s("plm-json").filter(|v| !disabled(v)).map(PathBuf::from),
+        lights_off: s("lights-off-sec").and_then(|v| v.parse().ok()),
+        lights_on: s("lights-on-sec").and_then(|v| v.parse().ok()),
+        ..Default::default()
+    };
+    if let Some(m) = s("arousals") {
+        o.arousal_mode = m;
+    }
+    if let Some(v) = s("sensitivity") {
+        o.sensitivity = v;
+    }
+    if let Some(v) = s("a-phases") {
+        o.a_phase_source = v;
+    }
+    // Couple with saved respiratory / PLM results unless switched off.
+    if o.respiratory_json.is_none() && s("respiratory-json").is_none() {
+        let p = default_sidecar(&edf, kv.get("out-dir"), "_respiratory.json");
+        if p.exists() {
+            o.respiratory_json = Some(p);
+        }
+    }
+    if o.plm_json.is_none() && s("plm-json").is_none() {
+        let p = default_sidecar(&edf, kv.get("out-dir"), "_plm.json");
+        if p.exists() {
+            o.plm_json = Some(p);
+        }
+    }
+    let out = s("out").map(PathBuf::from).unwrap_or_else(|| default_sidecar(&edf, kv.get("out-dir"), "_cap.json"));
+    let started = Instant::now();
+    let report = analyse_nidra::psg::cap::analyse(&edf, &o)?;
+    println!("PROGRESS 0.95 Writing {}", out.display());
+    write_json_report(&report, &out)?;
+    for w in &report.warnings {
+        println!("WARNING {w}");
+    }
+    println!(
+        "CAP rate {:.1}% ({} sequences, A-index {:.1}/h)",
+        report.summary.get("CAP_rate").copied().unwrap_or(f64::NAN),
+        report.sequences.len(),
+        report.summary.get("A_index").copied().unwrap_or(f64::NAN)
+    );
+    println!("OUTPUT_CAP {}", out.display());
+    println!("PROGRESS 1.00 Done in {:.1}s", started.elapsed().as_secs_f64());
+    Ok(())
+}
+
 fn handle_apply_sleepgpt_cli(args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let mut scoring_path: Option<PathBuf> = None;
     let mut out_json: Option<PathBuf> = None;
@@ -707,6 +765,9 @@ fn main() -> Result<()> {
     }
     if raw_args.iter().any(|a| a == "--plm") {
         return handle_plm_cli(raw_args);
+    }
+    if raw_args.iter().any(|a| a == "--cap") {
+        return handle_cap_cli(raw_args);
     }
     if raw_args[0] == "--pops-debug" {
         // analyse-nidra --pops-debug <edf> <eeg> <ref|-> <out.tsv>

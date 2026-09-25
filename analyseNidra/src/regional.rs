@@ -528,8 +528,12 @@ pub fn write_csv(
     // dynamics plus the first five sleep cycles (without accs_ prefix).
     let stage_dyn_columns = stage_dynamics_columns();
     columns.extend(stage_dyn_columns.iter().cloned());
-    let mut writer =
-        BufWriter::new(File::create(path).with_context(|| format!("creating {}", path.display()))?);
+    // Write to a temporary file and rename it into place, so an interrupted
+    // run never leaves a header-only CSV that looks complete.
+    let tmp_path = path.with_extension("csv.partial");
+    let mut writer = BufWriter::new(
+        File::create(&tmp_path).with_context(|| format!("creating {}", tmp_path.display()))?,
+    );
     writeln!(writer, "{}", columns.join(","))?;
     for (region, row) in rows {
         let mut values = Vec::with_capacity(columns.len());
@@ -554,7 +558,45 @@ pub fn write_csv(
         }
         writeln!(writer, "{}", values.join(","))?;
     }
+    writer.flush()?;
+    drop(writer);
+    std::fs::rename(&tmp_path, path).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
+}
+
+/// Columns that must hold at least one value for an analysis to count as
+/// present in an existing regional CSV (used by `--skip-existing`).
+pub fn marker_columns(analysis: &str) -> &'static [&'static str] {
+    match analysis {
+        "core" => &["N1_Delta_PSD", "N2_Delta_PSD", "N3_Delta_PSD", "REM_Delta_PSD"],
+        "spindles" => &["sp_Count"],
+        "slow_waves" => &["sw_all_Count"],
+        "pac" => &["pac_all_max_MI"],
+        "nlg" => &["NLG_SW_NREM", "NLG_Sigma_NREM", "NLG_Alpha_NREM", "NLG_SW_W", "NLG_Sigma_W"],
+        _ => &[],
+    }
+}
+
+/// True when `path` is a regional CSV with at least one data row and a value
+/// for every requested analysis (an interrupted or older run is not complete).
+pub fn is_complete(path: &Path, analyses: &[&str]) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else { return false };
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    let Some(header) = lines.next() else { return false };
+    let columns: Vec<&str> = header.split(',').collect();
+    let rows: Vec<Vec<&str>> = lines.map(|l| l.split(',').collect()).collect();
+    if rows.is_empty() {
+        return false;
+    }
+    analyses.iter().all(|analysis| {
+        let wanted = marker_columns(analysis);
+        wanted.is_empty()
+            || wanted.iter().any(|name| {
+                columns.iter().position(|c| c == name).is_some_and(|i| {
+                    rows.iter().any(|r| r.get(i).is_some_and(|v| !v.trim().is_empty()))
+                })
+            })
+    })
 }
 
 #[cfg(test)]

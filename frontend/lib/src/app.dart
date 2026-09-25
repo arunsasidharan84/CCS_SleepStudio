@@ -15,6 +15,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'analyse_options.dart';
 import 'autoscore_command.dart';
 import 'batch_helpers.dart';
+import 'batch_pipeline.dart';
 import 'config_dialog.dart';
 import 'feature_config_dialog.dart';
 import 'detection_dialogs.dart';
@@ -92,8 +93,16 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   // SWA slider value (0–100). 100 = no smoothing, 0 = maximum smoothing.
   int _swaSlider = 100;
 
+  // Batch pipeline (EEG analysis) state
+  int _batchSection = 0;
+  bool _pipeStepAutoscore = false;
+  bool _pipeStepPreprocess = true;
+  bool _pipeStepFeatures = true;
+  bool _pipeStepCompile = true;
+  bool _pipelineUseCleaned = true;
+  bool _pipelineAutoscoreMissingOnly = true;
+
   // Batch Staging State
-  final List<String> _batchStagingFiles = [];
   String _batchStagingAlgorithm = kDefaultAutoscoreAlgorithm;
   String _batchStagingCorrection = kDefaultSequenceCorrection;
   final TextEditingController _batchStagingEegController =
@@ -106,10 +115,6 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       TextEditingController();
   final TextEditingController _batchStagingOutDirController =
       TextEditingController();
-  bool _batchStagingRecursive = true;
-  bool _batchStagingUseWildcard = false;
-  final TextEditingController _batchStagingWildcardController =
-      TextEditingController(text: '*.edf');
 
   // Batch AnalyseNidra State
   final List<Map<String, String>> _batchAnalysePairs = [];
@@ -129,11 +134,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   bool _batchAnalyseUseWildcard = false;
   bool _batchAnalyseAutoLoadScorings = true;
   bool _batchAnalyseSkipExisting = true;
-  bool _batchAnalyseAutoCollate = true;
   final TextEditingController _batchAnalyseWildcardController =
       TextEditingController(text: '*.edf');
 
-  // Batch PSG (OSA / PLM / CAP) State
+  // Batch PSG (OSA / PLM) and pipeline CAP state
   final List<Map<String, String>> _batchPsgPairs = [];
   bool _batchPsgRecursive = true;
   bool _batchPsgUseWildcard = false;
@@ -158,17 +162,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   Map<String, String> _batchAnalyseCustomRegionMap = {};
 
   // Batch Preprocessing State
-  final List<String> _batchPreprocessFiles = [];
   bool _batchPreprocessStimArtifact = true;
   bool _batchPreprocessDownsample = false;
   bool _batchPreprocessFilter = true;
   bool _batchPreprocessBadChannel = true;
   bool _batchPreprocessGedai = true;
   bool _batchPreprocessInterpolate = true;
-  bool _batchPreprocessRecursive = true;
-  bool _batchPreprocessUseWildcard = false;
-  final TextEditingController _batchPreprocessWildcardController =
-      TextEditingController(text: '*.edf');
   final TextEditingController _batchPreprocessStimF0Controller =
       TextEditingController();
   final TextEditingController _batchPreprocessSuffixController =
@@ -228,7 +227,6 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     _batchAnalyseEegController.dispose();
     _batchAnalyseRefController.dispose();
     _batchScoringPostfixController.dispose();
-    _batchStagingWildcardController.dispose();
     _batchAnalyseWildcardController.dispose();
     for (final c in [
       _batchPsgWildcardController,
@@ -240,7 +238,6 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       _batchPsgRightLegController,
       _batchPsgCapEegController,
       _batchPsgOutDirController,
-      _batchPreprocessWildcardController,
       _batchPreprocessStimF0Controller,
       _batchPreprocessSuffixController,
       _batchPreprocessOutDirController,
@@ -2291,13 +2288,24 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     if (files.isEmpty) return;
     final postfix = _batchScoringPostfixController.text.trim();
     setState(() {
+      final cleanedSuffix = '${_pipelineCleanedSuffix()}.edf'.toLowerCase();
+      final lower = files.map((f) => f.toLowerCase()).toSet();
       for (final f in files) {
         if (_batchAnalysePairs.any((p) => p['eegPath'] == f)) continue;
+        // A cleaned copy next to its original is an output of step 2, not a
+        // separate recording.
+        final fl = f.toLowerCase();
+        if (fl.endsWith(cleanedSuffix) &&
+            lower.contains('${fl.substring(0, fl.length - cleanedSuffix.length)}.edf')) {
+          continue;
+        }
+        final cleaned = _pipelineCleanedPathFor(f);
         _batchAnalysePairs.add({
           'eegPath': f,
           'scoringPath': _batchAnalyseAutoLoadScorings
               ? _findScoringForRecording(f, postfix)
               : '',
+          if (File(cleaned).existsSync()) 'cleanedPath': cleaned,
         });
       }
     });
@@ -2326,7 +2334,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             visualDensity: VisualDensity.compact,
             onChanged: (v) => onChanged(v ?? false),
           ),
-          Text(label, style: const TextStyle(fontSize: 13)),
+          Flexible(
+            child: Text(label, style: const TextStyle(fontSize: 13)),
+          ),
         ],
       ),
     );
@@ -2449,46 +2459,6 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
-  Future<void> _openBatchAutoscoreChannelSelector() async {
-    if (_batchStagingFiles.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please add recording files first to extract channels from the 1st recording.'),
-        ),
-      );
-      return;
-    }
-    final firstFile = _batchStagingFiles.first;
-    final available = await extractRecordingChannels(firstFile);
-    if (available.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Could not extract channels from ${_basename(firstFile)}. You can type channels manually.'),
-          ),
-        );
-      }
-      return;
-    }
-    final currentSelected = _batchStagingEegController.text
-        .split(',')
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
-    if (!mounted) return;
-    final selected = await showChannelSelectionDialog(
-      context: context,
-      title: 'Select EEG Channels for AutoscoreNidra',
-      recordingPath: firstFile,
-      availableChannels: available,
-      initialSelectedChannels: currentSelected,
-    );
-    if (selected != null && mounted) {
-      setState(() {
-        _batchStagingEegController.text = selected.join(',');
-      });
-    }
-  }
 
   void _runAnalyseNidraJobs(
     List<_AnalyseNidraJob> jobs,
@@ -2653,6 +2623,16 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           [];
     }
     if (paths.isEmpty) return;
+    final empty = await regionalCsvFilesWithoutData(paths);
+    paths = paths.where((p) => !empty.contains(p)).toList();
+    if (paths.isEmpty) {
+      _showTextDialog(
+        'Master sheet compilation',
+        'All ${empty.length} selected CSV files are empty (header only). '
+            'Re-run feature extraction with Resume ticked to rebuild them.',
+      );
+      return;
+    }
 
     final output = await FilePicker.saveFile(
       dialogTitle: 'Save AnalyseNidra master sheet',
@@ -2670,10 +2650,41 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       _setStatus(
         'Compiled ${paths.length} AnalyseNidra CSV files into ${_basename(outputPath)}',
       );
+      if (empty.isNotEmpty) {
+        _showTextDialog(
+          'Empty regional CSVs left out',
+          '${empty.length} file(s) had no data rows and were not compiled. '
+              'Re-run feature extraction with Resume ticked to rebuild them:\n\n'
+              '${empty.map(_basename).join('\n')}',
+        );
+      }
       await _openFile(outputPath);
     } catch (error) {
       _showTextDialog('Master sheet compilation failed', error.toString());
     }
+  }
+
+  /// Compiles every `*_analyse_regional.csv` in a folder (not recursive).
+  Future<void> _compileAnalyseNidraFolder() async {
+    final dir = await FilePicker.getDirectoryPath(
+      dialogTitle: 'Folder with AnalyseNidra regional CSV files',
+    );
+    if (dir == null) return;
+    final files = Directory(dir)
+        .listSync()
+        .whereType<File>()
+        .map((f) => f.path)
+        .where((p) => p.toLowerCase().endsWith('_analyse_regional.csv'))
+        .toList()
+      ..sort();
+    if (files.isEmpty) {
+      _showTextDialog(
+        'Master sheet compilation',
+        'No *_analyse_regional.csv files in $dir.',
+      );
+      return;
+    }
+    await _compileAnalyseNidraMasterSheet(files);
   }
 
   Future<void> _generateBatchPdfReports() async {
@@ -2770,46 +2781,6 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
-  void _executeBatchAutoScoring(
-    List<String> files,
-    Map<String, dynamic> settings,
-  ) {
-    final algorithm = settings['algorithm'] as String;
-    final correction = settings['sequence_correction'] as String;
-    final alpha = (settings['sleepgpt_alpha'] as num?)?.toDouble() ?? 0.1;
-    final ngram = (settings['sleepgpt_ngram'] as num?)?.toInt() ?? 30;
-    final outputDir = settings['output_dir'] as String?;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return BatchProgressDialog(
-          files: files,
-          algorithm: algorithm,
-          correction: correction,
-          sleepgptAlpha: alpha,
-          sleepgptNgram: ngram,
-          eegChannels: List<String>.from(settings['eeg'] as List? ?? const []),
-          refChannels: List<String>.from(settings['ref'] as List? ?? const []),
-          eogChannels: List<String>.from(settings['eog'] as List? ?? const []),
-          emgChannels: List<String>.from(settings['emg'] as List? ?? const []),
-          outputDir: outputDir,
-          onFinished: () {
-            _setStatus('Batch AutoscoreNidra finished');
-            // If the active file was one of the scored files, reload it
-            final active = _activePath;
-            if (active != null && files.contains(active)) {
-              _openRecordingPath(
-                active,
-                kind: active.split('.').last.toLowerCase(),
-              );
-            }
-          },
-        );
-      },
-    );
-  }
 
   Future<void> _openPreprocessDialog({bool stimArtifactOnly = false}) async {
     String? targetPath = _activePath;
@@ -6306,336 +6277,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     });
   }
 
-  void _executeBatchPreprocessing() {
-    if (_batchPreprocessFiles.isEmpty) {
-      _setStatus('Please select at least one recording for batch preprocessing.');
-      return;
-    }
-    final steps = <String>[];
-    if (_batchPreprocessStimArtifact) steps.add('stimartifact');
-    if (_batchPreprocessDownsample) steps.add('downsample');
-    if (_batchPreprocessFilter) steps.add('filter');
-    if (_batchPreprocessBadChannel) steps.add('badchannel');
-    if (_batchPreprocessGedai) steps.add('gedai');
-    if (_batchPreprocessInterpolate) steps.add('interpolate');
 
-    if (steps.isEmpty) {
-      _setStatus('Please select at least one preprocessing step.');
-      return;
-    }
-
-    final executable = detectAnalyseNidraExecutable();
-    final suffix = _batchPreprocessSuffixController.text.trim().isEmpty
-        ? (_batchPreprocessStimArtifact && steps.length == 1 ? '_stimclean' : '_clean')
-        : _batchPreprocessSuffixController.text.trim();
-    final outDir = _batchPreprocessOutDirController.text.trim().isEmpty
-        ? null
-        : _batchPreprocessOutDirController.text.trim();
-    final f0 = double.tryParse(_batchPreprocessStimF0Controller.text.trim());
-
-    final jobs = _batchPreprocessFiles.map((file) {
-      final args = <String>[
-        '--preprocess',
-        file,
-        '--steps',
-        steps.join(','),
-        '--suffix',
-        suffix,
-      ];
-      if (outDir != null) args.addAll(['--out-dir', outDir]);
-      if (_batchPreprocessStimArtifact && f0 != null && f0 > 0) {
-        args.addAll(['--stim-f0', f0.toString()]);
-      }
-      return _CommandJob(
-        label: _basename(file),
-        executable: executable,
-        sourcePath: file,
-        outputDir: outDir,
-        arguments: args,
-      );
-    }).toList();
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _CommandBatchProgressDialog(
-        title: 'Batch Preprocessing',
-        jobs: jobs,
-        onFinished: (failed) {
-          _setStatus(
-            failed == 0
-                ? 'Batch preprocessing finished for ${jobs.length} recording(s)'
-                : 'Batch preprocessing finished: ${jobs.length - failed} succeeded, $failed failed',
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildBatchPreprocessingCard() {
-    final anyStep = _batchPreprocessStimArtifact ||
-        _batchPreprocessDownsample ||
-        _batchPreprocessFilter ||
-        _batchPreprocessBadChannel ||
-        _batchPreprocessGedai ||
-        _batchPreprocessInterpolate;
-
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: const BorderSide(color: Color(0xFFD0D0D0)),
-      ),
-      color: Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Row(
-              children: [
-                Icon(Icons.cleaning_services, color: Colors.purple),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Batch Preprocessing & Artefact Removal (DBS / ccstools / GEDAI)',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ],
-            ),
-            const Divider(height: 24),
-            const Text(
-              'Selected Recordings to Preprocess:',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Container(
-              height: 140,
-              decoration: BoxDecoration(
-                border: Border.all(color: const Color(0xFFD0D0D0)),
-                borderRadius: BorderRadius.circular(4),
-                color: const Color(0xFFF9F9F9),
-              ),
-              child: _batchPreprocessFiles.isEmpty
-                  ? const Center(child: Text('No recordings selected'))
-                  : ListView.builder(
-                      itemCount: _batchPreprocessFiles.length,
-                      itemBuilder: (context, index) {
-                        final file = _batchPreprocessFiles[index];
-                        return ListTile(
-                          dense: true,
-                          title: Text(_basename(file)),
-                          subtitle: Text(file),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.close, size: 16, color: Colors.red),
-                            tooltip: 'Remove',
-                            onPressed: () => setState(() => _batchPreprocessFiles.removeAt(index)),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-            const SizedBox(height: 8),
-            _batchSourceControls(
-              onAddFiles: () async {
-                final files = await _collectBatchRecordings(
-                  fromFolder: false,
-                  extensions: _batchAutoscoreExtensions,
-                  recursive: _batchPreprocessRecursive,
-                  useWildcard: _batchPreprocessUseWildcard,
-                  pattern: _batchPreprocessWildcardController.text,
-                  title: 'Select recordings for batch preprocessing',
-                );
-                if (mounted) {
-                  setState(() {
-                    for (final f in files) {
-                      if (!_batchPreprocessFiles.contains(f)) _batchPreprocessFiles.add(f);
-                    }
-                  });
-                }
-              },
-              onAddFolder: () async {
-                final files = await _collectBatchRecordings(
-                  fromFolder: true,
-                  extensions: _batchAutoscoreExtensions,
-                  recursive: _batchPreprocessRecursive,
-                  useWildcard: _batchPreprocessUseWildcard,
-                  pattern: _batchPreprocessWildcardController.text,
-                  title: 'Select a folder of recordings for batch preprocessing',
-                );
-                if (mounted) {
-                  setState(() {
-                    for (final f in files) {
-                      if (!_batchPreprocessFiles.contains(f)) _batchPreprocessFiles.add(f);
-                    }
-                  });
-                }
-              },
-              hasItems: _batchPreprocessFiles.isNotEmpty,
-              onSelectDeselect: () async {
-                final selected = await showBatchFileSubSelectionDialog(
-                  context: context,
-                  title: 'Batch Preprocessing File Selection',
-                  files: List<String>.from(_batchPreprocessFiles),
-                );
-                if (selected != null && mounted) {
-                  setState(() {
-                    _batchPreprocessFiles
-                      ..clear()
-                      ..addAll(selected);
-                  });
-                }
-              },
-              onClear: () => setState(_batchPreprocessFiles.clear),
-              recursive: _batchPreprocessRecursive,
-              onRecursive: (v) => setState(() => _batchPreprocessRecursive = v),
-              useWildcard: _batchPreprocessUseWildcard,
-              onWildcard: (v) => setState(() => _batchPreprocessUseWildcard = v),
-              wildcardController: _batchPreprocessWildcardController,
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Pipeline Steps to Apply:',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            // Stimulation Artefact Removal
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.amber.shade50.withOpacity(0.6),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: Colors.amber.shade300),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Checkbox(
-                        value: _batchPreprocessStimArtifact,
-                        onChanged: (v) => setState(() {
-                          _batchPreprocessStimArtifact = v ?? false;
-                          if (_batchPreprocessStimArtifact && !_batchPreprocessGedai) {
-                            if (_batchPreprocessSuffixController.text == '_clean') {
-                              _batchPreprocessSuffixController.text = '_stimclean';
-                            }
-                          }
-                        }),
-                      ),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Auto electric stim artefact removal (DBS / neurostimulator)',
-                              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
-                            ),
-                            Text(
-                              'Continuous file — adaptive harmonic comb filter (performed on the continuous signal, NOT on epochs as in GEDAI)',
-                              style: TextStyle(fontSize: 11, color: Colors.black87),
-                            ),
-                          ],
-                        ),
-                      ),
-                      SizedBox(
-                        width: 170,
-                        child: TextFormField(
-                          controller: _batchPreprocessStimF0Controller,
-                          decoration: const InputDecoration(
-                            labelText: 'Artefact Freq (Hz)',
-                            hintText: 'blank = auto-detect',
-                            isDense: true,
-                            border: OutlineInputBorder(),
-                            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                          ),
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 12,
-              runSpacing: 4,
-              children: [
-                _batchOptionCheckbox('Downsample to 250 Hz', _batchPreprocessDownsample, (v) => setState(() => _batchPreprocessDownsample = v)),
-                _batchOptionCheckbox('Bandpass & Notch Filter (0.5–40 Hz, 50 Hz)', _batchPreprocessFilter, (v) => setState(() => _batchPreprocessFilter = v)),
-                _batchOptionCheckbox('Bad Channel Detection (RANSAC)', _batchPreprocessBadChannel, (v) => setState(() => _batchPreprocessBadChannel = v)),
-                _batchOptionCheckbox('GEDAI Artifact Denoising (Epoch Leadfield GED)', _batchPreprocessGedai, (v) => setState(() => _batchPreprocessGedai = v)),
-                _batchOptionCheckbox('Interpolate Bad Channels (Spherical Spline)', _batchPreprocessInterpolate, (v) => setState(() => _batchPreprocessInterpolate = v)),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                SizedBox(
-                  width: 220,
-                  child: TextFormField(
-                    controller: _batchPreprocessSuffixController,
-                    decoration: const InputDecoration(
-                      labelText: 'Output Filename Suffix',
-                      hintText: '_clean or _stimclean',
-                      isDense: true,
-                      border: OutlineInputBorder(),
-                    ),
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextFormField(
-                    controller: _batchPreprocessOutDirController,
-                    decoration: const InputDecoration(
-                      labelText: 'Output Folder (optional — default: same as source)',
-                      hintText: 'Leave blank to save next to source recording',
-                      isDense: true,
-                      border: OutlineInputBorder(),
-                    ),
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                IconButton(
-                  icon: const Icon(Icons.folder_open),
-                  tooltip: 'Select Output Directory',
-                  onPressed: () async {
-                    final dir = await FilePicker.getDirectoryPath(
-                      dialogTitle: 'Select Output Folder for Cleaned Recordings',
-                    );
-                    if (dir != null) {
-                      setState(() => _batchPreprocessOutDirController.text = dir);
-                    }
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              height: 40,
-              child: ElevatedButton.icon(
-                icon: const Icon(Icons.play_arrow),
-                label: const Text('Run Batch Preprocessing', style: TextStyle(fontWeight: FontWeight.bold)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.purple.shade700,
-                  foregroundColor: Colors.white,
-                ),
-                onPressed: _batchPreprocessFiles.isEmpty || !anyStep ? null : _executeBatchPreprocessing,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Widget _buildBatchPsgCard() {
-    final anyAnalysis = _batchPsgRespiratory || _batchPsgPlm || _batchPsgCap;
+    final anyAnalysis = _batchPsgRespiratory || _batchPsgPlm;
     return Card(
       elevation: 0,
       shape: RoundedRectangleBorder(
@@ -6654,16 +6299,35 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'PSG Batch Analysis — Respiratory (OSA), PLM and CAP',
+                    'Polygraphy — Respiratory (OSA) and PLM',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
             ),
             const Divider(height: 24),
-            const Text(
-              'Recordings and their scoring files (a hypnogram is needed for AHI/PLMS indices and for CAP):',
-              style: TextStyle(fontWeight: FontWeight.bold),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Recordings and their scoring files (a hypnogram is needed for AHI/PLMS indices):',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: _batchAnalysePairs.isEmpty
+                      ? null
+                      : () => setState(() {
+                          for (final p in _batchAnalysePairs) {
+                            final eeg = p['eegPath'] ?? '';
+                            if (eeg.isEmpty || _batchPsgPairs.any((q) => q['eegPath'] == eeg)) continue;
+                            _batchPsgPairs.add({'eegPath': eeg, 'scoringPath': p['scoringPath'] ?? ''});
+                          }
+                        }),
+                  icon: const Icon(Icons.playlist_add, size: 16),
+                  label: const Text('Use EEG pipeline recordings'),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             Container(
@@ -6835,27 +6499,6 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                     onChanged: (v) => setState(() => _batchPsgPlmStandard = v ?? 'aasm'),
                   ),
                 ),
-                _batchOptionCheckbox('Cyclic alternating pattern', _batchPsgCap,
-                    (v) => setState(() => _batchPsgCap = v)),
-                SizedBox(
-                  width: 190,
-                  child: DropdownButtonFormField<String>(
-                    value: _batchPsgCapSensitivity,
-                    isExpanded: true,
-                    isDense: true,
-                    decoration: const InputDecoration(
-                      labelText: 'CAP detector',
-                      isDense: true,
-                      border: OutlineInputBorder(),
-                    ),
-                    items: const [
-                      DropdownMenuItem(value: 'conservative', child: Text('Conservative')),
-                      DropdownMenuItem(value: 'standard', child: Text('Standard')),
-                      DropdownMenuItem(value: 'sensitive', child: Text('Sensitive')),
-                    ],
-                    onChanged: (v) => setState(() => _batchPsgCapSensitivity = v ?? 'standard'),
-                  ),
-                ),
               ],
             ),
             const SizedBox(height: 12),
@@ -6875,7 +6518,6 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 _batchPsgField(_batchPsgSpo2Controller, 'SpO₂', 'Select SpO2 channel'),
                 _batchPsgField(_batchPsgLeftLegController, 'Left leg EMG', 'Select left tibialis channel'),
                 _batchPsgField(_batchPsgRightLegController, 'Right leg EMG', 'Select right tibialis channel'),
-                _batchPsgField(_batchPsgCapEegController, 'CAP EEG', 'Select EEG channel for CAP'),
               ],
             ),
             const SizedBox(height: 12),
@@ -6939,7 +6581,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final settings = _BatchPsgSettings(
       respiratory: _batchPsgRespiratory,
       plm: _batchPsgPlm,
-      cap: _batchPsgCap,
+      cap: false,
       hypopneaRule: _batchPsgHypopneaRule,
       plmStandard: _batchPsgPlmStandard,
       capSensitivity: _batchPsgCapSensitivity,
@@ -6961,152 +6603,593 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
+  // ─── Batch tab: EEG analysis pipeline, polygraphy, scoring comparison ─────
+
+  String? get _pipelineFirstRecording {
+    for (final p in _batchAnalysePairs) {
+      final e = p['eegPath'] ?? '';
+      if (e.isNotEmpty) return e;
+    }
+    return null;
+  }
+
+  String? _pipelineOutDir() {
+    final t = _batchAnalyseOutDirController.text.trim();
+    return t.isEmpty ? null : t;
+  }
+
+  String? _pipelineCleanedDir() {
+    final t = _batchPreprocessOutDirController.text.trim();
+    return t.isEmpty ? _pipelineOutDir() : t;
+  }
+
+  String _pipelineCleanedSuffix() {
+    final t = _batchPreprocessSuffixController.text.trim();
+    return t.isEmpty ? '_clean' : t;
+  }
+
+  /// Cleaned EDF the preprocessing step writes (or wrote) for `source`.
+  String _pipelineCleanedPathFor(String source) {
+    var stem = _basename(source);
+    final dot = stem.lastIndexOf('.');
+    if (dot > 0) stem = stem.substring(0, dot);
+    final dir = _pipelineCleanedDir() ?? File(source).parent.path;
+    return '$dir${Platform.pathSeparator}$stem${_pipelineCleanedSuffix()}.edf';
+  }
+
+  List<String> _pipelinePreprocessSteps() => [
+    if (_batchPreprocessStimArtifact) 'stimartifact',
+    if (_batchPreprocessDownsample) 'downsample',
+    if (_batchPreprocessFilter) 'filter',
+    if (_batchPreprocessBadChannel) 'badchannel',
+    if (_batchPreprocessGedai) 'gedai',
+    if (_batchPreprocessInterpolate) 'interpolate',
+  ];
+
+  /// Runs the selected EEG pipeline steps, in order, for every recording in
+  /// the shared list; each step's output feeds the next one.
+  void _runEegPipeline(Set<String> selected) {
+    if (!isAnalyseNidraAvailable()) {
+      _showTextDialog('Engine not found', 'The native analyse-nidra engine was not found beside the application.');
+      return;
+    }
+    final pairs = _batchAnalysePairs.where((p) => (p['eegPath'] ?? '').isNotEmpty).toList();
+    if (pairs.isEmpty) {
+      _setStatus('Add recordings to the pipeline first.');
+      return;
+    }
+    final chans = _parseChannelList(_batchAnalyseEegController.text);
+    final refs = _parseChannelList(_batchAnalyseRefController.text);
+    final outDir = _pipelineOutDir();
+    final problems = <String>[];
+    if (selected.contains('preprocess') && _pipelinePreprocessSteps().isEmpty) {
+      problems.add('Choose at least one preprocessing step (step 2).');
+    }
+    if (selected.contains('features')) {
+      if (chans.isEmpty && _batchAnalyseOptions.analyses.isNotEmpty) {
+        problems.add('Choose the EEG channels to analyse (Recordings & EEG channels).');
+      }
+      if (_batchAnalyseOptions.analyses.isEmpty && !_batchPsgCap) {
+        problems.add('Choose at least one feature to extract (step 3).');
+      }
+      final missing = pairs.where((p) => (p['scoringPath'] ?? '').isEmpty).length;
+      if (missing == pairs.length && !selected.contains('autoscore')) {
+        problems.add(
+          'None of the recordings has a scoring. Choose their scoring files, or include step 1 (Autoscore) in the run.',
+        );
+      } else if (missing > 0 && !selected.contains('autoscore')) {
+        _setStatus('$missing recording(s) without a scoring will be skipped in step 3.');
+      }
+    }
+    if (problems.isNotEmpty) {
+      _showTextDialog('Cannot start the pipeline', problems.join('\n\n'));
+      return;
+    }
+
+    final recordings = [
+      for (final p in pairs)
+        PipelineRecording(
+          source: p['eegPath']!,
+          scoring: p['scoringPath'] ?? '',
+          cleaned: (p['cleanedPath'] ?? '').isEmpty ? null : p['cleanedPath'],
+        ),
+    ];
+    final resume = _batchAnalyseSkipExisting;
+    final steps = <PipelineStep>[];
+
+    if (selected.contains('autoscore') && !buildLite) {
+      final algorithm = canonicalAutoscoreAlgorithm(_batchStagingAlgorithm);
+      final scoringDir = _batchStagingOutDirController.text.trim().isEmpty
+          ? null
+          : _batchStagingOutDirController.text.trim();
+      steps.add(
+        PipelineStep(
+          key: 'autoscore',
+          title: '1 Autoscore',
+          build: (r) {
+            if (_pipelineAutoscoreMissingOnly && r.scoring.isNotEmpty && File(r.scoring).existsSync()) {
+              throw PipelineSkip('already scored (${_basename(r.scoring)})', reused: true);
+            }
+            if (!analyseNidraReadsNatively(r.source)) {
+              throw PipelineSkip('convert ${r.name} to EDF first (Utilities → EEG Utilities)');
+            }
+            final expected = nativeStageOutputPath(
+              r.source,
+              algorithm,
+              sequenceCorrection: _batchStagingCorrection,
+              outDir: scoringDir,
+            );
+            if (resume && File(expected).existsSync()) {
+              r.scoring = expected;
+              throw PipelineSkip('scoring exists (${_basename(expected)})', reused: true);
+            }
+            return buildNativeStageArgs(
+              inputPath: r.source,
+              algorithm: algorithm,
+              sequenceCorrection: _batchStagingCorrection,
+              sleepgptAlpha: 0.1,
+              sleepgptNgram: 30,
+              eeg: _parseChannelList(_batchStagingEegController.text),
+              ref: _parseChannelList(_batchStagingRefController.text),
+              eog: _parseChannelList(_batchStagingEogController.text),
+              emg: _parseChannelList(_batchStagingEmgController.text),
+              outDir: scoringDir,
+            );
+          },
+          onSuccess: (r, log) {
+            final out = pipelineOutputFromLog(log, 'SCORING');
+            if (out != null && out.isNotEmpty) r.scoring = out;
+          },
+        ),
+      );
+    }
+
+    if (selected.contains('preprocess')) {
+      final preSteps = _pipelinePreprocessSteps();
+      final f0 = double.tryParse(_batchPreprocessStimF0Controller.text.trim());
+      final keep = <String>[...chans, for (final r in refs) if (!chans.contains(r)) r];
+      steps.add(
+        PipelineStep(
+          key: 'preprocess',
+          title: '2 Preprocess',
+          build: (r) {
+            if (!r.source.toLowerCase().endsWith('.edf')) {
+              throw PipelineSkip('preprocessing needs an EDF recording');
+            }
+            final target = _pipelineCleanedPathFor(r.source);
+            if (resume && File(target).existsSync()) {
+              r.cleaned = target;
+              throw PipelineSkip('cleaned file exists (${_basename(target)})', reused: true);
+            }
+            final dir = _pipelineCleanedDir();
+            return [
+              '--preprocess',
+              r.source,
+              '--steps',
+              preSteps.join(','),
+              '--suffix',
+              _pipelineCleanedSuffix(),
+              if (keep.isNotEmpty) ...['--eeg-channels', keep.join(',')],
+              if (dir != null) ...['--out-dir', dir],
+              if (_batchPreprocessStimArtifact && f0 != null && f0 > 0) ...['--stim-f0', f0.toString()],
+            ];
+          },
+          onSuccess: (r, log) {
+            final out = pipelineOutputFromLog(log, 'EDF');
+            r.cleaned = (out != null && out.isNotEmpty) ? out : _pipelineCleanedPathFor(r.source);
+          },
+        ),
+      );
+    }
+
+    String featureInput(PipelineRecording r) {
+      final cleaned = r.cleaned;
+      if (_pipelineUseCleaned && cleaned != null && File(cleaned).existsSync()) return cleaned;
+      return r.source;
+    }
+
+    if (selected.contains('features')) {
+      final regionMapJson = (!_batchAnalysePerChannel && _batchAnalyseCustomRegionMap.isNotEmpty)
+          ? jsonEncode(_batchAnalyseCustomRegionMap)
+          : null;
+      if (_batchAnalyseOptions.analyses.isNotEmpty) {
+        steps.add(
+          PipelineStep(
+            key: 'features',
+            title: '3 Features',
+            build: (r) {
+              if (r.scoring.isEmpty || !File(r.scoring).existsSync()) {
+                throw PipelineSkip('no scoring file');
+              }
+              final input = featureInput(r);
+              return _analyseNidraArguments(
+                _AnalyseNidraJob(edfPath: input, scoringPath: r.scoring, mappedScoringPath: r.scoring),
+                chans,
+                refs,
+                outputDir: outDir,
+                perChannel: _batchAnalysePerChannel,
+                regionMapJson: regionMapJson,
+                options: _batchAnalyseOptions,
+                skipExisting: resume,
+              );
+            },
+            onSuccess: (r, log) {
+              r.regional = pipelineOutputFromLog(log, 'REGIONAL') ??
+                  (() {
+                    final input = featureInput(r);
+                    final stem = _basename(input).replaceAll(RegExp(r'\.[^.]+$'), '');
+                    final dir = outDir ?? File(input).parent.path;
+                    return '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
+                  })();
+            },
+          ),
+        );
+      }
+      if (_batchPsgCap) {
+        final capEeg = _batchPsgCapEegController.text.trim();
+        steps.add(
+          PipelineStep(
+            key: 'cap',
+            title: '3 CAP',
+            build: (r) {
+              if (r.scoring.isEmpty || !File(r.scoring).existsSync()) {
+                throw PipelineSkip('no scoring file');
+              }
+              final input = featureInput(r);
+              return [
+                '--cap',
+                input,
+                '--scoring',
+                r.scoring,
+                '--sensitivity',
+                _batchPsgCapSensitivity,
+                if (capEeg.isNotEmpty) ...['--eeg', capEeg],
+                if (outDir != null) ...['--out-dir', outDir],
+                // Name the result after the original recording so the
+                // viewer finds it even when CAP ran on the cleaned copy.
+                '--out',
+                '${outDir ?? File(r.source).parent.path}${Platform.pathSeparator}'
+                    '${_basename(r.source).replaceAll(RegExp(r'\.[^.]+$'), '')}_cap.json',
+              ];
+            },
+          ),
+        );
+      }
+    }
+
+    Future<String?> Function(List<PipelineRecording>)? finalize;
+    if (selected.contains('compile')) {
+      finalize = (recs) async {
+        final files = <String>[];
+        for (final r in recs) {
+          var path = r.regional;
+          if (path == null) {
+            final input = featureInput(r);
+            final stem = _basename(input).replaceAll(RegExp(r'\.[^.]+$'), '');
+            final dir = outDir ?? File(input).parent.path;
+            path = '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
+          }
+          if (File(path).existsSync()) files.add(path);
+        }
+        if (files.isEmpty) return 'No regional CSV files to compile.';
+        final empty = await regionalCsvFilesWithoutData(files);
+        final usable = files.where((f) => !empty.contains(f)).toList();
+        if (usable.isEmpty) return 'All regional CSV files are empty; re-run step 3.';
+        final targetDir = outDir ?? File(recs.first.source).parent.path;
+        final master = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
+        await File(master).writeAsString(await compileRegionalCsvFiles(usable));
+        if (mounted) setState(() => _lastAnalyseRegionalFiles = usable);
+        return 'Compiled ${usable.length} recording(s) into ${_basename(master)}'
+            '${empty.isEmpty ? '' : ' (${empty.length} empty CSV(s) left out: ${empty.map(_basename).join(', ')})'}';
+      };
+    }
+
+    if (steps.isEmpty && finalize == null) {
+      _setStatus('Nothing to run: select at least one step.');
+      return;
+    }
+    final logFolder = outDir ?? File(recordings.first.source).parent.path;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PipelineRunDialog(
+        title: 'EEG analysis pipeline — ${recordings.length} recording(s)',
+        executable: detectAnalyseNidraExecutable(),
+        recordings: recordings,
+        steps: steps,
+        logFolder: logFolder,
+        finalize: finalize,
+        onFinished: (recs, failed) {
+          if (!mounted) return;
+          setState(() {
+            for (final r in recs) {
+              final pair = _batchAnalysePairs.firstWhere(
+                (p) => p['eegPath'] == r.source,
+                orElse: () => <String, String>{},
+              );
+              if (pair.isEmpty) continue;
+              if (r.scoring.isNotEmpty) pair['scoringPath'] = r.scoring;
+              if (r.cleaned != null) pair['cleanedPath'] = r.cleaned!;
+              if (r.regional != null) pair['regionalPath'] = r.regional!;
+            }
+            final regionals = [
+              for (final r in recs)
+                if (r.regional != null && File(r.regional!).existsSync()) r.regional!,
+            ];
+            if (regionals.isNotEmpty) _lastAnalyseRegionalFiles = regionals;
+          });
+          _setStatus(
+            failed == 0
+                ? 'Pipeline finished for ${recs.length} recording(s)'
+                : 'Pipeline finished with $failed failed step(s) — see the logs',
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildBatchProcessingTab() {
-    return LayoutBuilder(
-      builder: (context, constraints) => SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: SizedBox(
-            width: math.max(1080, constraints.maxWidth - 32),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    const sections = [
+      (Icons.account_tree_outlined, 'EEG analysis pipeline'),
+      (Icons.monitor_heart_outlined, 'Polygraphy: OSA & PLM'),
+      (Icons.compare_arrows, 'Scoring comparison'),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          color: Colors.white,
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
               children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                // Left Column: Batch Auto-Scoring
-                if (!buildLite) ...[
-                  Expanded(
-                    child: Card(
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        side: const BorderSide(color: Color(0xFFD0D0D0)),
+                SegmentedButton<int>(
+                  segments: [
+                    for (var i = 0; i < sections.length; i++)
+                      ButtonSegment<int>(
+                        value: i,
+                        icon: Icon(sections[i].$1, size: 18),
+                        label: Text(sections[i].$2),
                       ),
-                      color: Colors.white,
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Row(
-                              children: [
-                                Icon(Icons.psychology, color: Colors.purple),
-                                SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    'AutoscoreNidra — Batch Automated Sleep Scoring',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const Divider(height: 24),
-                            const Text(
-                              'Selected Recording Files (EDF/EEG/VHDR/ORB/EBM/MAT/R09):',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                            const SizedBox(height: 8),
-                            Container(
-                              height: 150,
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: const Color(0xFFD0D0D0),
-                                ),
-                                borderRadius: BorderRadius.circular(4),
-                                color: const Color(0xFFF9F9F9),
-                              ),
-                              child: _batchStagingFiles.isEmpty
-                                  ? const Center(
-                                      child: Text('No files selected'),
-                                    )
-                                  : ListView.builder(
-                                      itemCount: _batchStagingFiles.length,
-                                      itemBuilder: (context, index) {
-                                        final f = _batchStagingFiles[index];
-                                        return ListTile(
-                                          dense: true,
-                                          title: Text(_basename(f)),
-                                          subtitle: Text(f),
-                                          trailing: IconButton(
-                                            icon: const Icon(
-                                              Icons.delete,
-                                              size: 16,
-                                              color: Colors.red,
-                                            ),
-                                            onPressed: () {
-                                              setState(() {
-                                                _batchStagingFiles.removeAt(
-                                                  index,
-                                                );
-                                              });
-                                            },
-                                          ),
-                                        );
-                                      },
-                                    ),
-                            ),
-                            const SizedBox(height: 8),
-                            _batchSourceControls(
-                              onAddFiles: () async {
-                                final files = await _collectBatchRecordings(
-                                  fromFolder: false,
-                                  extensions: _batchAutoscoreExtensions,
-                                  recursive: _batchStagingRecursive,
-                                  useWildcard: _batchStagingUseWildcard,
-                                  pattern: _batchStagingWildcardController.text,
-                                  title: 'Select recordings for batch AutoscoreNidra',
-                                );
-                                if (files.isEmpty || !mounted) return;
-                                setState(() {
-                                  for (final f in files) {
-                                    if (!_batchStagingFiles.contains(f)) _batchStagingFiles.add(f);
-                                  }
-                                });
-                              },
-                              onAddFolder: () async {
-                                final files = await _collectBatchRecordings(
-                                  fromFolder: true,
-                                  extensions: _batchAutoscoreExtensions,
-                                  recursive: _batchStagingRecursive,
-                                  useWildcard: _batchStagingUseWildcard,
-                                  pattern: _batchStagingWildcardController.text,
-                                  title: 'Select a folder of recordings for batch AutoscoreNidra',
-                                );
-                                if (files.isEmpty || !mounted) return;
-                                setState(() {
-                                  for (final f in files) {
-                                    if (!_batchStagingFiles.contains(f)) _batchStagingFiles.add(f);
-                                  }
-                                });
-                              },
-                              hasItems: _batchStagingFiles.isNotEmpty,
-                              onSelectDeselect: () async {
-                                final selected = await showBatchFileSubSelectionDialog(
-                                  context: context,
-                                  title: 'Batch Autoscore File Selection',
-                                  files: List<String>.from(_batchStagingFiles),
-                                );
-                                if (selected != null && mounted) {
-                                  setState(() {
-                                    _batchStagingFiles
-                                      ..clear()
-                                      ..addAll(selected);
-                                  });
-                                }
-                              },
-                              onClear: () => setState(_batchStagingFiles.clear),
-                              recursive: _batchStagingRecursive,
-                              onRecursive: (v) => setState(() => _batchStagingRecursive = v),
-                              useWildcard: _batchStagingUseWildcard,
-                              onWildcard: (v) => setState(() => _batchStagingUseWildcard = v),
-                              wildcardController: _batchStagingWildcardController,
-                            ),
-                            const SizedBox(height: 16),
+                  ],
+                  selected: {_batchSection},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (s) => setState(() => _batchSection = s.first),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1240),
+                child: switch (_batchSection) {
+                  0 => _buildEegPipelineSection(),
+                  1 => _buildBatchPsgCard(),
+                  _ => _buildBatchComparisonCard(),
+                },
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEegPipelineSection() {
+    final includes = <(String, String, bool, ValueChanged<bool>)>[
+      if (!buildLite)
+        ('autoscore', '1  Autoscore', _pipeStepAutoscore, (v) => setState(() => _pipeStepAutoscore = v)),
+      ('preprocess', '2  Preprocess', _pipeStepPreprocess, (v) => setState(() => _pipeStepPreprocess = v)),
+      ('features', '3  Extract features', _pipeStepFeatures, (v) => setState(() => _pipeStepFeatures = v)),
+      ('compile', '4  Compile', _pipeStepCompile, (v) => setState(() => _pipeStepCompile = v)),
+    ];
+    final selected = {for (final i in includes) if (i.$3) i.$1};
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _pipelineCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Run the steps in order for every recording. Each step uses the output of the one before it: '
+                'the scoring from step 1 maps features to sleep stages, and the cleaned EEG from step 2 is analysed in step 3.',
+                style: TextStyle(fontSize: 12.5, color: Colors.black87),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 4,
+                runSpacing: 6,
+                children: [
+                  for (var i = 0; i < includes.length; i++) ...[
+                    FilterChip(
+                      label: Text(includes[i].$2),
+                      selected: includes[i].$3,
+                      onSelected: includes[i].$4,
+                    ),
+                    if (i < includes.length - 1) const Icon(Icons.arrow_forward, size: 16, color: Colors.grey),
+                  ],
+                  const SizedBox(width: 16),
+                  _batchOptionCheckbox(
+                    'Resume (reuse finished outputs)',
+                    _batchAnalyseSkipExisting,
+                    (v) => setState(() => _batchAnalyseSkipExisting = v),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 42,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.indigo,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: _batchAnalysePairs.isEmpty || selected.isEmpty ? null : () => _runEegPipeline(selected),
+                  icon: const Icon(Icons.play_arrow),
+                  label: Text(
+                    selected.isEmpty
+                        ? 'Select the steps to run'
+                        : 'Run ${selected.length == 1 ? 'the selected step' : 'the ${selected.length} selected steps in sequence'} '
+                              'for ${_batchAnalysePairs.length} recording(s)',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _pipelineStepCard(
+          number: 0,
+          title: 'Recordings & EEG channels',
+          subtitle: _batchAnalysePairs.isEmpty
+              ? 'Add the recordings; their scorings are found automatically'
+              : '${_batchAnalysePairs.length} recording(s) · '
+                    '${_batchAnalysePairs.where((p) => (p['scoringPath'] ?? '').isNotEmpty).length} scored · '
+                    'EEG ${_batchAnalyseEegController.text.trim().isEmpty ? 'not chosen' : _batchAnalyseEegController.text.trim()}',
+          initiallyExpanded: true,
+          body: _buildPipelineRecordingsPanel(),
+        ),
+        if (!buildLite)
+        _pipelineStepCard(
+          number: 1,
+          title: 'Autoscore',
+          subtitle: 'Sleep staging with ${autoscoreAlgorithmLabel(_batchStagingAlgorithm)}'
+              '${_batchStagingCorrection == 'sleepgpt' ? ' + SleepGPT' : ''}'
+              '${_pipelineAutoscoreMissingOnly ? ', only for recordings without a scoring' : ''}',
+          stepKey: 'autoscore',
+          included: _pipeStepAutoscore,
+          onIncluded: (v) => setState(() => _pipeStepAutoscore = v),
+          initiallyExpanded: true,
+          body: _buildPipelineAutoscoreSettings(),
+        ),
+        _pipelineStepCard(
+          number: 2,
+          title: 'Preprocess',
+          subtitle: 'Stimulation artefact removal on the continuous signal, then 30-s epoch cleaning '
+              '(${_pipelinePreprocessSteps().isEmpty ? 'no steps chosen' : _pipelinePreprocessSteps().join(', ')})',
+          stepKey: 'preprocess',
+          included: _pipeStepPreprocess,
+          onIncluded: (v) => setState(() => _pipeStepPreprocess = v),
+          body: _buildPipelinePreprocessSettings(),
+        ),
+        _pipelineStepCard(
+          number: 3,
+          title: 'Extract features',
+          subtitle: '${_batchAnalyseOptions.summary}${_batchPsgCap ? ', CAP' : ''} — '
+              '${_pipelineUseCleaned ? 'on the cleaned EEG when available' : 'on the original recordings'}, mapped to sleep stages',
+          stepKey: 'features',
+          included: _pipeStepFeatures,
+          onIncluded: (v) => setState(() => _pipeStepFeatures = v),
+          body: _buildPipelineFeatureSettings(),
+        ),
+        _pipelineStepCard(
+          number: 4,
+          title: 'Compile features',
+          subtitle: 'One master sheet across recordings (AnalyseNidra_master_sheet.csv) and batch PDF reports',
+          stepKey: 'compile',
+          included: _pipeStepCompile,
+          onIncluded: (v) => setState(() => _pipeStepCompile = v),
+          body: _buildPipelineCompileSettings(),
+        ),
+      ],
+    );
+  }
+
+  Widget _pipelineCard({required Widget child}) => Card(
+    elevation: 0,
+    margin: EdgeInsets.zero,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(8),
+      side: const BorderSide(color: Color(0xFFD0D0D0)),
+    ),
+    color: Colors.white,
+    child: Padding(padding: const EdgeInsets.all(14), child: child),
+  );
+
+  Widget _pipelineStepCard({
+    required int number,
+    required String title,
+    required String subtitle,
+    required Widget body,
+    String? stepKey,
+    bool included = true,
+    ValueChanged<bool>? onIncluded,
+    bool initiallyExpanded = false,
+  }) {
+    final key = stepKey;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Card(
+        elevation: 0,
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: included || key == null ? const Color(0xFFD0D0D0) : const Color(0xFFE6E6E6)),
+        ),
+        color: included || key == null ? Colors.white : const Color(0xFFFAFAFA),
+        child: ExpansionTile(
+          initiallyExpanded: initiallyExpanded,
+          tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          leading: CircleAvatar(
+            radius: 14,
+            backgroundColor: key == null ? Colors.blueGrey : (included ? Colors.indigo : Colors.grey.shade400),
+            child: key == null
+                ? const Icon(Icons.folder_copy_outlined, size: 16, color: Colors.white)
+                : Text('$number', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+              ),
+              if (key != null && onIncluded != null) ...[
+                const Text('In pipeline', style: TextStyle(fontSize: 12, color: Colors.black54)),
+                Switch(value: included, onChanged: onIncluded),
+              ],
+            ],
+          ),
+          subtitle: Text(subtitle, style: const TextStyle(fontSize: 12, color: Colors.black54)),
+          expandedCrossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            body,
+            if (key != null) ...[
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton.icon(
+                  onPressed: _batchAnalysePairs.isEmpty ? null : () => _runEegPipeline({key}),
+                  icon: const Icon(Icons.play_arrow, size: 18),
+                  label: Text('Run step $number only'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPipelineAutoscoreSettings() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _batchOptionCheckbox(
+          'Only recordings without a scoring (keep existing manual or earlier scorings)',
+          _pipelineAutoscoreMissingOnly,
+          (v) => setState(() => _pipelineAutoscoreMissingOnly = v),
+        ),
+        const SizedBox(height: 12),
                             DropdownButtonFormField<String>(
                               isExpanded: true,
                               value: _batchStagingAlgorithm,
@@ -7161,9 +7244,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                               style: TextStyle(fontWeight: FontWeight.bold),
                             ),
                             const SizedBox(height: 8),
-                            if (_batchStagingFiles.isNotEmpty) ...[
+                            if (_pipelineFirstRecording != null) ...[
                               Text(
-                                'Channel lists come from the first recording: ${_basename(_batchStagingFiles.first)}',
+                                'Channel lists come from the first recording: ${_basename(_pipelineFirstRecording!)}',
                                 style: TextStyle(fontSize: 11, color: Colors.grey.shade600, fontStyle: FontStyle.italic),
                               ),
                               const SizedBox(height: 6),
@@ -7178,7 +7261,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                 border: const OutlineInputBorder(),
                                 suffixIcon: _batchChannelPickerButton(
                                   _batchStagingEegController,
-                                  _batchStagingFiles.isEmpty ? null : _batchStagingFiles.first,
+                                  _pipelineFirstRecording,
                                   'Select EEG Channels for AutoscoreNidra',
                                 ),
                               ),
@@ -7197,7 +7280,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                 border: const OutlineInputBorder(),
                                 suffixIcon: _batchChannelPickerButton(
                                   _batchStagingRefController,
-                                  _batchStagingFiles.isEmpty ? null : _batchStagingFiles.first,
+                                  _pipelineFirstRecording,
                                   'Select Reference Channel(s) for AutoscoreNidra',
                                 ),
                               ),
@@ -7212,7 +7295,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                 border: const OutlineInputBorder(),
                                 suffixIcon: _batchChannelPickerButton(
                                   _batchStagingEogController,
-                                  _batchStagingFiles.isEmpty ? null : _batchStagingFiles.first,
+                                  _pipelineFirstRecording,
                                   'Select EOG Channel(s) for AutoscoreNidra',
                                 ),
                               ),
@@ -7227,7 +7310,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                 border: const OutlineInputBorder(),
                                 suffixIcon: _batchChannelPickerButton(
                                   _batchStagingEmgController,
-                                  _batchStagingFiles.isEmpty ? null : _batchStagingFiles.first,
+                                  _pipelineFirstRecording,
                                   'Select EMG Channel(s) for AutoscoreNidra',
                                 ),
                               ),
@@ -7263,88 +7346,306 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 24),
-                            SizedBox(
-                              width: double.infinity,
-                              height: 40,
-                              child: ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.purple,
-                                  foregroundColor: Colors.white,
-                                ),
-                                onPressed: _batchStagingFiles.isEmpty
-                                    ? null
-                                    : () {
-                                        final settings = {
-                                          'algorithm': _batchStagingAlgorithm,
-                                          'sequence_correction':
-                                              _batchStagingCorrection,
-                                          'sleepgpt_alpha': 0.1,
-                                          'sleepgpt_ngram': 30,
-                                          'output_dir': _batchStagingOutDirController.text.trim().isEmpty
-                                              ? null
-                                              : _batchStagingOutDirController.text.trim(),
-                                          'eeg': _parseChannelList(
-                                            _batchStagingEegController.text,
-                                          ),
-                                          'ref': _parseChannelList(
-                                            _batchStagingRefController.text,
-                                          ),
-                                          'eog': _parseChannelList(
-                                            _batchStagingEogController.text,
-                                          ),
-                                          'emg': _parseChannelList(
-                                            _batchStagingEmgController.text,
-                                          ),
-                                        };
-                                        _executeBatchAutoScoring(
-                                          _batchStagingFiles,
-                                          settings,
-                                        );
-                                      },
-                                child: const Text(
-                                  'Run Batch AutoscoreNidra',
-                                  style: TextStyle(fontWeight: FontWeight.bold),
-                                ),
-                              ),
+
+      ],
+    );
+  }
+
+  Widget _buildPipelinePreprocessSettings() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+            // Stimulation Artefact Removal
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Colors.amber.shade300),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Checkbox(
+                        value: _batchPreprocessStimArtifact,
+                        onChanged: (v) => setState(() {
+                          _batchPreprocessStimArtifact = v ?? false;
+                          if (_batchPreprocessStimArtifact && !_batchPreprocessGedai) {
+                            if (_batchPreprocessSuffixController.text == '_clean') {
+                              _batchPreprocessSuffixController.text = '_stimclean';
+                            }
+                          }
+                        }),
+                      ),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Auto electric stim artefact removal (DBS / neurostimulator)',
+                              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+                            ),
+                            Text(
+                              'Continuous file — adaptive harmonic comb filter (performed on the continuous signal, NOT on epochs as in GEDAI)',
+                              style: TextStyle(fontSize: 11, color: Colors.black87),
                             ),
                           ],
                         ),
                       ),
-                    ),
+                      SizedBox(
+                        width: 170,
+                        child: TextFormField(
+                          controller: _batchPreprocessStimF0Controller,
+                          decoration: const InputDecoration(
+                            labelText: 'Artefact Freq (Hz)',
+                            hintText: 'blank = auto-detect',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          ),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 16),
                 ],
-                // Right Column: Batch AnalyseNidra
-                Expanded(
-                  child: Card(
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      side: const BorderSide(color: Color(0xFFD0D0D0)),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 12,
+              runSpacing: 4,
+              children: [
+                _batchOptionCheckbox('Downsample to 250 Hz', _batchPreprocessDownsample, (v) => setState(() => _batchPreprocessDownsample = v)),
+                _batchOptionCheckbox('Bandpass & Notch Filter (0.5–40 Hz, 50 Hz)', _batchPreprocessFilter, (v) => setState(() => _batchPreprocessFilter = v)),
+                _batchOptionCheckbox('Bad Channel Detection (RANSAC)', _batchPreprocessBadChannel, (v) => setState(() => _batchPreprocessBadChannel = v)),
+                _batchOptionCheckbox('GEDAI Artifact Denoising (Epoch Leadfield GED)', _batchPreprocessGedai, (v) => setState(() => _batchPreprocessGedai = v)),
+                _batchOptionCheckbox('Interpolate Bad Channels (Spherical Spline)', _batchPreprocessInterpolate, (v) => setState(() => _batchPreprocessInterpolate = v)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                SizedBox(
+                  width: 220,
+                  child: TextFormField(
+                    controller: _batchPreprocessSuffixController,
+                    decoration: const InputDecoration(
+                      labelText: 'Output Filename Suffix',
+                      hintText: '_clean or _stimclean',
+                      isDense: true,
+                      border: OutlineInputBorder(),
                     ),
-                    color: Colors.white,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Row(
-                            children: [
-                              Icon(Icons.analytics, color: Colors.blue),
-                              SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  'AnalyseNidra — Batch Advanced Sleep EEG Analysis',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextFormField(
+                    controller: _batchPreprocessOutDirController,
+                    decoration: const InputDecoration(
+                      labelText: 'Output Folder (optional — default: same as source)',
+                      hintText: 'Leave blank to save next to source recording',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  icon: const Icon(Icons.folder_open),
+                  tooltip: 'Select Output Directory',
+                  onPressed: () async {
+                    final dir = await FilePicker.getDirectoryPath(
+                      dialogTitle: 'Select Output Folder for Cleaned Recordings',
+                    );
+                    if (dir != null) {
+                      setState(() => _batchPreprocessOutDirController.text = dir);
+                    }
+                  },
+                ),
+              ],
+            ),
+
+        const SizedBox(height: 8),
+        _batchOptionCheckbox(
+          'Use the cleaned recordings in step 3 (feature extraction and CAP)',
+          _pipelineUseCleaned,
+          (v) => setState(() => _pipelineUseCleaned = v),
+        ),
+        const Text(
+          'Cleaned files keep the EEG and reference channels chosen under Recordings & EEG channels. '
+          'Output folder blank = the pipeline output folder (or beside each recording).',
+          style: TextStyle(fontSize: 11, color: Colors.black54),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPipelineFeatureSettings() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        AnalyseNidraOptionsPanel(
+          options: _batchAnalyseOptions,
+          dense: true,
+          onChanged: (o) => setState(() => _batchAnalyseOptions = o),
+        ),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade50,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: Colors.grey.shade300),
+          ),
+          child: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              _batchOptionCheckbox(
+                'Cyclic alternating pattern (CAP)',
+                _batchPsgCap,
+                (v) => setState(() => _batchPsgCap = v),
+              ),
+              SizedBox(
+                width: 190,
+                child: DropdownButtonFormField<String>(
+                  value: _batchPsgCapSensitivity,
+                  isExpanded: true,
+                  isDense: true,
+                  decoration: const InputDecoration(
+                    labelText: 'CAP detector',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'conservative', child: Text('Conservative')),
+                    DropdownMenuItem(value: 'standard', child: Text('Standard')),
+                    DropdownMenuItem(value: 'sensitive', child: Text('Sensitive')),
+                  ],
+                  onChanged: _batchPsgCap ? (v) => setState(() => _batchPsgCapSensitivity = v ?? 'standard') : null,
+                ),
+              ),
+              _batchPsgField(_batchPsgCapEegController, 'CAP EEG (blank = auto)', 'Select EEG channel for CAP'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade50,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: Row(
+                              children: [
+                                Checkbox(
+                                  value: _batchAnalysePerChannel,
+                                  onChanged: (val) => setState(() => _batchAnalysePerChannel = val ?? false),
+                                ),
+                                const Expanded(
+                                  child: Text(
+                                    'Per-channel output (no regional grouping)',
+                                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
                                   ),
                                 ),
-                              ),
-                            ],
+                                OutlinedButton.icon(
+                                  icon: const Icon(Icons.edit, size: 15),
+                                  label: Text(
+                                    _batchAnalyseCustomRegionMap.isEmpty
+                                        ? 'Edit Regional Mapping…'
+                                        : 'Edit Regions (${_batchAnalyseCustomRegionMap.length} mapped)',
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                  onPressed: _batchAnalysePerChannel
+                                      ? null
+                                      : () async {
+                                          final chans = _batchAnalyseEegController.text
+                                              .split(',')
+                                              .map((e) => e.trim())
+                                              .where((e) => e.isNotEmpty)
+                                              .toList();
+                                          final channelsToMap = chans.isNotEmpty
+                                              ? chans
+                                              : _batchAnalyseAvailableChannels;
+                                          if (channelsToMap.isEmpty) {
+                                            _setStatus('No channels detected yet. Please select or add recordings first.');
+                                            return;
+                                          }
+                                          final updated = await showDialog<Map<String, String>>(
+                                            context: context,
+                                            builder: (ctx) => EditRegionMappingDialog(
+                                              channels: channelsToMap,
+                                              initialMapping: _batchAnalyseCustomRegionMap,
+                                            ),
+                                          );
+                                          if (updated != null) {
+                                            setState(() {
+                                              _batchAnalyseCustomRegionMap = updated;
+                                            });
+                                          }
+                                        },
+                                ),
+                              ],
+                            ),
                           ),
-                          const Divider(height: 24),
+
+      ],
+    );
+  }
+
+  Widget _buildPipelineCompileSettings() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Combines the regional CSV of every recording into AnalyseNidra_master_sheet.csv in the output folder. '
+          'Empty CSVs (from interrupted runs) are left out and listed.',
+          style: TextStyle(fontSize: 12, color: Colors.black87),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ElevatedButton.icon(
+              onPressed: _lastAnalyseRegionalFiles.isEmpty
+                  ? null
+                  : () => _compileAnalyseNidraMasterSheet(_lastAnalyseRegionalFiles),
+              icon: const Icon(Icons.table_view, size: 16),
+              label: const Text('Compile last run'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _compileAnalyseNidraMasterSheet,
+              icon: const Icon(Icons.library_add, size: 16),
+              label: const Text('Combine existing CSVs…'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _compileAnalyseNidraFolder,
+              icon: const Icon(Icons.folder_open, size: 16),
+              label: const Text('Compile all CSVs in a folder…'),
+            ),
+            ElevatedButton.icon(
+              onPressed: _generateBatchPdfReports,
+              icon: const Icon(Icons.picture_as_pdf, size: 16),
+              label: const Text('Batch PDFs from master sheet…'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPipelineRecordingsPanel() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
                           const Text(
                             'Recordings and their scoring files:',
                             style: TextStyle(fontWeight: FontWeight.bold),
@@ -7373,9 +7674,15 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                         dense: true,
                                         title: Text('EEG: ${_basename(eeg)}'),
                                         subtitle: Text(
-                                          scoring.isEmpty
-                                              ? 'Scoring: not found — click the pencil to choose'
-                                              : 'Scoring: ${_basename(scoring)}',
+                                          [
+                                            scoring.isEmpty
+                                                ? 'Scoring: not found — autoscore (step 1) or click the pencil'
+                                                : 'Scoring: ${_basename(scoring)}',
+                                            if (File(pair['cleanedPath'] ?? _pipelineCleanedPathFor(eeg)).existsSync())
+                                              'cleaned ✓',
+                                            if ((pair['regionalPath'] ?? '').isNotEmpty)
+                                              'features ✓',
+                                          ].join('  ·  '),
                                           style: scoring.isEmpty
                                               ? const TextStyle(color: Colors.deepOrange)
                                               : null,
@@ -7640,225 +7947,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                               ),
                             ],
                           ),
-                          const SizedBox(height: 12),
-                          AnalyseNidraOptionsPanel(
-                            options: _batchAnalyseOptions,
-                            dense: true,
-                            onChanged: (o) => setState(() => _batchAnalyseOptions = o),
-                          ),
-                          const SizedBox(height: 12),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade50,
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: Colors.grey.shade300),
-                            ),
-                            child: Row(
-                              children: [
-                                Checkbox(
-                                  value: _batchAnalysePerChannel,
-                                  onChanged: (val) => setState(() => _batchAnalysePerChannel = val ?? false),
-                                ),
-                                const Expanded(
-                                  child: Text(
-                                    'Per-channel output (no regional grouping)',
-                                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-                                  ),
-                                ),
-                                OutlinedButton.icon(
-                                  icon: const Icon(Icons.edit, size: 15),
-                                  label: Text(
-                                    _batchAnalyseCustomRegionMap.isEmpty
-                                        ? 'Edit Regional Mapping…'
-                                        : 'Edit Regions (${_batchAnalyseCustomRegionMap.length} mapped)',
-                                    style: const TextStyle(fontSize: 12),
-                                  ),
-                                  onPressed: _batchAnalysePerChannel
-                                      ? null
-                                      : () async {
-                                          final chans = _batchAnalyseEegController.text
-                                              .split(',')
-                                              .map((e) => e.trim())
-                                              .where((e) => e.isNotEmpty)
-                                              .toList();
-                                          final channelsToMap = chans.isNotEmpty
-                                              ? chans
-                                              : _batchAnalyseAvailableChannels;
-                                          if (channelsToMap.isEmpty) {
-                                            _setStatus('No channels detected yet. Please select or add recordings first.');
-                                            return;
-                                          }
-                                          final updated = await showDialog<Map<String, String>>(
-                                            context: context,
-                                            builder: (ctx) => EditRegionMappingDialog(
-                                              channels: channelsToMap,
-                                              initialMapping: _batchAnalyseCustomRegionMap,
-                                            ),
-                                          );
-                                          if (updated != null) {
-                                            setState(() {
-                                              _batchAnalyseCustomRegionMap = updated;
-                                            });
-                                          }
-                                        },
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          CheckboxListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('Skip completed steps / recordings (resume)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                            subtitle: const Text(
-                              'Reuses existing output JSON/CSV files without recomputing, only completing missing analyses',
-                              style: TextStyle(fontSize: 10),
-                            ),
-                            value: _batchAnalyseSkipExisting,
-                            onChanged: (v) => setState(() => _batchAnalyseSkipExisting = v ?? true),
-                          ),
-                          CheckboxListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('Auto-collate master sheet upon completion', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                            subtitle: const Text(
-                              'Automatically compiles all regional CSVs into AnalyseNidra_master_sheet.csv',
-                              style: TextStyle(fontSize: 10),
-                            ),
-                            value: _batchAnalyseAutoCollate,
-                            onChanged: (v) => setState(() => _batchAnalyseAutoCollate = v ?? true),
-                          ),
-                          const SizedBox(height: 16),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 40,
-                            child: ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blue,
-                                foregroundColor: Colors.white,
-                              ),
-                              onPressed: _batchAnalysePairs.isEmpty
-                                  ? null
-                                  : () {
-                                      final validPairs = _batchAnalysePairs
-                                          .where(
-                                            (p) =>
-                                                (p['eegPath'] ?? '')
-                                                    .isNotEmpty &&
-                                                (p['scoringPath'] ?? '')
-                                                    .isNotEmpty,
-                                          )
-                                          .toList();
-                                      if (validPairs.isEmpty) {
-                                        _setStatus(
-                                          'Error: Mapped pairs must have both EEG and Scoring files.',
-                                        );
-                                        return;
-                                      }
 
-                                      final jobs = validPairs.map((pair) {
-                                        return _AnalyseNidraJob(
-                                          edfPath: pair['eegPath']!,
-                                          scoringPath: pair['scoringPath']!,
-                                          mappedScoringPath:
-                                              pair['scoringPath']!,
-                                        );
-                                      }).toList();
+      ],
+    );
+  }
 
-                                       final chans = _batchAnalyseEegController
-                                           .text
-                                           .split(',')
-                                           .map((e) => e.trim())
-                                           .where((e) => e.isNotEmpty)
-                                           .toList();
-                                       if (chans.isEmpty) {
-                                         _setStatus(
-                                           'Please select or specify at least one EEG channel for analysis.',
-                                         );
-                                         _openBatchAnalyseChannelSelector();
-                                         return;
-                                       }
-                                       final refs = _batchAnalyseRefController
-                                           .text
-                                           .split(',')
-                                           .map((e) => e.trim())
-                                           .where((e) => e.isNotEmpty)
-                                           .toList();
-                                       final outDir = _batchAnalyseOutDirController.text.trim().isEmpty
-                                           ? null
-                                           : _batchAnalyseOutDirController.text.trim();
-
-                                      if (_batchAnalyseOptions.analyses.isEmpty) {
-                                        _setStatus('Select at least one analysis to run.');
-                                        return;
-                                      }
-                                      final regionMapJson = (!_batchAnalysePerChannel && _batchAnalyseCustomRegionMap.isNotEmpty)
-                                          ? jsonEncode(_batchAnalyseCustomRegionMap)
-                                          : null;
-                                      _runAnalyseNidraJobs(
-                                        jobs,
-                                        chans,
-                                        refs,
-                                        outputDir: outDir,
-                                        perChannel: _batchAnalysePerChannel,
-                                        regionMapJson: regionMapJson,
-                                        options: _batchAnalyseOptions,
-                                        skipExisting: _batchAnalyseSkipExisting,
-                                        autoCollate: _batchAnalyseAutoCollate,
-                                      );
-                                    },
-                              child: const Text(
-                                'Run Batch AnalyseNidra',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          const Divider(),
-                          const Text(
-                            'Compile AnalyseNidra Regional Outputs',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              ElevatedButton.icon(
-                                onPressed: _lastAnalyseRegionalFiles.isEmpty
-                                    ? null
-                                    : () => _compileAnalyseNidraMasterSheet(
-                                        _lastAnalyseRegionalFiles,
-                                      ),
-                                icon: const Icon(Icons.table_view, size: 16),
-                                label: const Text('Compile Last Batch'),
-                              ),
-                              OutlinedButton.icon(
-                                onPressed: _compileAnalyseNidraMasterSheet,
-                                icon: const Icon(Icons.library_add, size: 16),
-                                label: const Text('Combine Existing CSVs…'),
-                              ),
-                              ElevatedButton.icon(
-                                onPressed: _generateBatchPdfReports,
-                                icon: const Icon(Icons.picture_as_pdf, size: 16),
-                                label: const Text('Batch PDFs from Master Chart…'),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            _buildBatchPreprocessingCard(),
-            const SizedBox(height: 16),
-            _buildBatchPsgCard(),
-            const SizedBox(height: 16),
-            Card(
+  Widget _buildBatchComparisonCard() {
+    return Card(
               elevation: 0,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8),
@@ -7970,14 +8065,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   ],
                 ),
               ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  ),
-);
-}
+            );
+  }
 
   // ─── Build ────────────────────────────────────────────────────────────────
 

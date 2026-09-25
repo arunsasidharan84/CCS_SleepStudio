@@ -44,6 +44,22 @@ List<Map<String, String>> parseCsvTable(String source) {
   return rows;
 }
 
+/// Regional CSVs that hold no data rows (e.g. a run interrupted after the
+/// header was written). They are left out of master sheets.
+Future<List<String>> regionalCsvFilesWithoutData(List<String> paths) async {
+  final empty = <String>[];
+  for (final path in paths) {
+    try {
+      if (parseCsvTable(await File(path).readAsString()).isEmpty) {
+        empty.add(path);
+      }
+    } catch (_) {
+      empty.add(path);
+    }
+  }
+  return empty;
+}
+
 Future<String> compileRegionalCsvFiles(List<String> paths) async {
   if (paths.isEmpty) {
     throw ArgumentError('Select at least one AnalyseNidra regional CSV file.');

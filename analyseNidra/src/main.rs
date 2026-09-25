@@ -1023,20 +1023,42 @@ fn main() -> Result<()> {
         bail!("scoring file not found: {}", scoring_path.display());
     }
 
-    let run = |name: &str| cli.analyses.contains(name);
+    let requested: Vec<&str> = ALL_ANALYSES
+        .iter()
+        .copied()
+        .filter(|a| cli.analyses.contains(*a))
+        .collect();
     let need_regional = regional_output_path.is_some();
-    let all_requested_exist = {
-        let core_ok = !run("core") || output_path.as_ref().map_or(true, |p| p.exists());
-        let pac_ok = !run("pac") || pac_output_path.as_ref().map_or(true, |p| p.exists());
-        let sw_ok = !run("slow_waves") || slow_wave_output_path.as_ref().map_or(true, |p| p.exists());
-        let sp_ok = !run("spindles") || spindle_output_path.as_ref().map_or(true, |p| p.exists());
-        let nlg_ok = !run("nlg") || cli.nlg_out.as_ref().map_or(true, |p| p.exists());
-        let reg_ok = !need_regional || regional_output_path.as_ref().map_or(true, |p| p.exists());
-        core_ok && pac_ok && sw_ok && sp_ok && nlg_ok && reg_ok
+    let output_for = |analysis: &str| -> Option<&PathBuf> {
+        match analysis {
+            "core" => output_path.as_ref(),
+            "pac" => pac_output_path.as_ref(),
+            "slow_waves" => slow_wave_output_path.as_ref(),
+            "spindles" => spindle_output_path.as_ref(),
+            "nlg" => cli.nlg_out.as_ref(),
+            _ => None,
+        }
     };
-    if cli.skip_existing && all_requested_exist {
-        println!("all requested outputs already exist for {}; skipping recording", edf_path.display());
-        return Ok(());
+    if cli.skip_existing {
+        let components_exist = requested
+            .iter()
+            .all(|a| output_for(a).is_none_or(|p| p.exists()));
+        let regional_ok = regional_output_path
+            .as_ref()
+            .is_none_or(|p| regional::is_complete(p, &requested));
+        if components_exist && regional_ok {
+            println!("all requested outputs already exist for {}; skipping recording", edf_path.display());
+            if let Some(p) = regional_output_path.as_ref() {
+                println!("OUTPUT_REGIONAL {}", p.display());
+            }
+            return Ok(());
+        }
+        if let Some(p) = regional_output_path.as_ref().filter(|p| p.exists() && !regional_ok) {
+            println!(
+                "existing regional CSV {} is incomplete (no data rows or missing analyses); it will be rebuilt",
+                p.display()
+            );
+        }
     }
 
     let started = Instant::now();
@@ -1062,199 +1084,77 @@ fn main() -> Result<()> {
     for (name, value) in &recording.architecture.values {
         println!("  {name}: {value}");
     }
-    let run = |name: &str| cli.analyses.contains(name);
-    println!(
-        "analyses: {}",
-        ALL_ANALYSES.iter().filter(|a| run(a)).copied().collect::<Vec<_>>().join(",")
-    );
     let nrem_samples = recording
         .sample_stages
         .iter()
         .filter(|&&stage| matches!(stage, 2 | 3))
         .count();
-    if nrem_samples == 0 && (run("pac") || run("slow_waves") || run("spindles")) {
-        bail!(
-            "sleep scoring contains no N2 or N3 epochs; spindle, slow-wave, coupling and PAC analysis cannot be computed \
-(deselect them to run the other analyses)"
-        );
+    let mut active: Vec<&str> = requested.clone();
+    if nrem_samples == 0 {
+        let dropped: Vec<&str> = active
+            .iter()
+            .copied()
+            .filter(|a| matches!(*a, "pac" | "slow_waves" | "spindles"))
+            .collect();
+        if !dropped.is_empty() {
+            println!(
+                "WARNING sleep scoring contains no N2 or N3 epochs; skipping {} (the other analyses still run)",
+                dropped.join(", ")
+            );
+            active.retain(|a| !dropped.contains(a));
+        }
     }
-    let need_regional = regional_output_path.is_some();
-    let write_json = |path: &Path, value: &dyn erased_json::Json, what: &str| -> Result<()> {
-        value.write(path)?;
-        println!("wrote {what} to {}", path.display());
-        Ok(())
-    };
+    let run = |name: &str| active.contains(&name);
+    println!("analyses: {}", active.join(","));
+
     let core = if run("core") && (output_path.is_some() || need_regional) {
-        if cli.skip_existing && output_path.as_ref().map_or(false, |p| p.exists()) {
-            let p = output_path.as_ref().unwrap();
-            match std::fs::File::open(p)
-                .map_err(anyhow::Error::from)
-                .and_then(|f| serde_json::from_reader(std::io::BufReader::new(f)).map_err(anyhow::Error::from))
-            {
-                Ok(cached) => {
-                    println!("reusing existing core stage features from {}", p.display());
-                    Some(cached)
-                }
-                Err(e) => {
-                    println!("recomputing core stage features (cache read failed: {e})...");
-                    let t = Instant::now();
-                    let features = pipeline::compute_core_stage_features(&recording);
-                    println!("computed core stage features in {:.3}s", t.elapsed().as_secs_f64());
-                    Some(features)
-                }
-            }
-        } else {
+        cached_or_compute(cli.skip_existing, output_path.as_ref(), "core stage features", || {
             let t = Instant::now();
-            let features = pipeline::compute_core_stage_features(&recording);
+            let v = pipeline::compute_core_stage_features(&recording);
             println!("computed core stage features in {:.3}s", t.elapsed().as_secs_f64());
-            Some(features)
-        }
+            Some(v)
+        })
     } else {
-        None
+        (None, false)
     };
-    if let (Some(p), Some(v)) = (&output_path, &core) {
-        if !cli.skip_existing || !p.exists() {
-            write_json(p, v, "core stage features")?;
-        }
-    }
+    save_if_fresh(&core, output_path.as_ref(), "core stage features", true)?;
     let pac_values = if run("pac") && (pac_output_path.is_some() || need_regional) {
-        if cli.skip_existing && pac_output_path.as_ref().map_or(false, |p| p.exists()) {
-            let p = pac_output_path.as_ref().unwrap();
-            match std::fs::File::open(p)
-                .map_err(anyhow::Error::from)
-                .and_then(|f| serde_json::from_reader(std::io::BufReader::new(f)).map_err(anyhow::Error::from))
-            {
-                Ok(cached) => {
-                    println!("reusing existing PAC results from {}", p.display());
-                    Some(cached)
-                }
-                Err(e) => {
-                    println!("recomputing PAC (cache read failed: {e})...");
-                    let t = Instant::now();
-                    let values = pac::compute(&recording);
-                    println!("computed PAC in {:.3}s", t.elapsed().as_secs_f64());
-                    Some(values)
-                }
-            }
-        } else {
+        cached_or_compute(cli.skip_existing, pac_output_path.as_ref(), "PAC results", || {
             let t = Instant::now();
-            let values = pac::compute(&recording);
+            let v = pac::compute(&recording);
             println!("computed PAC in {:.3}s", t.elapsed().as_secs_f64());
-            Some(values)
-        }
+            Some(v)
+        })
     } else {
-        None
+        (None, false)
     };
-    if let (Some(p), Some(v)) = (&pac_output_path, &pac_values) {
-        if !cli.skip_existing || !p.exists() {
-            write_json(p, v, "PAC results")?;
-        }
-    }
+    save_if_fresh(&pac_values, pac_output_path.as_ref(), "PAC results", true)?;
     let slow_wave_values = if run("slow_waves") && (slow_wave_output_path.is_some() || need_regional) {
-        if cli.skip_existing && slow_wave_output_path.as_ref().map_or(false, |p| p.exists()) {
-            let p = slow_wave_output_path.as_ref().unwrap();
-            match std::fs::File::open(p)
-                .map_err(anyhow::Error::from)
-                .and_then(|f| serde_json::from_reader(std::io::BufReader::new(f)).map_err(anyhow::Error::from))
-            {
-                Ok(cached) => {
-                    println!("reusing existing slow-wave results from {}", p.display());
-                    Some(cached)
-                }
-                Err(e) => {
-                    println!("recomputing slow waves (cache read failed: {e})...");
-                    let t = Instant::now();
-                    let values = events::slow_waves(&recording);
-                    println!("detected slow waves in {:.3}s", t.elapsed().as_secs_f64());
-                    Some(values)
-                }
-            }
-        } else {
+        cached_or_compute(cli.skip_existing, slow_wave_output_path.as_ref(), "slow-wave results", || {
             let t = Instant::now();
-            let values = events::slow_waves(&recording);
+            let v = events::slow_waves(&recording);
             println!("detected slow waves in {:.3}s", t.elapsed().as_secs_f64());
-            Some(values)
-        }
+            Some(v)
+        })
     } else {
-        None
+        (None, false)
     };
-    if let (Some(p), Some(v)) = (&slow_wave_output_path, &slow_wave_values) {
-        if !cli.skip_existing || !p.exists() {
-            write_json(p, v, "slow-wave results")?;
-        }
-    }
+    save_if_fresh(&slow_wave_values, slow_wave_output_path.as_ref(), "slow-wave results", true)?;
     let spindle_values = if run("spindles") && (spindle_output_path.is_some() || need_regional) {
-        if cli.skip_existing && spindle_output_path.as_ref().map_or(false, |p| p.exists()) {
-            let p = spindle_output_path.as_ref().unwrap();
-            match std::fs::File::open(p)
-                .map_err(anyhow::Error::from)
-                .and_then(|f| serde_json::from_reader(std::io::BufReader::new(f)).map_err(anyhow::Error::from))
-            {
-                Ok(cached) => {
-                    println!("reusing existing spindle results from {}", p.display());
-                    Some(cached)
-                }
-                Err(e) => {
-                    println!("recomputing spindles (cache read failed: {e})...");
-                    let t = Instant::now();
-                    let values = events::spindles(&recording);
-                    println!("detected spindles in {:.3}s", t.elapsed().as_secs_f64());
-                    Some(values)
-                }
-            }
-        } else {
+        cached_or_compute(cli.skip_existing, spindle_output_path.as_ref(), "spindle results", || {
             let t = Instant::now();
-            let values = events::spindles(&recording);
+            let v = events::spindles(&recording);
             println!("detected spindles in {:.3}s", t.elapsed().as_secs_f64());
-            Some(values)
-        }
+            Some(v)
+        })
     } else {
-        None
+        (None, false)
     };
-    if let (Some(p), Some(v)) = (&spindle_output_path, &spindle_values) {
-        if !cli.skip_existing || !p.exists() {
-            write_json(p, v, "spindle results")?;
-        }
-    }
+    save_if_fresh(&spindle_values, spindle_output_path.as_ref(), "spindle results", true)?;
     let nlg_report = if run("nlg") && (cli.nlg_out.is_some() || need_regional) {
-        if cli.skip_existing && cli.nlg_out.as_ref().map_or(false, |p| p.exists()) {
-            let p = cli.nlg_out.as_ref().unwrap();
-            match std::fs::File::open(p)
-                .map_err(anyhow::Error::from)
-                .and_then(|f| serde_json::from_reader(std::io::BufReader::new(f)).map_err(anyhow::Error::from))
-            {
-                Ok(cached) => {
-                    println!("reusing existing NeuroLoopGain results from {}", p.display());
-                    Some(cached)
-                }
-                Err(e) => {
-                    println!("recomputing NeuroLoopGain (cache read failed: {e})...");
-                    let t = Instant::now();
-                    let opts = cli.nlg.options()?;
-                    match analyse_nidra::nlg::analyse_recording(
-                        &edf_path,
-                        Some(&recording.stages),
-                        &cli.channels,
-                        &cli.references,
-                        &opts,
-                    ) {
-                        Ok(report) => {
-                            for w in &report.warnings {
-                                println!("WARNING NeuroLoopGain {w}");
-                            }
-                            println!("computed NeuroLoopGain in {:.3}s", t.elapsed().as_secs_f64());
-                            Some(report)
-                        }
-                        Err(e) => {
-                            println!("WARNING NeuroLoopGain failed: {e}");
-                            None
-                        }
-                    }
-                }
-            }
-        } else {
+        let opts = cli.nlg.options()?;
+        cached_or_compute(cli.skip_existing, cli.nlg_out.as_ref(), "NeuroLoopGain results", || {
             let t = Instant::now();
-            let opts = cli.nlg.options()?;
             match analyse_nidra::nlg::analyse_recording(
                 &edf_path,
                 Some(&recording.stages),
@@ -1274,47 +1174,41 @@ fn main() -> Result<()> {
                     None
                 }
             }
-        }
+        })
     } else {
-        None
+        (None, false)
     };
-    if let (Some(p), Some(v)) = (&cli.nlg_out, &nlg_report) {
-        if !cli.skip_existing || !p.exists() {
-            // Compact JSON: the 1-s gain traces make the pretty form ~4x larger.
-            serde_json::to_writer(
-                std::io::BufWriter::new(File::create(p).with_context(|| format!("creating {}", p.display()))?),
-                v,
-            )?;
-            println!("wrote NeuroLoopGain results to {}", p.display());
-            println!("OUTPUT_NLG {}", p.display());
-        }
+    // Compact JSON: the 1-s gain traces make the pretty form ~4x larger.
+    save_if_fresh(&nlg_report, cli.nlg_out.as_ref(), "NeuroLoopGain results", false)?;
+    if let (Some(p), Some(_)) = (&cli.nlg_out, &nlg_report.0) {
+        println!("OUTPUT_NLG {}", p.display());
     }
     if let Some(output_path) = &regional_output_path {
-        if cli.skip_existing && output_path.exists() {
-            println!("regional output already exists at {}; skipping compilation", output_path.display());
-        } else {
-            let regional_started = Instant::now();
-            let rows = regional::compile(
-                &recording,
-                core.as_ref(),
-                spindle_values.as_ref(),
-                slow_wave_values.as_ref(),
-                pac_values.as_ref(),
-                nlg_report.as_ref(),
-                cli.per_channel,
-                cli.region_map.as_ref(),
-            );
-            let recording_name = edf_path
-                .file_stem()
-                .and_then(|value| value.to_str())
-                .context("EDF filename is not valid UTF-8")?;
-            regional::write_csv(output_path, recording_name, &recording, &rows)?;
-            println!(
-                "wrote final regional CSV to {} in {:.3}s",
-                output_path.display(),
-                regional_started.elapsed().as_secs_f64()
-            );
-        }
+        // Always rebuilt from the (cached or fresh) components: it takes
+        // milliseconds and keeps the CSV consistent with every JSON output.
+        let regional_started = Instant::now();
+        let rows = regional::compile(
+            &recording,
+            core.0.as_ref(),
+            spindle_values.0.as_ref(),
+            slow_wave_values.0.as_ref(),
+            pac_values.0.as_ref(),
+            nlg_report.0.as_ref(),
+            cli.per_channel,
+            cli.region_map.as_ref(),
+        );
+        let recording_name = edf_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .context("EDF filename is not valid UTF-8")?;
+        regional::write_csv(output_path, recording_name, &recording, &rows)?;
+        println!(
+            "wrote final regional CSV to {} ({} rows) in {:.3}s",
+            output_path.display(),
+            rows.len(),
+            regional_started.elapsed().as_secs_f64()
+        );
+        println!("OUTPUT_REGIONAL {}", output_path.display());
     }
     println!("total analysis time {:.1}s", started.elapsed().as_secs_f64());
     Ok(())
@@ -1493,20 +1387,51 @@ mod tests {
 }
 
 
-mod erased_json {
-    use anyhow::{Context, Result};
-    use std::path::Path;
-
-    /// Object-safe "serialize to a pretty JSON file".
-    pub trait Json {
-        fn write(&self, path: &Path) -> Result<()>;
-    }
-
-    impl<T: serde::Serialize> Json for T {
-        fn write(&self, path: &Path) -> Result<()> {
-            let file = std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
-            serde_json::to_writer_pretty(std::io::BufWriter::new(file), self)?;
-            Ok(())
+/// Reuses a cached JSON result when `--skip-existing` is set and the file
+/// reads back; otherwise computes it. Returns (value, freshly computed).
+fn cached_or_compute<T: serde::de::DeserializeOwned>(
+    skip_existing: bool,
+    path: Option<&PathBuf>,
+    what: &str,
+    compute: impl FnOnce() -> Option<T>,
+) -> (Option<T>, bool) {
+    if skip_existing {
+        if let Some(p) = path.filter(|p| p.exists()) {
+            match analyse_nidra::json_nan::from_path::<T>(p) {
+                Ok(v) => {
+                    println!("reusing existing {what} from {}", p.display());
+                    return (Some(v), false);
+                }
+                Err(e) => println!("recomputing {what} (cache read failed: {e})"),
+            }
         }
     }
+    (compute(), true)
 }
+
+/// Writes a freshly computed result atomically (temporary file + rename).
+fn save_if_fresh<T: serde::Serialize>(
+    value: &(Option<T>, bool),
+    path: Option<&PathBuf>,
+    what: &str,
+    pretty: bool,
+) -> Result<()> {
+    let (Some(v), true, Some(p)) = (&value.0, value.1, path) else {
+        return Ok(());
+    };
+    let tmp = p.with_extension("json.partial");
+    {
+        let file = File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        let mut w = std::io::BufWriter::new(file);
+        if pretty {
+            serde_json::to_writer_pretty(&mut w, v)?;
+        } else {
+            serde_json::to_writer(&mut w, v)?;
+        }
+        std::io::Write::flush(&mut w)?;
+    }
+    std::fs::rename(&tmp, p).with_context(|| format!("writing {}", p.display()))?;
+    println!("wrote {what} to {}", p.display());
+    Ok(())
+}
+

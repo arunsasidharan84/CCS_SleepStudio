@@ -10,7 +10,7 @@
   <b>National Institute of Mental Health and Neurosciences (NIMHANS)</b>, Bangalore, India.
 </p>
 
-**Version:** 1.22.0
+**Version:** 1.23.0
 
 Welcome to **CCS Sleep Studio**, a high-performance, cross-platform desktop application designed to assist researchers and clinicians in sleep EEG visualization, event annotation, sleep scoring, automated staging, and advanced EEG analysis.
 
@@ -18,6 +18,11 @@ CCS Sleep Studio is comprised of the following key modules:
 *   **ScoringNidra**: Interactive sleep scoring and event annotation module supporting EDF, Brain Products (.vhdr / .vmrk), Nihon Kohden (.EEG / .LOG), EMBLA (.ebm), Orbit (.orb), and R09 (.r09).
 *   **AutoscoreNidra**: Automated sleep scoring module with both interactive and batch modes.
 *   **AnalyseNidra**: Automated sleep EEG analysis and reporting module operating in both interactive and batch modes.
+
+### 🌟 New in Version 1.23.0
+*   **Batch tab redesigned as a linked pipeline.** The Batch tab has three sections: *EEG analysis pipeline*, *Polygraphy (OSA & PLM)* and *Scoring comparison*. The EEG pipeline shares one list of recordings and EEG/reference channels. Its steps are collapsible cards, run in order: **1 Autoscore** (optional, only for recordings without a scoring) → **2 Preprocess** (stimulation-artefact removal on the continuous signal, then 30-s epoch cleaning) → **3 Extract features** (AnalyseNidra analyses and CAP, run on the cleaned EEG and mapped to sleep stages with the step-1 scoring) → **4 Compile** (master sheet). Each step passes its output on to the next. You can run all ticked steps in one go or run one step on its own. A run window shows a recording × step status table, and *Resume* reuses outputs that already exist.
+*   **Master-sheet compilation fixed.** Regional CSVs left with only a header (from an interrupted or crashed run) are now detected: *Resume* rebuilds them from the cached per-analysis results instead of skipping them. Empty CSVs are also left out of the master sheet and listed. Cached results containing NaN values can now be read back, and results are written atomically. A recording without N2/N3 no longer aborts: its NREM-only analyses are skipped with a warning. The new *Compile all CSVs in a folder…* option builds a master sheet from a whole folder.
+*   NeuroLoopGain now uses the average of all chosen references when more than one is given, which matches the rest of AnalyseNidra.
 
 ### 🌟 New in Version 1.22.0
 *   **NeuroLoopGain** (Kemp et al., IEEE-BME 2000): a native port of the open-source NeuroLoopGain 2.x analyser, giving amplitude-independent slow-wave, sigma (and optionally alpha) feedback-loop gain per second. The output matches the reference program sample for sample: all 14 traces, 144 runs on the four sample PSG nights (6 channels × 3 bands × 2 smoother rates). It runs as part of AnalyseNidra (interactive and batch). The gain curves can be overlaid on the hypnogram (*Overlay: NeuroLoopGain*). Stage-wise, per-cycle and per-hour gain and the ACCS upper-quartile index are added to the regional CSV (`NLG_SW_*`, `NLG_Sigma_*`), and a NeuroLoopGain page is added to the PDF report. Polyman-compatible `_NeuroLoopGain.edf` files can also be written (`--nlg-edf-dir`).

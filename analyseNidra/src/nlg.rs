@@ -1471,7 +1471,14 @@ pub fn analyse_recording(
                 derivs.push((ch.clone(), a.to_string(), vec![b.to_string()]));
             }
         } else {
-            let refs: Vec<String> = references.iter().filter(|r| !r.eq_ignore_ascii_case(ch)).cloned().collect();
+            // An average reference (several reference channels, as in the
+            // AnalyseNidra pipeline) keeps the channel itself in the mean; a
+            // single reference equal to the channel is dropped.
+            let refs: Vec<String> = if references.len() > 1 {
+                references.to_vec()
+            } else {
+                references.iter().filter(|r| !r.eq_ignore_ascii_case(ch)).cloned().collect()
+            };
             derivs.push((ch.clone(), ch.clone(), refs));
         }
     }

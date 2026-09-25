@@ -210,11 +210,80 @@ class AppConfig {
     this.recordingDate = '',
     this.channels = const [],
     Map<int, String>? customEventNames,
+    // Preprocessing configuration
+    this.preprocessDownsampleHz = 250.0,
+    this.preprocessBandpassLo = 0.5,
+    this.preprocessBandpassHi = 40.0,
+    this.preprocessNotchHz = 50.0,
+    this.preprocessRansacThresh = 0.75,
+    this.preprocessStimArtifact = true,
+    this.preprocessStimF0,
+    this.preprocessStimWin = 10.0,
+    this.preprocessStimMaxCombs = 4,
+    // Feature extraction configuration
+    List<String>? featureAnalyses,
+    this.spindleFreqMin = 11.0,
+    this.spindleFreqMax = 16.0,
+    this.spindleDurationMin = 0.5,
+    this.spindleDurationMax = 3.0,
+    this.slowWaveFreqMin = 0.3,
+    this.slowWaveFreqMax = 2.0,
+    this.slowWaveMinAmpUv = 75.0,
+    // Band power definitions
+    this.bandDeltaLo = 0.5,
+    this.bandDeltaHi = 4.0,
+    this.bandThetaLo = 4.0,
+    this.bandThetaHi = 8.0,
+    this.bandAlphaLo = 8.0,
+    this.bandAlphaHi = 12.0,
+    this.bandSigmaLo = 12.0,
+    this.bandSigmaHi = 16.0,
+    this.bandBetaLo = 16.0,
+    this.bandBetaHi = 30.0,
+    this.bandGammaLo = 30.0,
+    this.bandGammaHi = 45.0,
   }) : hypnogramOverlayMode =
            hypnogramOverlayMode ?? (showSwaPlot ? 'SWA' : 'Off'),
+       featureAnalyses = featureAnalyses != null
+           ? List<String>.from(featureAnalyses)
+           : ['core', 'spindles', 'slow_waves', 'pac', 'nlg'],
        customEventNames = customEventNames != null
            ? Map<int, String>.from(customEventNames)
            : {};
+
+  // Preprocessing configuration fields
+  double preprocessDownsampleHz;
+  double preprocessBandpassLo;
+  double preprocessBandpassHi;
+  double preprocessNotchHz;
+  double preprocessRansacThresh;
+  bool preprocessStimArtifact;
+  double? preprocessStimF0;
+  double preprocessStimWin;
+  int preprocessStimMaxCombs;
+
+  // Feature extraction configuration fields
+  List<String> featureAnalyses;
+  double spindleFreqMin;
+  double spindleFreqMax;
+  double spindleDurationMin;
+  double spindleDurationMax;
+  double slowWaveFreqMin;
+  double slowWaveFreqMax;
+  double slowWaveMinAmpUv;
+
+  double bandDeltaLo;
+  double bandDeltaHi;
+  double bandThetaLo;
+  double bandThetaHi;
+  double bandAlphaLo;
+  double bandAlphaHi;
+  double bandSigmaLo;
+  double bandSigmaHi;
+  double bandBetaLo;
+  double bandBetaHi;
+  double bandGammaLo;
+  double bandGammaHi;
 
   int spectrogramChannelIndex;
   int swaChannelIndex;
@@ -315,6 +384,37 @@ class AppConfig {
       'channels': channels.map((c) => c.toJson()).toList(),
       'customEventNames':
           customEventNames.map((k, v) => MapEntry(k.toString(), v)),
+      // Preprocessing serialization
+      'preprocessDownsampleHz': preprocessDownsampleHz,
+      'preprocessBandpassLo': preprocessBandpassLo,
+      'preprocessBandpassHi': preprocessBandpassHi,
+      'preprocessNotchHz': preprocessNotchHz,
+      'preprocessRansacThresh': preprocessRansacThresh,
+      'preprocessStimArtifact': preprocessStimArtifact,
+      'preprocessStimF0': preprocessStimF0,
+      'preprocessStimWin': preprocessStimWin,
+      'preprocessStimMaxCombs': preprocessStimMaxCombs,
+      // Feature extraction serialization
+      'featureAnalyses': featureAnalyses,
+      'spindleFreqMin': spindleFreqMin,
+      'spindleFreqMax': spindleFreqMax,
+      'spindleDurationMin': spindleDurationMin,
+      'spindleDurationMax': spindleDurationMax,
+      'slowWaveFreqMin': slowWaveFreqMin,
+      'slowWaveFreqMax': slowWaveFreqMax,
+      'slowWaveMinAmpUv': slowWaveMinAmpUv,
+      'bandDeltaLo': bandDeltaLo,
+      'bandDeltaHi': bandDeltaHi,
+      'bandThetaLo': bandThetaLo,
+      'bandThetaHi': bandThetaHi,
+      'bandAlphaLo': bandAlphaLo,
+      'bandAlphaHi': bandAlphaHi,
+      'bandSigmaLo': bandSigmaLo,
+      'bandSigmaHi': bandSigmaHi,
+      'bandBetaLo': bandBetaLo,
+      'bandBetaHi': bandBetaHi,
+      'bandGammaLo': bandGammaLo,
+      'bandGammaHi': bandGammaHi,
     };
   }
 
@@ -425,6 +525,48 @@ class AppConfig {
               )
               .toList() ??
           const [],
+      // Preprocessing deserialization
+      preprocessDownsampleHz:
+          (json['preprocessDownsampleHz'] as num?)?.toDouble() ?? 250.0,
+      preprocessBandpassLo:
+          (json['preprocessBandpassLo'] as num?)?.toDouble() ?? 0.5,
+      preprocessBandpassHi:
+          (json['preprocessBandpassHi'] as num?)?.toDouble() ?? 40.0,
+      preprocessNotchHz:
+          (json['preprocessNotchHz'] as num?)?.toDouble() ?? 50.0,
+      preprocessRansacThresh:
+          (json['preprocessRansacThresh'] as num?)?.toDouble() ?? 0.75,
+      preprocessStimArtifact: safeBool(json['preprocessStimArtifact'], true),
+      preprocessStimF0: safeNullableDouble(json['preprocessStimF0']),
+      preprocessStimWin:
+          (json['preprocessStimWin'] as num?)?.toDouble() ?? 10.0,
+      preprocessStimMaxCombs: safeInt(json['preprocessStimMaxCombs'], 4),
+      // Feature extraction deserialization
+      featureAnalyses: (json['featureAnalyses'] as List?)
+          ?.map((e) => e.toString())
+          .toList(),
+      spindleFreqMin: (json['spindleFreqMin'] as num?)?.toDouble() ?? 11.0,
+      spindleFreqMax: (json['spindleFreqMax'] as num?)?.toDouble() ?? 16.0,
+      spindleDurationMin:
+          (json['spindleDurationMin'] as num?)?.toDouble() ?? 0.5,
+      spindleDurationMax:
+          (json['spindleDurationMax'] as num?)?.toDouble() ?? 3.0,
+      slowWaveFreqMin: (json['slowWaveFreqMin'] as num?)?.toDouble() ?? 0.3,
+      slowWaveFreqMax: (json['slowWaveFreqMax'] as num?)?.toDouble() ?? 2.0,
+      slowWaveMinAmpUv:
+          (json['slowWaveMinAmpUv'] as num?)?.toDouble() ?? 75.0,
+      bandDeltaLo: (json['bandDeltaLo'] as num?)?.toDouble() ?? 0.5,
+      bandDeltaHi: (json['bandDeltaHi'] as num?)?.toDouble() ?? 4.0,
+      bandThetaLo: (json['bandThetaLo'] as num?)?.toDouble() ?? 4.0,
+      bandThetaHi: (json['bandThetaHi'] as num?)?.toDouble() ?? 8.0,
+      bandAlphaLo: (json['bandAlphaLo'] as num?)?.toDouble() ?? 8.0,
+      bandAlphaHi: (json['bandAlphaHi'] as num?)?.toDouble() ?? 12.0,
+      bandSigmaLo: (json['bandSigmaLo'] as num?)?.toDouble() ?? 12.0,
+      bandSigmaHi: (json['bandSigmaHi'] as num?)?.toDouble() ?? 16.0,
+      bandBetaLo: (json['bandBetaLo'] as num?)?.toDouble() ?? 16.0,
+      bandBetaHi: (json['bandBetaHi'] as num?)?.toDouble() ?? 30.0,
+      bandGammaLo: (json['bandGammaLo'] as num?)?.toDouble() ?? 30.0,
+      bandGammaHi: (json['bandGammaHi'] as num?)?.toDouble() ?? 45.0,
     );
   }
 

@@ -121,14 +121,15 @@ class AnalyseNidraOptionsPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final nlgOn = options.analyses.contains('nlg');
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+    return Material(
+      color: Colors.grey.shade50,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.grey.shade300),
+        side: BorderSide(color: Colors.grey.shade300),
       ),
-      child: Column(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -238,6 +239,7 @@ class AnalyseNidraOptionsPanel extends StatelessWidget {
             ),
           ],
         ],
+      ),
       ),
     );
   }

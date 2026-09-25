@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 
 import 'eeg_backend.dart';
 import 'models.dart';
+import 'feature_config_dialog.dart';
 
 class ConfigDialog extends StatefulWidget {
   const ConfigDialog({
@@ -16,12 +17,14 @@ class ConfigDialog extends StatefulWidget {
     required this.channelLabels,
     required this.onApply,
     this.onPreview,
+    this.initialTabIndex = 0,
   });
 
   final AppConfig config;
   final List<String> channelLabels;
   final void Function(AppConfig) onApply;
   final void Function(AppConfig)? onPreview;
+  final int initialTabIndex;
 
   @override
   State<ConfigDialog> createState() => _ConfigDialogState();
@@ -104,6 +107,35 @@ class _ConfigDialogState extends State<ConfigDialog> {
       subjectId: widget.config.subjectId,
       subjectDetails: widget.config.subjectDetails,
       recordingDate: widget.config.recordingDate,
+      preprocessDownsampleHz: widget.config.preprocessDownsampleHz,
+      preprocessBandpassLo: widget.config.preprocessBandpassLo,
+      preprocessBandpassHi: widget.config.preprocessBandpassHi,
+      preprocessNotchHz: widget.config.preprocessNotchHz,
+      preprocessRansacThresh: widget.config.preprocessRansacThresh,
+      preprocessStimArtifact: widget.config.preprocessStimArtifact,
+      preprocessStimF0: widget.config.preprocessStimF0,
+      preprocessStimWin: widget.config.preprocessStimWin,
+      preprocessStimMaxCombs: widget.config.preprocessStimMaxCombs,
+      featureAnalyses: List.from(widget.config.featureAnalyses),
+      spindleFreqMin: widget.config.spindleFreqMin,
+      spindleFreqMax: widget.config.spindleFreqMax,
+      spindleDurationMin: widget.config.spindleDurationMin,
+      spindleDurationMax: widget.config.spindleDurationMax,
+      slowWaveFreqMin: widget.config.slowWaveFreqMin,
+      slowWaveFreqMax: widget.config.slowWaveFreqMax,
+      slowWaveMinAmpUv: widget.config.slowWaveMinAmpUv,
+      bandDeltaLo: widget.config.bandDeltaLo,
+      bandDeltaHi: widget.config.bandDeltaHi,
+      bandThetaLo: widget.config.bandThetaLo,
+      bandThetaHi: widget.config.bandThetaHi,
+      bandAlphaLo: widget.config.bandAlphaLo,
+      bandAlphaHi: widget.config.bandAlphaHi,
+      bandSigmaLo: widget.config.bandSigmaLo,
+      bandSigmaHi: widget.config.bandSigmaHi,
+      bandBetaLo: widget.config.bandBetaLo,
+      bandBetaHi: widget.config.bandBetaHi,
+      bandGammaLo: widget.config.bandGammaLo,
+      bandGammaHi: widget.config.bandGammaHi,
       channels: widget.config.channels.isNotEmpty
           ? widget.config.channels.map((c) => c.copy()).toList()
           : widget.channelLabels
@@ -206,7 +238,8 @@ class _ConfigDialogState extends State<ConfigDialog> {
   Widget build(BuildContext context) {
     final labels = _working.channels.map((channel) => channel.name).toList();
     return DefaultTabController(
-      length: 8,
+      length: 9,
+      initialIndex: widget.initialTabIndex,
       child: AlertDialog(
         title: const Text('Configuration Window'),
         contentPadding: EdgeInsets.zero,
@@ -216,6 +249,8 @@ class _ConfigDialogState extends State<ConfigDialog> {
           child: Column(
             children: [
               const TabBar(
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
                 labelColor: Colors.blue,
                 unselectedLabelColor: Colors.black54,
                 indicatorColor: Colors.blue,
@@ -228,6 +263,7 @@ class _ConfigDialogState extends State<ConfigDialog> {
                   Tab(text: 'Periodogram'),
                   Tab(text: 'Wavelet'),
                   Tab(text: 'Filters'),
+                  Tab(text: 'Features & Preprocessing'),
                 ],
               ),
               Expanded(
@@ -834,6 +870,11 @@ class _ConfigDialogState extends State<ConfigDialog> {
                           ),
                         ],
                       ),
+                    ),
+                    // Tab 9: Features & Preprocessing Settings
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: FeaturesAndPreprocessingWidget(config: _working),
                     ),
                   ],
                 ),

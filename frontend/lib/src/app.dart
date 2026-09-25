@@ -16,6 +16,7 @@ import 'analyse_options.dart';
 import 'autoscore_command.dart';
 import 'batch_helpers.dart';
 import 'config_dialog.dart';
+import 'feature_config_dialog.dart';
 import 'detection_dialogs.dart';
 import 'edf_utilities_dialog.dart';
 import 'eeg_backend.dart';
@@ -154,6 +155,25 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   final TextEditingController _batchPsgOutDirController = TextEditingController();
   Map<String, String> _batchAnalyseCustomRegionMap = {};
 
+  // Batch Preprocessing State
+  final List<String> _batchPreprocessFiles = [];
+  bool _batchPreprocessStimArtifact = true;
+  bool _batchPreprocessDownsample = false;
+  bool _batchPreprocessFilter = true;
+  bool _batchPreprocessBadChannel = true;
+  bool _batchPreprocessGedai = true;
+  bool _batchPreprocessInterpolate = true;
+  bool _batchPreprocessRecursive = true;
+  bool _batchPreprocessUseWildcard = false;
+  final TextEditingController _batchPreprocessWildcardController =
+      TextEditingController(text: '*.edf');
+  final TextEditingController _batchPreprocessStimF0Controller =
+      TextEditingController();
+  final TextEditingController _batchPreprocessSuffixController =
+      TextEditingController(text: '_clean');
+  final TextEditingController _batchPreprocessOutDirController =
+      TextEditingController();
+
   // Video Sync State
   String? _videoPath;
   VideoPlayerController? _videoController;
@@ -218,6 +238,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       _batchPsgRightLegController,
       _batchPsgCapEegController,
       _batchPsgOutDirController,
+      _batchPreprocessWildcardController,
+      _batchPreprocessStimF0Controller,
+      _batchPreprocessSuffixController,
+      _batchPreprocessOutDirController,
     ]) {
       c.dispose();
     }
@@ -2759,12 +2783,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
-  Future<void> _openPreprocessDialog() async {
+  Future<void> _openPreprocessDialog({bool stimArtifactOnly = false}) async {
     String? targetPath = _activePath;
     List<String> chans = [];
     if (targetPath == null || !File(targetPath).existsSync()) {
       final res = await FilePicker.pickFiles(
-        dialogTitle: 'Select EEG File for Preprocessing',
+        dialogTitle: stimArtifactOnly
+            ? 'Select EEG File for Auto Electric Stim Artefact Removal (DBS)'
+            : 'Select EEG File for Preprocessing',
         type: FileType.custom,
         allowedExtensions: ['edf', 'EDF', 'bdf', 'fif', 'set'],
       );
@@ -2787,8 +2813,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       builder: (ctx) => PreprocessDialog(
         inputFilePath: targetPath!,
         initialChannels: chans,
+        initialStimArtifactOnly: stimArtifactOnly,
         onCompleted: (cleanedPath) {
-          _setStatus('Preprocessing completed: ${_basename(cleanedPath)}');
+          _setStatus(
+            stimArtifactOnly
+                ? 'DBS stim artefact removal completed: ${_basename(cleanedPath)}'
+                : 'Preprocessing completed: ${_basename(cleanedPath)}',
+          );
           // Offer to open the cleaned file
           showDialog(
             context: context,
@@ -2819,6 +2850,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         },
       ),
     );
+  }
+
+  void _openStimArtifactRemovalDialog() => _openPreprocessDialog(stimArtifactOnly: true);
+
+  void _openFeatureSelectionAndConfigDialog() {
+    _openConfigDialog(initialTabIndex: 8);
   }
 
   Future<void> _checkForUpdates() async {
@@ -5198,23 +5235,20 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   // ─── Configuration ────────────────────────────────────────────────────────
 
-  void _openConfigDialog() {
+  void _openConfigDialog({int initialTabIndex = 0}) {
     final v = _viewport;
     final eeg = _loadedEeg;
-    if (v == null || eeg == null || eeg.channelLabels.isEmpty) {
-      _setStatus('Load an EDF first to configure channels');
-      _showTextDialog(
-        'Configuration unavailable',
-        'Load a recording before opening configuration settings.',
-      );
-      return;
-    }
+    final channelLabels = eeg?.channelLabels ??
+        (_config.channels.isNotEmpty
+            ? _config.channels.map((c) => c.name).toList()
+            : const <String>[]);
     showDialog(
       context: context,
       builder: (_) => ConfigDialog(
         config: _config,
-        channelLabels: eeg.channelLabels,
-        onPreview: _previewDisplayConfig,
+        channelLabels: channelLabels,
+        initialTabIndex: initialTabIndex,
+        onPreview: eeg != null ? _previewDisplayConfig : null,
         onApply: (newCfg) {
           final oldCfg = _config;
           setState(() {
@@ -5224,7 +5258,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             unawaited(saveAutoConfig(_activePath!, newCfg));
           }
           final eeg = _loadedEeg;
-          if (eeg != null) {
+          if (eeg != null && v != null) {
             if (!_configRequiresDisplayRecompute(oldCfg, newCfg)) {
               setState(() {
                 _viewport = v.copyWith(
@@ -5270,6 +5304,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 _scheduleTimeFrequencyRefresh(++_navigationSerial);
               }
             });
+          } else {
+            _setStatus('Configuration updated');
           }
         },
       ),
@@ -5714,8 +5750,16 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             onSelected: _openEdfUtilitiesDialog,
           ),
           PlatformMenuItem(
-            label: 'Epoch-Level Preprocessing (ccstools / GEDAI)…',
+            label: 'Auto electric stim artefact removal (DBS)…',
+            onSelected: _openStimArtifactRemovalDialog,
+          ),
+          PlatformMenuItem(
+            label: 'Preprocessing Pipeline (Filters, RANSAC, GEDAI)…',
             onSelected: _openPreprocessDialog,
+          ),
+          PlatformMenuItem(
+            label: 'Feature Selection & Extraction Parameters…',
+            onSelected: _openFeatureSelectionAndConfigDialog,
           ),
           PlatformMenuItem(
             label: 'Export Sleep Report (PDF)',
@@ -5752,6 +5796,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           PlatformMenuItem(
             label: 'Open configuration window  [Ctrl+C]',
             onSelected: _openConfigDialog,
+          ),
+          PlatformMenuItem(
+            label: 'Feature Selection & Parameter Configuration…',
+            onSelected: _openFeatureSelectionAndConfigDialog,
           ),
           PlatformMenuItem(
             label: 'Save configuration as .json',
@@ -6070,8 +6118,16 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 child: const Text('EEG Utilities Module (Crop, Downsample, Rename, Anonymize & Batch)…'),
               ),
               MenuItemButton(
+                onPressed: _openStimArtifactRemovalDialog,
+                child: const Text('Auto electric stim artefact removal (DBS)…'),
+              ),
+              MenuItemButton(
                 onPressed: _openPreprocessDialog,
-                child: const Text('Epoch-Level Preprocessing (ccstools / GEDAI)…'),
+                child: const Text('Preprocessing Pipeline (Filters, RANSAC, GEDAI)…'),
+              ),
+              MenuItemButton(
+                onPressed: _openFeatureSelectionAndConfigDialog,
+                child: const Text('Feature Selection & Extraction Parameters…'),
               ),
               MenuItemButton(
                 onPressed: _exportSleepReport,
@@ -6107,7 +6163,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             menuChildren: [
               MenuItemButton(
                 onPressed: _openConfigDialog,
-                child: const Text('Open Settings Dialog'),
+                child: const Text('Open Settings Dialog [Ctrl+,]'),
+              ),
+              MenuItemButton(
+                onPressed: _openFeatureSelectionAndConfigDialog,
+                child: const Text('Feature Selection & Parameter Configuration…'),
               ),
               MenuItemButton(
                 onPressed: _saveConfig,
@@ -6216,6 +6276,334 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         });
       }
     });
+  }
+
+  void _executeBatchPreprocessing() {
+    if (_batchPreprocessFiles.isEmpty) {
+      _setStatus('Please select at least one recording for batch preprocessing.');
+      return;
+    }
+    final steps = <String>[];
+    if (_batchPreprocessStimArtifact) steps.add('stimartifact');
+    if (_batchPreprocessDownsample) steps.add('downsample');
+    if (_batchPreprocessFilter) steps.add('filter');
+    if (_batchPreprocessBadChannel) steps.add('badchannel');
+    if (_batchPreprocessGedai) steps.add('gedai');
+    if (_batchPreprocessInterpolate) steps.add('interpolate');
+
+    if (steps.isEmpty) {
+      _setStatus('Please select at least one preprocessing step.');
+      return;
+    }
+
+    final executable = detectAnalyseNidraExecutable();
+    final suffix = _batchPreprocessSuffixController.text.trim().isEmpty
+        ? (_batchPreprocessStimArtifact && steps.length == 1 ? '_stimclean' : '_clean')
+        : _batchPreprocessSuffixController.text.trim();
+    final outDir = _batchPreprocessOutDirController.text.trim().isEmpty
+        ? null
+        : _batchPreprocessOutDirController.text.trim();
+    final f0 = double.tryParse(_batchPreprocessStimF0Controller.text.trim());
+
+    final jobs = _batchPreprocessFiles.map((file) {
+      final args = <String>[
+        '--preprocess',
+        file,
+        '--steps',
+        steps.join(','),
+        '--suffix',
+        suffix,
+      ];
+      if (outDir != null) args.addAll(['--out-dir', outDir]);
+      if (_batchPreprocessStimArtifact && f0 != null && f0 > 0) {
+        args.addAll(['--stim-f0', f0.toString()]);
+      }
+      return _CommandJob(
+        label: _basename(file),
+        executable: executable,
+        sourcePath: file,
+        outputDir: outDir,
+        arguments: args,
+      );
+    }).toList();
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _CommandBatchProgressDialog(
+        title: 'Batch Preprocessing',
+        jobs: jobs,
+        onFinished: (failed) {
+          _setStatus(
+            failed == 0
+                ? 'Batch preprocessing finished for ${jobs.length} recording(s)'
+                : 'Batch preprocessing finished: ${jobs.length - failed} succeeded, $failed failed',
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildBatchPreprocessingCard() {
+    final anyStep = _batchPreprocessStimArtifact ||
+        _batchPreprocessDownsample ||
+        _batchPreprocessFilter ||
+        _batchPreprocessBadChannel ||
+        _batchPreprocessGedai ||
+        _batchPreprocessInterpolate;
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: const BorderSide(color: Color(0xFFD0D0D0)),
+      ),
+      color: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.cleaning_services, color: Colors.purple),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Batch Preprocessing & Artefact Removal (DBS / ccstools / GEDAI)',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            const Divider(height: 24),
+            const Text(
+              'Selected Recordings to Preprocess:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              height: 140,
+              decoration: BoxDecoration(
+                border: Border.all(color: const Color(0xFFD0D0D0)),
+                borderRadius: BorderRadius.circular(4),
+                color: const Color(0xFFF9F9F9),
+              ),
+              child: _batchPreprocessFiles.isEmpty
+                  ? const Center(child: Text('No recordings selected'))
+                  : ListView.builder(
+                      itemCount: _batchPreprocessFiles.length,
+                      itemBuilder: (context, index) {
+                        final file = _batchPreprocessFiles[index];
+                        return ListTile(
+                          dense: true,
+                          title: Text(_basename(file)),
+                          subtitle: Text(file),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.close, size: 16, color: Colors.red),
+                            tooltip: 'Remove',
+                            onPressed: () => setState(() => _batchPreprocessFiles.removeAt(index)),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            const SizedBox(height: 8),
+            _batchSourceControls(
+              onAddFiles: () async {
+                final files = await _collectBatchRecordings(
+                  fromFolder: false,
+                  extensions: _batchAutoscoreExtensions,
+                  recursive: _batchPreprocessRecursive,
+                  useWildcard: _batchPreprocessUseWildcard,
+                  pattern: _batchPreprocessWildcardController.text,
+                  title: 'Select recordings for batch preprocessing',
+                );
+                if (mounted) {
+                  setState(() {
+                    for (final f in files) {
+                      if (!_batchPreprocessFiles.contains(f)) _batchPreprocessFiles.add(f);
+                    }
+                  });
+                }
+              },
+              onAddFolder: () async {
+                final files = await _collectBatchRecordings(
+                  fromFolder: true,
+                  extensions: _batchAutoscoreExtensions,
+                  recursive: _batchPreprocessRecursive,
+                  useWildcard: _batchPreprocessUseWildcard,
+                  pattern: _batchPreprocessWildcardController.text,
+                  title: 'Select a folder of recordings for batch preprocessing',
+                );
+                if (mounted) {
+                  setState(() {
+                    for (final f in files) {
+                      if (!_batchPreprocessFiles.contains(f)) _batchPreprocessFiles.add(f);
+                    }
+                  });
+                }
+              },
+              hasItems: _batchPreprocessFiles.isNotEmpty,
+              onSelectDeselect: () async {
+                final selected = await showBatchFileSubSelectionDialog(
+                  context: context,
+                  title: 'Batch Preprocessing File Selection',
+                  files: List<String>.from(_batchPreprocessFiles),
+                );
+                if (selected != null && mounted) {
+                  setState(() {
+                    _batchPreprocessFiles
+                      ..clear()
+                      ..addAll(selected);
+                  });
+                }
+              },
+              onClear: () => setState(_batchPreprocessFiles.clear),
+              recursive: _batchPreprocessRecursive,
+              onRecursive: (v) => setState(() => _batchPreprocessRecursive = v),
+              useWildcard: _batchPreprocessUseWildcard,
+              onWildcard: (v) => setState(() => _batchPreprocessUseWildcard = v),
+              wildcardController: _batchPreprocessWildcardController,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Pipeline Steps to Apply:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            // Stimulation Artefact Removal
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Colors.amber.shade300),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Checkbox(
+                        value: _batchPreprocessStimArtifact,
+                        onChanged: (v) => setState(() {
+                          _batchPreprocessStimArtifact = v ?? false;
+                          if (_batchPreprocessStimArtifact && !_batchPreprocessGedai) {
+                            if (_batchPreprocessSuffixController.text == '_clean') {
+                              _batchPreprocessSuffixController.text = '_stimclean';
+                            }
+                          }
+                        }),
+                      ),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Auto electric stim artefact removal (DBS / neurostimulator)',
+                              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+                            ),
+                            Text(
+                              'Continuous file — adaptive harmonic comb filter (performed on the continuous signal, NOT on epochs as in GEDAI)',
+                              style: TextStyle(fontSize: 11, color: Colors.black87),
+                            ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(
+                        width: 170,
+                        child: TextFormField(
+                          controller: _batchPreprocessStimF0Controller,
+                          decoration: const InputDecoration(
+                            labelText: 'Artefact Freq (Hz)',
+                            hintText: 'blank = auto-detect',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          ),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 12,
+              runSpacing: 4,
+              children: [
+                _batchOptionCheckbox('Downsample to 250 Hz', _batchPreprocessDownsample, (v) => setState(() => _batchPreprocessDownsample = v)),
+                _batchOptionCheckbox('Bandpass & Notch Filter (0.5–40 Hz, 50 Hz)', _batchPreprocessFilter, (v) => setState(() => _batchPreprocessFilter = v)),
+                _batchOptionCheckbox('Bad Channel Detection (RANSAC)', _batchPreprocessBadChannel, (v) => setState(() => _batchPreprocessBadChannel = v)),
+                _batchOptionCheckbox('GEDAI Artifact Denoising (Epoch Leadfield GED)', _batchPreprocessGedai, (v) => setState(() => _batchPreprocessGedai = v)),
+                _batchOptionCheckbox('Interpolate Bad Channels (Spherical Spline)', _batchPreprocessInterpolate, (v) => setState(() => _batchPreprocessInterpolate = v)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                SizedBox(
+                  width: 220,
+                  child: TextFormField(
+                    controller: _batchPreprocessSuffixController,
+                    decoration: const InputDecoration(
+                      labelText: 'Output Filename Suffix',
+                      hintText: '_clean or _stimclean',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextFormField(
+                    controller: _batchPreprocessOutDirController,
+                    decoration: const InputDecoration(
+                      labelText: 'Output Folder (optional — default: same as source)',
+                      hintText: 'Leave blank to save next to source recording',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  icon: const Icon(Icons.folder_open),
+                  tooltip: 'Select Output Directory',
+                  onPressed: () async {
+                    final dir = await FilePicker.getDirectoryPath(
+                      dialogTitle: 'Select Output Folder for Cleaned Recordings',
+                    );
+                    if (dir != null) {
+                      setState(() => _batchPreprocessOutDirController.text = dir);
+                    }
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              height: 40,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.play_arrow),
+                label: const Text('Run Batch Preprocessing', style: TextStyle(fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.purple.shade700,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: _batchPreprocessFiles.isEmpty || !anyStep ? null : _executeBatchPreprocessing,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildBatchPsgCard() {
@@ -7413,6 +7801,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               ],
             ),
             const SizedBox(height: 16),
+            _buildBatchPreprocessingCard(),
+            const SizedBox(height: 16),
             _buildBatchPsgCard(),
             const SizedBox(height: 16),
             Card(
@@ -7691,6 +8081,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                         onOverlayChanged: _setHypnogramOverlayMode,
                         onOpenMarkers: _openMarkersDialog,
                         onPreprocess: _openPreprocessDialog,
+                        onFeatureConfig: _openFeatureSelectionAndConfigDialog,
                         onToggleVideo: () {
                           if (_videoController == null) {
                             _openVideoFile();
@@ -7958,6 +8349,7 @@ class _Toolbar extends StatefulWidget {
     this.onOverlayChanged,
     this.onOpenMarkers,
     this.onPreprocess,
+    this.onFeatureConfig,
     this.onToggleVideo,
     this.onTimeUnitChanged,
     this.videoLoaded = false,
@@ -7966,6 +8358,7 @@ class _Toolbar extends StatefulWidget {
 
   final EegViewport? viewport;
   final VoidCallback? onPreprocess;
+  final VoidCallback? onFeatureConfig;
   final void Function(int, [bool]) onJump;
   final ValueChanged<bool>? onFocusChanged;
   final VoidCallback onPrevious;
@@ -8399,9 +8792,15 @@ class _ToolbarState extends State<_Toolbar> {
               ),
               _ToolButton(
                 label: 'preprocess',
-                tooltip: 'Epoch-Level Preprocessing (ccstools / GEDAI)…',
+                tooltip: 'Auto electric stim artefact removal & Preprocessing Pipeline…',
                 enabled: true,
                 onPressed: widget.onPreprocess ?? () {},
+              ),
+              _ToolButton(
+                label: 'features',
+                tooltip: 'Feature Selection & Parameter Configuration…',
+                enabled: true,
+                onPressed: widget.onFeatureConfig ?? () {},
               ),
               _ToolButton(
                 label: widget.videoLoaded

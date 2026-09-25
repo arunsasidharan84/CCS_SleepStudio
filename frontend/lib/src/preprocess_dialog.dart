@@ -9,11 +9,13 @@ class PreprocessDialog extends StatefulWidget {
     super.key,
     required this.inputFilePath,
     this.initialChannels = const [],
+    this.initialStimArtifactOnly = false,
     this.onCompleted,
   });
 
   final String inputFilePath;
   final List<String> initialChannels;
+  final bool initialStimArtifactOnly;
   final void Function(String cleanedFilePath)? onCompleted;
 
   @override
@@ -29,6 +31,9 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
   late TextEditingController _notchController;
   late TextEditingController _suffixController;
   late TextEditingController _stimF0Controller;
+  late TextEditingController _stimWinController;
+  late TextEditingController _stimMaxCombsController;
+  late TextEditingController _badChannelThreshController;
 
   String _engine = 'rust';
 
@@ -55,8 +60,28 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
     _bpLoController = TextEditingController(text: '0.5');
     _bpHiController = TextEditingController(text: '40.0');
     _notchController = TextEditingController(text: '50.0');
-    _suffixController = TextEditingController(text: '_clean');
     _stimF0Controller = TextEditingController(text: '');
+    _stimWinController = TextEditingController(text: '10.0');
+    _stimMaxCombsController = TextEditingController(text: '4');
+    _badChannelThreshController = TextEditingController(text: '0.75');
+
+    if (widget.initialStimArtifactOnly) {
+      _stepStimArtifact = true;
+      _stepDownsample = false;
+      _stepFilter = false;
+      _stepBadChannel = false;
+      _stepGedai = false;
+      _stepInterpolate = false;
+      _suffixController = TextEditingController(text: '_stimclean');
+    } else {
+      _stepStimArtifact = false;
+      _stepDownsample = false;
+      _stepFilter = true;
+      _stepBadChannel = true;
+      _stepGedai = true;
+      _stepInterpolate = true;
+      _suffixController = TextEditingController(text: '_clean');
+    }
   }
 
   @override
@@ -69,6 +94,9 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
     _notchController.dispose();
     _suffixController.dispose();
     _stimF0Controller.dispose();
+    _stimWinController.dispose();
+    _stimMaxCombsController.dispose();
+    _badChannelThreshController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -161,6 +189,15 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
     if (_stepStimArtifact && isRust) {
       final f0 = double.tryParse(_stimF0Controller.text.trim());
       if (f0 != null && f0 > 0) rawArgs.addAll(['--stim-f0', f0.toString()]);
+      final win = double.tryParse(_stimWinController.text.trim());
+      if (win != null && win > 0) rawArgs.addAll(['--stim-win', win.toString()]);
+      final combs = int.tryParse(_stimMaxCombsController.text.trim());
+      if (combs != null && combs > 0) rawArgs.addAll(['--stim-max-combs', combs.toString()]);
+    }
+
+    if (_stepBadChannel && isRust) {
+      final thresh = double.tryParse(_badChannelThreshController.text.trim());
+      if (thresh != null && thresh > 0) rawArgs.addAll(['--bad-channel-threshold', thresh.toString()]);
     }
 
     if (_stepFilter) {
@@ -241,11 +278,16 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
     return AlertDialog(
       title: Row(
         children: [
-          const Icon(Icons.auto_fix_high, color: Colors.purple),
+          Icon(
+            widget.initialStimArtifactOnly ? Icons.electric_bolt : Icons.auto_fix_high,
+            color: widget.initialStimArtifactOnly ? Colors.amber.shade800 : Colors.purple,
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'EEG Preprocessing — $fileName',
+              widget.initialStimArtifactOnly
+                  ? 'Auto Electric Stim Artefact Removal (DBS) — $fileName'
+                  : 'EEG Preprocessing Pipeline — $fileName',
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
@@ -253,18 +295,41 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
         ],
       ),
       content: SizedBox(
-        width: 760,
-        height: 560,
+        width: 820,
+        height: 580,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Left column: settings
             SizedBox(
-              width: 340,
+              width: 390,
               child: SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    if (widget.initialStimArtifactOnly)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.blue.shade200),
+                        ),
+                        child: const Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.info_outline, size: 18, color: Colors.blue),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Continuous adaptive harmonic comb filter: removes periodic electrical stimulation / DBS artefacts on continuous recordings prior to epoching, filtering, or downstream analyses.',
+                                style: TextStyle(fontSize: 11.5, color: Colors.black87),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     const Text('Preprocessing Engine:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                     const SizedBox(height: 4),
                     DropdownButtonFormField<String>(
@@ -310,10 +375,10 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
                     CheckboxListTile(
                       dense: true,
                       contentPadding: EdgeInsets.zero,
-                      title: const Text('Stimulation Artefact Removal (DBS / neurostimulator)', style: TextStyle(fontSize: 12)),
+                      title: const Text('Auto electric stim artefact removal (DBS / neurostimulator)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                       subtitle: Text(
                         _engine == 'rust'
-                            ? 'Adaptive harmonic comb; auto-detects the aliased stimulation frequency'
+                            ? 'Continuous adaptive harmonic comb filter; auto-detects fundamental stimulation frequency'
                             : 'Requires the Native Rust engine',
                         style: const TextStyle(fontSize: 10),
                       ),
@@ -323,17 +388,56 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
                     if (_stepStimArtifact)
                       Padding(
                         padding: const EdgeInsets.only(left: 32, bottom: 6),
-                        child: TextFormField(
-                          controller: _stimF0Controller,
-                          enabled: !_isProcessing,
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                          decoration: const InputDecoration(
-                            labelText: 'Artefact frequency (Hz)',
-                            hintText: 'blank = auto-detect',
-                            isDense: true,
-                            border: OutlineInputBorder(),
-                          ),
-                          style: const TextStyle(fontSize: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            TextFormField(
+                              controller: _stimF0Controller,
+                              enabled: !_isProcessing,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: const InputDecoration(
+                                labelText: 'Artefact fundamental freq (Hz)',
+                                hintText: 'blank = auto-detect',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: _stimWinController,
+                                    enabled: !_isProcessing,
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    decoration: const InputDecoration(
+                                      labelText: 'Window (sec)',
+                                      hintText: '10.0',
+                                      isDense: true,
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: _stimMaxCombsController,
+                                    enabled: !_isProcessing,
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Max combs',
+                                      hintText: '4',
+                                      isDense: true,
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
                       ),
                     CheckboxListTile(
@@ -357,6 +461,23 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
                       value: _stepBadChannel,
                       onChanged: _isProcessing ? null : (v) => setState(() => _stepBadChannel = v ?? true),
                     ),
+                    if (_stepBadChannel)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 32, bottom: 6),
+                        child: TextFormField(
+                          controller: _badChannelThreshController,
+                          enabled: !_isProcessing,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'RANSAC Correlation Threshold (0.0–1.0)',
+                            hintText: '0.75',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+
                     CheckboxListTile(
                       dense: true,
                       contentPadding: EdgeInsets.zero,

@@ -5,7 +5,7 @@ export PATH="/opt/flutter/bin:/root/.cargo/bin:$PATH"
 git config --global --add safe.directory '*'
 
 echo "=== System GLIBC version ==="
-ldd --version | head -n 1
+ldd --version 2>&1 | sed -n '1p'
 
 echo "=== Building Rust backend (librust_sleep_eeg.so) ==="
 (cd bridge && cargo build --release)

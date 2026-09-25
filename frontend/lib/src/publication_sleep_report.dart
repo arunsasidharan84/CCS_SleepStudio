@@ -30,8 +30,10 @@ List<int> buildPublicationSleepReport({
   Map<String, dynamic>? respiratoryReport,
   Map<String, dynamic>? plmReport,
   Map<String, dynamic>? capReport,
+  Map<String, dynamic>? nlgReport,
 }) {
   final report = _PdfDocument();
+  final hasNlg = nlgReport != null && (nlgReport['channels'] as Map?)?.isNotEmpty == true;
   final architecture = regionalRows.isEmpty
       ? <String, String>{}
       : regionalRows.first;
@@ -43,7 +45,8 @@ List<int> buildPublicationSleepReport({
       (hasCycles ? 1 : 0) +
       (respiratoryReport != null ? 1 : 0) +
       (plmReport != null ? 1 : 0) +
-      (capReport != null ? 1 : 0);
+      (capReport != null ? 1 : 0) +
+      (hasNlg ? 1 : 0);
   var pageNum = 1;
 
   if (includePages[0]) {
@@ -73,6 +76,9 @@ List<int> buildPublicationSleepReport({
   }
   if (capReport != null) {
     report.addPage(_buildCapPage(viewport, capReport, pageNum++, totalPages));
+  }
+  if (hasNlg) {
+    report.addPage(_buildNlgPage(viewport, nlgReport, pageNum++, totalPages));
   }
   if (includePages[1]) {
     report.addPage(_buildMicrostructurePage(regions, pageNum++, totalPages));
@@ -2358,4 +2364,275 @@ String _buildSleepCyclePage(
     'Sleep onset = first N2/N3/REM epoch. Stage arousals = N2->N1, N3->N2, N3->N1, REM->N1 shifts per hour of N2+N3+REM.',
   );
   return p.build();
+}
+
+
+// ─── NeuroLoopGain page ─────────────────────────────────────────────────────
+
+const _nlgBandOrder = ['slow_wave', 'sigma', 'alpha'];
+
+String _nlgBandName(String band) => switch (band) {
+  'slow_wave' => 'Slow wave',
+  'sigma' => 'Sigma',
+  'alpha' => 'Alpha',
+  _ => band,
+};
+
+_PdfColor _nlgColor(String band) => switch (band) {
+  'slow_wave' => _green,
+  'sigma' => _orange,
+  'alpha' => _purple,
+  _ => _slate,
+};
+
+/// Per-epoch gain averaged over channels for one band.
+List<double?> _nlgEpochSeries(Map channels, String band) {
+  final series = <List>[];
+  for (final ch in channels.values) {
+    final r = (ch as Map?)?[band];
+    final eg = (r as Map?)?['epoch_gain'];
+    if (eg is List) series.add(eg);
+  }
+  final n = series.fold<int>(0, (m, s) => math.max(m, s.length));
+  return List<double?>.generate(n, (i) {
+    var sum = 0.0;
+    var k = 0;
+    for (final s in series) {
+      if (i < s.length && s[i] is num) {
+        sum += (s[i] as num).toDouble();
+        k++;
+      }
+    }
+    return k == 0 ? null : sum / k;
+  });
+}
+
+String _buildNlgPage(
+  EegViewport viewport,
+  Map<String, dynamic> report,
+  int pageNum,
+  int totalPages,
+) {
+  final p = _PdfPage();
+  _header(p, 'NEUROLOOPGAIN: SLOW-WAVE & SIGMA GAIN', 'Page $pageNum of $totalPages');
+  final channels = (report['channels'] as Map?) ?? const {};
+  final average = (report['average'] as Map?) ?? const {};
+  final bands = [
+    for (final b in _nlgBandOrder)
+      if (average.containsKey(b)) b,
+    for (final b in average.keys.map((e) => e.toString()))
+      if (!_nlgBandOrder.contains(b)) b,
+  ];
+  Map? firstResult(String band) {
+    for (final ch in channels.values) {
+      final r = (ch as Map?)?[band];
+      if (r is Map) return r;
+    }
+    return null;
+  }
+
+  final methodParts = <String>[];
+  for (final b in bands) {
+    final r = firstResult(b);
+    final cfg = r?['band'] as Map?;
+    if (cfg == null) continue;
+    methodParts.add(
+      '${_nlgBandName(b)}: F0 ${_jsonFmt(cfg, 'f0')} Hz, B ${_jsonFmt(cfg, 'bandwidth')} Hz, '
+      'fc ${_jsonFmt(cfg, 'fc')} Hz, rate ${_jsonFmt(cfg, 'smooth_rate', decimals: 4)}/s',
+    );
+  }
+  final refs = (report['references'] as List?)?.join('/') ?? '';
+  p.text(
+    'Kemp et al. 2000 microcontinuity analysis | channels: ${channels.keys.join(', ')}'
+    '${refs.isEmpty ? '' : ' referenced to $refs'}',
+    50,
+    708,
+    size: 6.8,
+    color: _slate,
+  );
+  p.text(methodParts.join('  |  '), 50, 698, size: 6.2, color: _slate);
+
+  Map? avg(String b) => average[b] as Map?;
+  final cards = <(String, String)>[];
+  if (bands.contains('slow_wave')) {
+    cards.addAll([
+      ('SW gain NREM', _jsonFmt(avg('slow_wave'), 'NREM_mean', unit: '%')),
+      ('SW gain N3', _jsonFmt(avg('slow_wave'), 'N3_mean', unit: '%')),
+      ('SW index (P75-100)', _jsonFmt(avg('slow_wave'), 'upper_quartile_index', unit: '%')),
+      ('SW NREM trend', _jsonFmt(avg('slow_wave'), 'NREM_slope_per_hour', unit: '%/h')),
+    ]);
+  }
+  if (bands.contains('sigma')) {
+    cards.addAll([
+      ('Sigma gain NREM', _jsonFmt(avg('sigma'), 'NREM_mean', unit: '%')),
+      ('Sigma index (P75-100)', _jsonFmt(avg('sigma'), 'upper_quartile_index', unit: '%')),
+    ]);
+  }
+  _psgCards(p, cards.take(6).toList(), 648);
+
+  // Timeline: hypnogram above, gain curves (0-100 %) below.
+  p.section('Overnight gain on the hypnogram (30-s epochs, mean of channels)', 50, 624);
+  const x = 80.0;
+  const width = 480.0;
+  _hypnogram(p, viewport, x, 540, width, 72);
+  const gy = 430.0;
+  const gh = 96.0;
+  p.rect(x, gy, width, gh, stroke: _lightGray);
+  for (final g in [0.0, 25.0, 50.0, 75.0, 100.0]) {
+    final yy = gy + gh * g / 100;
+    p.line(x, yy, x + width, yy, color: _lightGray, width: 0.25);
+    p.text('${g.toStringAsFixed(0)}%', x - 22, yy - 2, size: 5.8, color: _slate);
+  }
+  final nEpochs = math.max(1, viewport.stages.length);
+  var lx = x;
+  for (final b in bands) {
+    final series = _nlgEpochSeries(channels, b);
+    final pts = <(double, double)>[];
+    void flush() {
+      if (pts.length > 1) p.polyline(List.of(pts), color: _nlgColor(b), width: 0.7);
+      pts.clear();
+    }
+    for (var i = 0; i < series.length && i < nEpochs; i++) {
+      final v = series[i];
+      if (v == null) {
+        flush();
+        continue;
+      }
+      pts.add((x + width * (i + 0.5) / nEpochs, gy + gh * v.clamp(0.0, 100.0) / 100));
+    }
+    flush();
+    p.rect(lx, gy - 12, 8, 3, fill: _nlgColor(b));
+    p.text('${_nlgBandName(b)} gain', lx + 11, gy - 13, size: 6.3, color: _charcoal);
+    lx += 90;
+  }
+
+  // Stage-wise table.
+  p.section('Gain by sleep stage (% , artifact-free seconds)', 50, 400);
+  const stages = ['W', 'N1', 'N2', 'N3', 'REM', 'NREM'];
+  var ty = 382.0;
+  p.text('Band', 52, ty, bold: true, size: 7, color: _navy);
+  for (var i = 0; i < stages.length; i++) {
+    p.text(stages[i] == 'NREM' ? 'N2+N3' : stages[i], 130 + i * 50.0, ty, bold: true, size: 7, color: _navy);
+  }
+  p.text('Artifact', 440, ty, bold: true, size: 7, color: _navy);
+  p.text('piB', 500, ty, bold: true, size: 7, color: _navy);
+  ty -= 4;
+  p.line(50, ty, 562, ty, color: _lightGray);
+  for (final b in bands) {
+    ty -= 11;
+    p.text(_nlgBandName(b), 52, ty, size: 7, color: _nlgColor(b), bold: true);
+    for (var i = 0; i < stages.length; i++) {
+      p.text(_jsonFmt(avg(b), '${stages[i]}_mean'), 130 + i * 50.0, ty, size: 7);
+    }
+    p.text(_jsonFmt(avg(b), 'artifact_percent', unit: '%'), 440, ty, size: 7);
+    p.text(_jsonFmt(avg(b), 'pib', decimals: 1), 500, ty, size: 7);
+  }
+
+  // Per-cycle and per-hour NREM gain.
+  final chartTop = ty - 34;
+  p.section('NREM gain per sleep cycle and per hour', 50, chartTop + 14);
+  var cx = 60.0;
+  for (final b in bands.take(2)) {
+    final cyc = <(String, double?)>[
+      for (var c = 1; c <= 5; c++)
+        if (_jsonNum(avg(b), 'C${c}_NREM_mean') != null) ('C$c', _jsonNum(avg(b), 'C${c}_NREM_mean')),
+    ];
+    _barChart(p, x: cx, y: chartTop - 62, width: 110, height: 52, bars: cyc, color: _nlgColor(b), minMax: 100, unit: '%');
+    p.text('${_nlgBandName(b)}: by cycle', cx, chartTop - 2, size: 6.5, bold: true, color: _navy);
+    final first = firstResult(b);
+    final hourly = <(String, double?)>[];
+    final hourlyByChannel = <int, List<double>>{};
+    for (final ch in channels.values) {
+      final hl = ((ch as Map?)?[b] as Map?)?['hourly'];
+      if (hl is! List) continue;
+      for (var i = 0; i < hl.length; i++) {
+        final v = (hl[i] as Map?)?['nrem_gain'];
+        if (v is num) hourlyByChannel.putIfAbsent(i, () => []).add(v.toDouble());
+      }
+    }
+    final nh = ((first?['hourly'] as List?) ?? const []).length;
+    for (var i = 0; i < nh; i++) {
+      final vals = hourlyByChannel[i] ?? const <double>[];
+      hourly.add(('${i + 1}h', vals.isEmpty ? null : vals.reduce((a, c) => a + c) / vals.length));
+    }
+    _barChart(p, x: cx + 128, y: chartTop - 62, width: 118, height: 52, bars: hourly, color: _nlgColor(b), minMax: 100, unit: '%');
+    p.text('${_nlgBandName(b)}: by hour', cx + 128, chartTop - 2, size: 6.5, bold: true, color: _navy);
+    cx += 256;
+  }
+
+  // Per-channel table.
+  var y2 = chartTop - 92;
+  p.section('Per-channel NREM gain and upper-quartile index', 50, y2);
+  y2 -= 16;
+  p.text('Channel', 52, y2, bold: true, size: 6.8, color: _navy);
+  var colX = 120.0;
+  for (final b in bands) {
+    p.text('${_nlgBandName(b)} NREM', colX, y2, bold: true, size: 6.8, color: _navy);
+    p.text('index', colX + 62, y2, bold: true, size: 6.8, color: _navy);
+    colX += 130;
+  }
+  for (final entry in channels.entries.take(8)) {
+    y2 -= 9;
+    if (y2 < 110) break;
+    p.text(entry.key.toString(), 52, y2, size: 6.8);
+    colX = 120.0;
+    for (final b in bands) {
+      final summ = ((entry.value as Map?)?[b] as Map?)?['summary'] as Map?;
+      p.text(_jsonFmt(summ, 'NREM_mean', unit: '%'), colX, y2, size: 6.8);
+      p.text(_jsonFmt(summ, 'upper_quartile_index', unit: '%'), colX + 62, y2, size: 6.8);
+      colX += 130;
+    }
+  }
+
+  p.section('Interpretation', 50, 100);
+  _wrappedText(p, nlgInterpretation(report), 52, 84, maxCharacters: 120, size: 6.9, lineHeight: 9);
+  _footer(
+    p,
+    'Gain = feedback-loop gain of the band (0-100 %), independent of EEG amplitude. Index = mean of the 75th-100th percentiles (ACCS).',
+  );
+  return p.build();
+}
+
+/// Plain-language summary of a NeuroLoopGain report.
+String nlgInterpretation(Map<String, dynamic> report) {
+  final average = (report['average'] as Map?) ?? const {};
+  final sw = average['slow_wave'] as Map?;
+  final sg = average['sigma'] as Map?;
+  final parts = <String>[];
+  if (sw != null) {
+    final n3 = _jsonNum(sw, 'N3_mean');
+    final n2 = _jsonNum(sw, 'N2_mean');
+    final rem = _jsonNum(sw, 'REM_mean');
+    final slope = _jsonNum(sw, 'NREM_slope_per_hour');
+    final c1 = _jsonNum(sw, 'C1_NREM_mean');
+    final idx = _jsonNum(sw, 'upper_quartile_index');
+    parts.add(
+      'Slow-wave gain averaged ${_jsonFmt(sw, 'NREM_mean', unit: '%')} in N2+N3 sleep'
+      '${n3 != null ? ' (N3 ${n3.toStringAsFixed(1)}%, N2 ${n2?.toStringAsFixed(1) ?? '-'}%, REM ${rem?.toStringAsFixed(1) ?? '-'}%)' : ''}'
+      '${idx != null ? ' with an upper-quartile index of ${idx.toStringAsFixed(1)}%' : ''}.',
+    );
+    if (slope != null) {
+      parts.add(
+        slope < -1
+            ? 'NREM slow-wave gain declined by ${(-slope).toStringAsFixed(1)} %/h across the night'
+                  '${c1 != null ? ' (first cycle ${c1.toStringAsFixed(1)}%)' : ''}, the expected dissipation of homeostatic sleep pressure.'
+            : slope > 1
+            ? 'NREM slow-wave gain rose by ${slope.toStringAsFixed(1)} %/h across the night, the reverse of the usual homeostatic decline; check for early-night fragmentation or artifacts.'
+            : 'NREM slow-wave gain stayed nearly constant across the night (${slope.toStringAsFixed(1)} %/h).',
+      );
+    }
+  }
+  if (sg != null) {
+    final n2 = _jsonNum(sg, 'N2_mean');
+    final n3 = _jsonNum(sg, 'N3_mean');
+    final slope = _jsonNum(sg, 'NREM_slope_per_hour');
+    parts.add(
+      'Sigma (spindle-band) gain was ${n2?.toStringAsFixed(1) ?? '-'}% in N2 and ${n3?.toStringAsFixed(1) ?? '-'}% in N3'
+      '${slope != null ? ', changing by ${slope.toStringAsFixed(1)} %/h in NREM sleep' : ''}.',
+    );
+  }
+  parts.add(
+    'Gain values are amplitude-independent and comparable across recordings and montages; seconds flagged as HF/LF artifact, missing signal or gain events are excluded from the stage averages.',
+  );
+  return parts.join(' ');
 }

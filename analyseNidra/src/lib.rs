@@ -4,6 +4,7 @@ pub mod edf;
 pub mod events;
 pub mod features;
 pub mod hypnogram;
+pub mod nlg;
 pub mod nonlinear;
 pub mod pac;
 pub mod pipeline;

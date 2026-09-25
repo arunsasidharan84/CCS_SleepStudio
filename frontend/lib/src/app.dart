@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import 'analyse_options.dart';
 import 'autoscore_command.dart';
 import 'batch_helpers.dart';
 import 'config_dialog.dart';
@@ -19,6 +20,7 @@ import 'detection_dialogs.dart';
 import 'edf_utilities_dialog.dart';
 import 'eeg_backend.dart';
 import 'models.dart';
+import 'multi_scoring_compare.dart';
 import 'marker_io.dart';
 import 'markers_dialog.dart';
 import 'preprocess_dialog.dart';
@@ -74,6 +76,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   EegViewport? _viewport;
   LoadedEeg? _loadedEeg;
   List<SleepStage>? _comparisonStages;
+  NlgOverlayData? _nlgOverlay;
+  AnalyseNidraOptions _analyseOptions = AnalyseNidraOptions();
+  AnalyseNidraOptions _batchAnalyseOptions = AnalyseNidraOptions();
   String? _activePath;
   String _status = 'Ready — load an EDF file to begin scoring';
   String _appVersion = '';
@@ -383,6 +388,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         recordingStartTime: rawEeg.recordingStartTime,
         channelLabels: rawEeg.channelLabels,
       );
+      final nlgOverlay = await loadNlgOverlay(path);
 
       final viewport = await _backend.viewportFromEeg(
         eeg,
@@ -399,6 +405,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         _activePath = path;
         _loadedEeg = eeg;
         _config = activeConfig;
+        _nlgOverlay = nlgOverlay;
         _viewport = viewport.copyWith(scoredEvents: existingEvents);
         final markerText = existingEvents.isNotEmpty ? '  |  ${existingEvents.length} markers' : '';
         _status =
@@ -701,6 +708,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       _activePath = null;
       _loadedEeg = null;
       _comparisonStages = null;
+      _nlgOverlay = null;
       _viewport = _backend.loadDemoViewport();
       _config = AppConfig(tfEnabled: false);
       _status = 'File closed — load an EDF file to begin scoring';
@@ -1976,7 +1984,15 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             ? _config.channels.map((c) => c.name).toList()
             : eeg.channelLabels,
         batchCount: 1,
-        onRun: (channels, references, {bool perChannel = false, String? regionMapJson}) {
+        initialOptions: _analyseOptions,
+        onRun: (
+          channels,
+          references, {
+          bool perChannel = false,
+          String? regionMapJson,
+          AnalyseNidraOptions? options,
+        }) {
+          if (options != null) _analyseOptions = options;
           _runAnalyseNidraJobs(
             [
               _AnalyseNidraJob(
@@ -1989,6 +2005,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             references,
             perChannel: perChannel,
             regionMapJson: regionMapJson,
+            options: options ?? _analyseOptions,
           );
         },
       ),
@@ -2454,7 +2471,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     String? outputDir,
     bool perChannel = false,
     String? regionMapJson,
+    AnalyseNidraOptions? options,
   }) {
+    final analyseOptions = options ?? AnalyseNidraOptions();
     // Validate that all scoring files exist before starting
     for (final job in jobs) {
       final scFile = File(job.mappedScoringPath);
@@ -2512,10 +2531,23 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 outputDir: outputDir,
                 perChannel: perChannel,
                 regionMapJson: regionMapJson,
+                options: analyseOptions,
               ),
             ),
         ],
         onFinished: (failed) {
+          final active = _activePath;
+          if (analyseOptions.runsNlg &&
+              active != null &&
+              jobs.any((job) => job.edfPath == active)) {
+            unawaited(
+              loadNlgOverlay(active, outputDir: outputDir).then((data) {
+                if (!mounted || data == null || _activePath != active) return;
+                setState(() => _nlgOverlay = data);
+                _setHypnogramOverlayMode('NeuroLoopGain');
+              }),
+            );
+          }
           if (failed == 0) {
             setState(() {
               _lastAnalyseRegionalFiles = [
@@ -2905,6 +2937,22 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     showDialog(
       context: context,
       builder: (context) => _ComparisonReportCardDialog(metrics: metrics),
+    );
+  }
+
+  Future<void> _showMultiScoringComparison() async {
+    final v = _viewport;
+    if (v == null || _activePath == null) {
+      _setStatus('Load a recording first');
+      return;
+    }
+    _setStatus('Collecting scorings for ${_basename(_activePath!)}…');
+    await showMultiScoringCompareDialog(
+      context,
+      recordingPath: _activePath,
+      epochCount: v.epochCount,
+      currentStages: v.stages,
+      epochSeconds: v.epochSeconds,
     );
   }
 
@@ -3495,6 +3543,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               references,
               lightsOffSeconds: _config.lightsOffSeconds,
               lightsOnSeconds: _config.lightsOnSeconds,
+              // Only the requested detectors; keep the regional CSV intact.
+              options: AnalyseNidraOptions(
+                analyses: {
+                  if (detectSpindles) 'spindles',
+                  if (detectSlowWaves) 'slow_waves',
+                },
+              ),
+              writeRegional: false,
             );
 
             final result = await Process.run(executable, args);
@@ -4013,6 +4069,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     bool? hasRespiratory,
     bool? hasPlm,
     bool? hasCap,
+    bool? hasNlg,
   }) async {
     final List<String> pageNames = [
       'Page 1: Macrostructure & Sleep Architecture',
@@ -4029,6 +4086,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       hasCap == null
           ? 'Cyclic Alternating Pattern (when analysed)'
           : 'Cyclic Alternating Pattern',
+      hasNlg == null
+          ? 'NeuroLoopGain (when analysed)'
+          : 'NeuroLoopGain (slow-wave & sigma gain)',
     ];
     final List<bool> selected = [
       true,
@@ -4039,6 +4099,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       hasRespiratory ?? true,
       hasPlm ?? true,
       hasCap ?? true,
+      hasNlg ?? true,
     ];
     final List<bool> enabled = [
       true,
@@ -4049,6 +4110,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       hasRespiratory ?? true,
       hasPlm ?? true,
       hasCap ?? true,
+      hasNlg ?? true,
     ];
 
     return showDialog<List<bool>>(
@@ -4111,10 +4173,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         : respiratoryReportPath(activeForReport);
     final plmPath = activeForReport == null ? null : plmReportPath(activeForReport);
     final capPath = activeForReport == null ? null : capReportPath(activeForReport);
+    final nlgPath = activeForReport == null ? null : nlgSidecarPath(activeForReport);
     final selectedPages = await _showPageSelectionDialog(
       hasRespiratory: respiratoryPath != null && File(respiratoryPath).existsSync(),
       hasPlm: plmPath != null && File(plmPath).existsSync(),
       hasCap: capPath != null && File(capPath).existsSync(),
+      hasNlg: nlgPath != null && File(nlgPath).existsSync(),
     );
     if (selectedPages == null) {
       _setStatus('Report export cancelled');
@@ -4154,6 +4218,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final capReport = selectedPages.length > 7 && selectedPages[7] && capPath != null
         ? await loadPsgReport(capPath)
         : null;
+    final nlgReport = selectedPages.length > 8 && selectedPages[8] && nlgPath != null
+        ? await loadPsgReport(nlgPath)
+        : null;
     final bytes = buildPublicationSleepReport(
       viewport: viewport,
       recordingName: _basename(_activePath ?? viewport.sourceDescription),
@@ -4162,6 +4229,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       respiratoryReport: respiratoryReport,
       plmReport: plmReport,
       capReport: capReport,
+      nlgReport: nlgReport,
       metadata: ReportMetadata(
         title: _config.reportTitle,
         studySite: _config.studySite,
@@ -5671,6 +5739,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             label: 'Show summary statistics',
             onSelected: _showComparisonStats,
           ),
+          PlatformMenuItem(
+            label: 'Compare multiple scorings (choose reference)…',
+            onSelected: _showMultiScoringComparison,
+          ),
         ],
       ),
       // ─── Configuration ────────────────────────────────────────────────
@@ -6023,6 +6095,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               MenuItemButton(
                 onPressed: _showComparisonStats,
                 child: const Text('Show summary statistics'),
+              ),
+              MenuItemButton(
+                onPressed: _showMultiScoringComparison,
+                child: const Text('Compare multiple scorings (choose reference)…'),
               ),
             ],
             child: const Text('Compare'),
@@ -7149,6 +7225,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                             ],
                           ),
                           const SizedBox(height: 12),
+                          AnalyseNidraOptionsPanel(
+                            options: _batchAnalyseOptions,
+                            dense: true,
+                            onChanged: (o) => setState(() => _batchAnalyseOptions = o),
+                          ),
+                          const SizedBox(height: 12),
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                             decoration: BoxDecoration(
@@ -7268,6 +7350,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                            ? null
                                            : _batchAnalyseOutDirController.text.trim();
 
+                                      if (_batchAnalyseOptions.analyses.isEmpty) {
+                                        _setStatus('Select at least one analysis to run.');
+                                        return;
+                                      }
                                       final regionMapJson = (!_batchAnalysePerChannel && _batchAnalyseCustomRegionMap.isNotEmpty)
                                           ? jsonEncode(_batchAnalyseCustomRegionMap)
                                           : null;
@@ -7278,6 +7364,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                         outputDir: outDir,
                                         perChannel: _batchAnalysePerChannel,
                                         regionMapJson: regionMapJson,
+                                        options: _batchAnalyseOptions,
                                       );
                                     },
                               child: const Text(
@@ -7629,6 +7716,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                         setState(() => _swaSlider = v),
                                     onSelectionEnd: _updateSelection,
                                     comparisonStages: _comparisonStages,
+                                    nlgOverlay: _nlgOverlay,
                                     tfEnabled: _config.tfEnabled,
                                     onResizeFlex: _updateFlexValues,
                                     onLightsMarkersChanged:
@@ -7978,6 +8066,7 @@ class _ToolbarState extends State<_Toolbar> {
   String _currentOverlaySelection(EegViewport? vp) {
     if (vp == null || vp.hypnogramOverlayMode == 'Off') return 'Off';
     if (vp.hypnogramOverlayMode == 'SWA') return 'SWA';
+    if (vp.hypnogramOverlayMode == 'NeuroLoopGain') return 'NLG';
     final st = vp.hypnogramProbabilityStage.toUpperCase();
     if (st == 'WAKE' || st == 'W') return 'P(Wake)';
     if (st == 'N1') return 'P(N1)';
@@ -8212,6 +8301,10 @@ class _ToolbarState extends State<_Toolbar> {
                         child: Text('Overlay: SWA'),
                       ),
                       DropdownMenuItem(
+                        value: 'NLG',
+                        child: Text('Overlay: NeuroLoopGain'),
+                      ),
+                      DropdownMenuItem(
                         value: 'P(Wake)',
                         child: Text('Overlay: P(Wake)'),
                       ),
@@ -8241,6 +8334,8 @@ class _ToolbarState extends State<_Toolbar> {
                             if (val == null) return;
                             if (val == 'SWA') {
                               widget.onOverlayChanged?.call('SWA');
+                            } else if (val == 'NLG') {
+                              widget.onOverlayChanged?.call('NeuroLoopGain');
                             } else if (val == 'Off') {
                               widget.onOverlayChanged?.call('Off');
                             } else if (val == 'P(Wake)') {
@@ -8339,6 +8434,7 @@ class _ScoringHeroSurface extends StatefulWidget {
     required this.onResizeFlex,
     required this.onLightsMarkersChanged,
     this.comparisonStages,
+    this.nlgOverlay,
     this.onOverlayChanged,
     this.onChannelScaleAdjust,
     this.onChannelScaleSet,
@@ -8361,6 +8457,7 @@ class _ScoringHeroSurface extends StatefulWidget {
   )
   onSelectionEnd;
   final List<SleepStage>? comparisonStages;
+  final NlgOverlayData? nlgOverlay;
   final bool tfEnabled;
   final void Function(
     int spectrogramFlex,
@@ -8588,6 +8685,7 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                           viewport: widget.viewport,
                           swaKernelSize: 101 - widget.swaSlider,
                           comparisonStages: widget.comparisonStages,
+                          nlgOverlay: widget.nlgOverlay,
                           startEpoch: startEpoch,
                           endEpoch: endEpoch,
                           onLightsMarkersChanged: widget.onLightsMarkersChanged,
@@ -9207,6 +9305,7 @@ class _HypnogramPainterPanel extends StatefulWidget {
     required this.startEpoch,
     required this.endEpoch,
     required this.onLightsMarkersChanged,
+    this.nlgOverlay,
     this.onOverlayChanged,
     this.onTimeUnitChanged,
   });
@@ -9214,6 +9313,7 @@ class _HypnogramPainterPanel extends StatefulWidget {
   final EegViewport viewport;
   final int swaKernelSize;
   final List<SleepStage>? comparisonStages;
+  final NlgOverlayData? nlgOverlay;
   final void Function(double fx) onTapFraction;
   final int startEpoch;
   final int endEpoch;
@@ -9386,6 +9486,7 @@ class _HypnogramPainterPanelState extends State<_HypnogramPainterPanel> {
                       _effectiveViewport,
                       swaKernelSize: widget.swaKernelSize,
                       comparisonStages: widget.comparisonStages,
+                      nlgOverlay: widget.nlgOverlay,
                       startEpoch: widget.startEpoch,
                       endEpoch: widget.endEpoch,
                     ),
@@ -9419,6 +9520,19 @@ class _HypnogramPainterPanelState extends State<_HypnogramPainterPanel> {
               SizedBox(width: 8),
               Text(
                 'SWA Trend (Slow-Wave Activity)',
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'NLG',
+          child: Row(
+            children: [
+              Icon(Icons.stacked_line_chart, size: 16, color: Color(0xFF0B6E4F)),
+              SizedBox(width: 8),
+              Text(
+                'NeuroLoopGain (slow-wave & sigma gain)',
                 style: TextStyle(fontSize: 12),
               ),
             ],
@@ -9535,10 +9649,12 @@ class _HypnogramPainterPanelState extends State<_HypnogramPainterPanel> {
       if (val == null) return;
       if (val == 'SWA') {
         widget.onOverlayChanged?.call('SWA');
+      } else if (val == 'NLG') {
+        widget.onOverlayChanged?.call('NeuroLoopGain');
       } else if (val == 'Off') {
         widget.onOverlayChanged?.call('Off');
       } else if (val.startsWith('P_')) {
-        widget.onOverlayChanged?.call('Probability', val.substring(2));
+        widget.onOverlayChanged?.call('Sleep-stage probability', val.substring(2));
       } else if (val.startsWith('U_')) {
         widget.onTimeUnitChanged?.call(val.substring(2));
       }
@@ -10239,6 +10355,8 @@ List<String> _analyseNidraArguments(
   String? outputDir,
   bool perChannel = false,
   String? regionMapJson,
+  AnalyseNidraOptions? options,
+  bool writeRegional = true,
 }) {
   final baseDir = (outputDir != null && outputDir.trim().isNotEmpty)
       ? outputDir.trim()
@@ -10254,7 +10372,7 @@ List<String> _analyseNidraArguments(
     '${base}_analyse_pac.json',
     '${base}_analyse_slow_waves.json',
     '${base}_analyse_spindles.json',
-    '${base}_analyse_regional.csv',
+    writeRegional ? '${base}_analyse_regional.csv' : '-',
     '--channels',
     channels.join(','),
     '--references',
@@ -10275,6 +10393,9 @@ List<String> _analyseNidraArguments(
   if (regionMapJson != null && regionMapJson.trim().isNotEmpty) {
     args.addAll(['--region-map', regionMapJson.trim()]);
   }
+  args.addAll(
+    (options ?? AnalyseNidraOptions()).toArgs(nlgOutPath: '${base}_analyse_nlg.json'),
+  );
   return args;
 }
 
@@ -10606,6 +10727,9 @@ class _BatchPdfProgressDialogState extends State<_BatchPdfProgressDialog> {
         final capReport = pages.length > 7 && pages[7]
             ? await loadPsgReport(capReportPath(edfPath))
             : null;
+        final nlgReport = pages.length > 8 && pages[8]
+            ? await loadPsgReport(nlgSidecarPath(edfPath))
+            : null;
         final bytes = buildPublicationSleepReport(
           viewport: fullViewport,
           recordingName: _basename(edfPath),
@@ -10614,6 +10738,7 @@ class _BatchPdfProgressDialogState extends State<_BatchPdfProgressDialog> {
           respiratoryReport: respiratoryReport,
           plmReport: plmReport,
           capReport: capReport,
+          nlgReport: nlgReport,
           metadata: ReportMetadata(
             title: activeConfig.reportTitle,
             studySite: activeConfig.studySite,

@@ -15,6 +15,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import 'analyse_options.dart';
 import 'models.dart';
 import 'signal_processing.dart' as sp;
 
@@ -516,6 +517,7 @@ class HypnogramPainter extends CustomPainter {
     this.viewport, {
     this.swaKernelSize = 1,
     this.comparisonStages,
+    this.nlgOverlay,
     this.startEpoch,
     this.endEpoch,
   });
@@ -523,6 +525,7 @@ class HypnogramPainter extends CustomPainter {
   final EegViewport viewport;
   final int swaKernelSize;
   final List<SleepStage>? comparisonStages;
+  final NlgOverlayData? nlgOverlay;
   final int? startEpoch;
   final int? endEpoch;
 
@@ -819,6 +822,10 @@ class HypnogramPainter extends CustomPainter {
 
   void _drawHypnogramOverlay(Canvas canvas, Size size) {
     if (viewport.hypnogramOverlayMode == 'Off') return;
+    if (viewport.hypnogramOverlayMode == 'NeuroLoopGain') {
+      _drawNlgOverlay(canvas, size);
+      return;
+    }
     if (viewport.hypnogramOverlayMode == 'Sleep-stage probability') {
       _drawProbabilityOverlay(canvas, size);
       return;
@@ -872,6 +879,108 @@ class HypnogramPainter extends CustomPainter {
         ),
         align: TextAlign.right,
       );
+    }
+  }
+
+  /// NeuroLoopGain overlay: per-epoch slow-wave / sigma gain (0-100 %)
+  /// averaged over the analysed channels, 3-epoch smoothed.
+  void _drawNlgOverlay(Canvas canvas, Size size) {
+    final data = nlgOverlay;
+    if (data == null || data.isEmpty) {
+      _drawText(
+        canvas,
+        'NeuroLoopGain: run AnalyseNidra with NeuroLoopGain selected',
+        Offset(size.width - 12, 12),
+        style: _axisTextStyle.copyWith(fontSize: 10, color: Colors.black54),
+        align: TextAlign.right,
+        maxWidth: 400,
+      );
+      return;
+    }
+    final sEpoch = startEpoch ?? 0;
+    final eEpoch = endEpoch ?? viewport.stages.length;
+    final visibleCount = math.max(1, eEpoch - sEpoch);
+    final drawWidth = size.width - _hypPad;
+    final epochW = drawWidth / visibleCount;
+    double yOf(double gain) =>
+        _toCanvasY(5.0 * (gain.clamp(0.0, 100.0) / 100.0) - 4.0, size.height);
+
+    // Faint 0 / 50 / 100 % guides on the right edge.
+    final guide = Paint()
+      ..color = Colors.black.withOpacity(0.10)
+      ..strokeWidth = 0.6;
+    for (final g in [0.0, 50.0, 100.0]) {
+      final y = yOf(g);
+      canvas.drawLine(Offset(_hypPad, y), Offset(size.width, y), guide);
+      _drawText(
+        canvas,
+        '${g.toStringAsFixed(0)}%',
+        Offset(size.width - 3, y - 6),
+        style: _axisTextStyle.copyWith(fontSize: 8.5, color: Colors.black45),
+        align: TextAlign.right,
+      );
+    }
+
+    final order = ['slow_wave', 'sigma', 'alpha'];
+    final bands = data.epochGain.keys.toList()
+      ..sort((a, b) {
+        final ia = order.indexOf(a), ib = order.indexOf(b);
+        return (ia < 0 ? 99 : ia).compareTo(ib < 0 ? 99 : ib);
+      });
+    var legendX = size.width - 36;
+    for (final band in bands.reversed) {
+      final series = data.epochGain[band]!;
+      final color = nlgBandColor(band);
+      final path = Path();
+      var penDown = false;
+      for (var i = sEpoch; i < eEpoch && i < series.length; i++) {
+        var sum = 0.0;
+        var k = 0;
+        for (var j = i - 1; j <= i + 1; j++) {
+          if (j >= 0 && j < series.length && series[j] != null) {
+            sum += series[j]!;
+            k++;
+          }
+        }
+        if (series[i] == null || k == 0) {
+          penDown = false;
+          continue;
+        }
+        final x = _hypPad + (i - sEpoch + 0.5) * epochW;
+        final y = yOf(sum / k);
+        if (penDown) {
+          path.lineTo(x, y);
+        } else {
+          path.moveTo(x, y);
+          penDown = true;
+        }
+      }
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = color.withOpacity(0.9)
+          ..strokeWidth = 1.4
+          ..style = PaintingStyle.stroke,
+      );
+      final label = band == 'slow_wave'
+          ? 'SW gain'
+          : band == 'sigma'
+          ? '\u03C3 gain'
+          : '${band[0].toUpperCase()}${band.substring(1)} gain';
+      final tp = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: _axisTextStyle.copyWith(
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      legendX -= tp.width;
+      tp.paint(canvas, Offset(legendX, 5));
+      legendX -= 10;
     }
   }
 
@@ -1099,6 +1208,7 @@ class HypnogramPainter extends CustomPainter {
       old.viewport.currentEpoch != viewport.currentEpoch ||
       old.swaKernelSize != swaKernelSize ||
       old.comparisonStages != comparisonStages ||
+      !identical(old.nlgOverlay, nlgOverlay) ||
       old.viewport.hypnogramOverlayMode != viewport.hypnogramOverlayMode ||
       old.viewport.hypnogramProbabilityStage !=
           viewport.hypnogramProbabilityStage ||

@@ -1,0 +1,39 @@
+FROM almalinux:8
+
+# Install EPEL, PowerTools repository (for devel packages), and build tools
+RUN dnf install -y epel-release && \
+    dnf config-manager --set-enabled powertools && \
+    dnf install -y --setopt=install_weak_deps=False \
+      git \
+      curl \
+      tar \
+      xz \
+      unzip \
+      which \
+      clang \
+      cmake \
+      ninja-build \
+      pkgconfig \
+      gtk3-devel \
+      xz-devel \
+      libblkid-devel \
+      rpm-build \
+      dpkg && \
+    dnf clean all
+
+# Install stable Rust toolchain
+ENV RUSTUP_HOME="/root/.rustup" \
+    CARGO_HOME="/root/.cargo" \
+    PATH="/root/.cargo/bin:${PATH}"
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+
+# Install Flutter SDK (stable)
+ENV FLUTTER_ROOT="/opt/flutter" \
+    PATH="/opt/flutter/bin:${PATH}"
+RUN git clone -b stable --depth 1 https://github.com/flutter/flutter.git "${FLUTTER_ROOT}" && \
+    git config --global --add safe.directory '*' && \
+    flutter config --no-analytics && \
+    flutter config --enable-linux-desktop && \
+    flutter precache --linux
+
+WORKDIR /workspace

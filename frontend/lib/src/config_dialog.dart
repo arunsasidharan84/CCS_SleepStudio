@@ -315,6 +315,7 @@ class _ConfigDialogState extends State<ConfigDialog> {
                               'Off',
                               'SWA',
                               'Sleep-stage probability',
+                              'NeuroLoopGain',
                             ],
                             onChanged: (v) => setState(() {
                               _working.hypnogramOverlayMode = v;

@@ -165,20 +165,23 @@ fn event_density(count: usize, duration_minutes: f64) -> f64 {
 
 pub fn compile(
     recording: &LoadedRecording,
-    core: &CoreStageFeatures,
-    spindles: &SpindleResults,
-    slow_waves: &SlowWaveResults,
-    pac: &BTreeMap<String, PacChannelResult>,
+    core: Option<&CoreStageFeatures>,
+    spindles: Option<&SpindleResults>,
+    slow_waves: Option<&SlowWaveResults>,
+    pac: Option<&BTreeMap<String, PacChannelResult>>,
+    nlg: Option<&crate::nlg::NlgReport>,
     per_channel: bool,
     custom_regions: Option<&BTreeMap<String, String>>,
 ) -> BTreeMap<String, RegionalRow> {
     let spindle_by_channel = spindles
-        .summary
+        .map(|s| s.summary.as_slice())
+        .unwrap_or(&[])
         .iter()
         .map(|summary| (summary.channel.as_str(), summary))
         .collect::<BTreeMap<_, _>>();
     let slow_wave_by_channel = slow_waves
-        .summary
+        .map(|s| s.summary.as_slice())
+        .unwrap_or(&[])
         .iter()
         .map(|summary| (summary.channel.as_str(), summary))
         .collect::<BTreeMap<_, _>>();
@@ -194,7 +197,7 @@ pub fn compile(
     let pac_by_output_channel = sorted_channels
         .iter()
         .copied()
-        .zip(recording.edf.channels.iter().map(|channel| &pac[channel]))
+        .zip(recording.edf.channels.iter().map(|channel| pac.and_then(|p| p.get(channel))))
         .collect::<BTreeMap<_, _>>();
     let nrem_minutes =
         recording.architecture.values["N2_duration"] + recording.architecture.values["N3_duration"];
@@ -204,7 +207,8 @@ pub fn compile(
     for channel in &recording.edf.channels {
         let spindle = spindle_by_channel.get(channel.as_str()).copied();
         let slow_wave = slow_wave_by_channel.get(channel.as_str()).copied();
-        let pac_value = pac_by_output_channel[channel.as_str()];
+        let pac_value = pac_by_output_channel.get(channel.as_str()).copied().flatten();
+        let pac_or = |f: fn(&PacChannelResult) -> f64| pac_value.map_or(f64::NAN, f);
         let mut row = RegionalRow::from([
             (
                 "sp_Count".into(),
@@ -304,14 +308,24 @@ pub fn compile(
                 "sw_all_PhaseConsistency".into(),
                 slow_wave.map_or(f64::NAN, |value| value.phase_consistency),
             ),
-            ("pac_all_max_MI".into(), pac_value.maximum),
-            ("pac_all_max_sp".into(), pac_value.amplitude_frequency),
-            ("pac_all_max_sw".into(), pac_value.phase_frequency),
-            ("pac_all_max_gcPAC".into(), pac_value.maximum_gc),
-            ("pac_all_max_gc_sp".into(), pac_value.amplitude_frequency_gc),
-            ("pac_all_max_gc_sw".into(), pac_value.phase_frequency_gc),
+            ("pac_all_max_MI".into(), pac_or(|p| p.maximum)),
+            ("pac_all_max_sp".into(), pac_or(|p| p.amplitude_frequency)),
+            ("pac_all_max_sw".into(), pac_or(|p| p.phase_frequency)),
+            ("pac_all_max_gcPAC".into(), pac_or(|p| p.maximum_gc)),
+            ("pac_all_max_gc_sp".into(), pac_or(|p| p.amplitude_frequency_gc)),
+            ("pac_all_max_gc_sw".into(), pac_or(|p| p.phase_frequency_gc)),
         ]);
-        row.extend(core.channels[channel].clone());
+        if let Some(values) = core.and_then(|c| c.channels.get(channel)) {
+            row.extend(values.clone());
+        }
+        if let Some(bands) = nlg.and_then(|n| n.channels.get(channel)) {
+            for (band, result) in bands {
+                let Some(prefix) = nlg_prefix(band) else { continue };
+                for (key, stat) in NLG_STATS {
+                    row.insert(format!("NLG_{prefix}_{key}"), result.summary.get(*stat).copied().unwrap_or(f64::NAN));
+                }
+            }
+        }
         channels.insert(channel.clone(), row);
     }
 
@@ -351,12 +365,49 @@ pub fn compile(
             continue;
         }
         let mut row = RegionalRow::new();
-        for column in event_columns().into_iter().chain(feature_columns()) {
+        for column in event_columns().into_iter().chain(feature_columns()).chain(nlg_columns()) {
             row.insert(column.clone(), mean(&selected, &column));
         }
         output.insert(region_name, row);
     }
     output
+}
+
+/// NeuroLoopGain columns: (CSV suffix, summary key).
+const NLG_STATS: &[(&str, &str)] = &[
+    ("W", "W_mean"),
+    ("N1", "N1_mean"),
+    ("N2", "N2_mean"),
+    ("N3", "N3_mean"),
+    ("REM", "REM_mean"),
+    ("NREM", "NREM_mean"),
+    ("NREM_slope", "NREM_slope_per_hour"),
+    ("index", "upper_quartile_index"),
+    ("artifact_pct", "artifact_percent"),
+    ("C1_NREM", "C1_NREM_mean"),
+    ("C2_NREM", "C2_NREM_mean"),
+    ("C3_NREM", "C3_NREM_mean"),
+    ("C4_NREM", "C4_NREM_mean"),
+    ("C5_NREM", "C5_NREM_mean"),
+];
+
+fn nlg_prefix(band: &str) -> Option<&'static str> {
+    match band {
+        "slow_wave" => Some("SW"),
+        "sigma" => Some("Sigma"),
+        "alpha" => Some("Alpha"),
+        _ => None,
+    }
+}
+
+fn nlg_columns() -> Vec<String> {
+    let mut out = Vec::new();
+    for prefix in ["SW", "Sigma", "Alpha"] {
+        for (key, _) in NLG_STATS {
+            out.push(format!("NLG_{prefix}_{key}"));
+        }
+    }
+    out
 }
 
 fn event_columns() -> Vec<String> {
@@ -457,6 +508,7 @@ pub fn write_csv(
     columns.extend(["Subjname".into(), "Sessname".into(), "Chan".into()]);
     columns.extend(event_columns());
     columns.extend(feature_columns());
+    columns.extend(nlg_columns());
     // Stage dynamics and sleep-cycle parameters: non-redundant full-night
     // dynamics plus the first five sleep cycles (without accs_ prefix).
     let stage_dyn_columns = stage_dynamics_columns();
@@ -472,8 +524,8 @@ pub fn write_csv(
         values.push(csv_escape(recording_name));
         values.push(String::new());
         values.push(region.clone());
-        for column in event_columns().into_iter().chain(feature_columns()) {
-            let value = row[&column];
+        for column in event_columns().into_iter().chain(feature_columns()).chain(nlg_columns()) {
+            let value = row.get(&column).copied().unwrap_or(f64::NAN);
             values.push(if value.is_finite() {
                 value.to_string()
             } else {

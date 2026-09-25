@@ -17,6 +17,7 @@ struct SignalHeader {
     physical_max: f64,
     digital_min: f64,
     digital_max: f64,
+    prefilter: String,
     samples_per_record: usize,
 }
 
@@ -101,7 +102,7 @@ fn read_edf_headers(file: &mut File, path: &Path, num_signals: usize) -> Result<
     let physical_max = read_field_matrix(file, num_signals, 8)?;
     let digital_min = read_field_matrix(file, num_signals, 8)?;
     let digital_max = read_field_matrix(file, num_signals, 8)?;
-    let _prefilter = read_field_matrix(file, num_signals, 80)?;
+    let prefilter = read_field_matrix(file, num_signals, 80)?;
     let samples_per_record = read_field_matrix(file, num_signals, 8)?;
     let _reserved = read_field_matrix(file, num_signals, 32)?;
 
@@ -122,6 +123,7 @@ fn read_edf_headers(file: &mut File, path: &Path, num_signals: usize) -> Result<
             physical_max: parse_f64(&physical_max[index], "physical maximum")?,
             digital_min: parse_f64(&digital_min[index], "digital minimum")?,
             digital_max: parse_f64(&digital_max[index], "digital maximum")?,
+            prefilter: text(&prefilter[index]),
             samples_per_record: parse_usize(&samples_per_record[index], "samples per record")?,
         });
     }
@@ -324,6 +326,7 @@ pub struct SignalInfo {
     pub sfreq: f64,
     pub unit: String,
     pub transducer: String,
+    pub prefilter: String,
 }
 
 /// One signal loaded at its native sampling rate.
@@ -384,6 +387,7 @@ pub fn read_signal_infos(path: &Path) -> Result<Vec<SignalInfo>> {
             sfreq: h.samples_per_record as f64 / layout.record_duration.max(1e-9),
             unit: h.unit.clone(),
             transducer: h.transducer.clone(),
+            prefilter: h.prefilter.clone(),
         })
         .collect())
 }
@@ -731,4 +735,94 @@ fn read_vhdr_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
         channels: requested.to_vec(),
         data_uv: data,
     })
+}
+
+
+/// One signal read the way the NeuroLoopGain EDF library does it: every
+/// sample converted with `PhysiMin + (digital - DigiMin) *
+/// ((PhysiMax - PhysiMin) / (DigiMax - DigiMin))`, which keeps the values
+/// bit-identical to the reference implementation.
+#[derive(Debug, Clone)]
+pub struct KempSignal {
+    pub label: String,
+    pub sfreq: f64,
+    pub unit: String,
+    pub prefilter: String,
+    pub samples_per_record: usize,
+    pub record_duration: f64,
+    pub data: Vec<f64>,
+}
+
+pub fn read_signals_kemp(path: &Path, requested: &[String]) -> Result<Vec<Option<KempSignal>>> {
+    let (mut file, layout) = read_layout(path)?;
+    let indices: Vec<Option<usize>> = requested
+        .iter()
+        .map(|name| find_header_index(&layout.headers, name))
+        .collect();
+    let mut buffers: HashMap<usize, Vec<f64>> = HashMap::new();
+    for idx in indices.iter().flatten() {
+        let spr = layout.headers[*idx].samples_per_record;
+        buffers
+            .entry(*idx)
+            .or_insert_with(|| Vec::with_capacity(spr * layout.num_records));
+    }
+    if !buffers.is_empty() {
+        file.seek(SeekFrom::Start(layout.header_bytes as u64))?;
+        let record_bytes: usize = layout.headers.iter().map(|h| h.samples_per_record * 2).sum();
+        let offsets: Vec<usize> = layout
+            .headers
+            .iter()
+            .scan(0usize, |acc, h| {
+                let start = *acc;
+                *acc += h.samples_per_record * 2;
+                Some(start)
+            })
+            .collect();
+        let per_chunk = (8 * 1024 * 1024 / record_bytes.max(1)).max(1);
+        let mut chunk = vec![0_u8; per_chunk * record_bytes];
+        let mut remaining = layout.num_records;
+        while remaining > 0 {
+            let n = remaining.min(per_chunk);
+            let bytes = &mut chunk[..n * record_bytes];
+            if file.read_exact(bytes).is_err() {
+                break;
+            }
+            for r in 0..n {
+                let record = &bytes[r * record_bytes..(r + 1) * record_bytes];
+                for (&idx, buf) in buffers.iter_mut() {
+                    let h = &layout.headers[idx];
+                    let dmin = h.digital_min.trunc();
+                    let dmax = h.digital_max.trunc();
+                    let factor = (h.physical_max - h.physical_min) / (dmax - dmin);
+                    let start = offsets[idx];
+                    buf.extend(
+                        record[start..start + h.samples_per_record * 2]
+                            .chunks_exact(2)
+                            .map(|pair| {
+                                let d = i16::from_le_bytes([pair[0], pair[1]]) as f64;
+                                h.physical_min + (d - dmin) * factor
+                            }),
+                    );
+                }
+            }
+            remaining -= n;
+        }
+    }
+    Ok(indices
+        .iter()
+        .map(|idx| {
+            idx.map(|i| {
+                let h = &layout.headers[i];
+                KempSignal {
+                    label: h.label.clone(),
+                    sfreq: h.samples_per_record as f64 / layout.record_duration,
+                    unit: h.unit.clone(),
+                    prefilter: h.prefilter.clone(),
+                    samples_per_record: h.samples_per_record,
+                    record_duration: layout.record_duration,
+                    data: buffers.get(&i).cloned().unwrap_or_default(),
+                }
+            })
+        })
+        .collect())
 }

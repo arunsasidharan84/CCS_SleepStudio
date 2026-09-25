@@ -266,115 +266,95 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libblkid-dev dpkg-dev rpm
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+      - name: Build EL8 Linux builder container
+        uses: docker/build-push-action@v5
         with:
-          workspaces: |
-            bridge
-            analyseNidra
+          context: .
+          file: scripts/Dockerfile.linux-el8
+          tags: ccs-builder-el8:latest
+          load: true
+          cache-from: type=gha,scope=el8-builder
+          cache-to: type=gha,mode=max,scope=el8-builder
 
-      - name: Build Rust backend (Linux so)
-        run: cargo build --release
-        working-directory: bridge
-
-      - name: Build AnalyseNidra CLI (Linux)
-        run: cargo build --release
-        working-directory: analyseNidra
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+      - name: Cache Cargo and Pub
+        uses: actions/cache@v4
         with:
-          channel: stable
-          cache: true
-          cache-key: flutter-${{ runner.os }}-${{ hashFiles('frontend/pubspec.yaml') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.pub-cache
+            bridge/target
+            analyseNidra/target
+          key: linux-el8-${{ runner.os }}-cargo-flutter-${{ hashFiles('bridge/Cargo.lock', 'analyseNidra/Cargo.lock', 'frontend/pubspec.lock') }}
+          restore-keys: |
+            linux-el8-${{ runner.os }}-cargo-flutter-
 
-      - name: Enable Linux desktop support
-        run: flutter config --enable-linux-desktop
-
-      - name: Install dependencies
-        run: flutter pub get
-        working-directory: frontend
-
-      - name: Analyze
-        run: flutter analyze
-        working-directory: frontend
-
-      - name: Test
-        run: flutter test
-        working-directory: frontend
-
-      # 1. Build and Package Lite version
-      - name: Build Linux app (Lite)
-        run: flutter build linux --release --dart-define=LITE_BUILD=true
-        working-directory: frontend
-
-      - name: Copy Rust backend into Linux bundle (Lite)
+      - name: Build Linux app in AlmaLinux 8 container (GLIBC 2.28 compatible)
         run: |
-          cp bridge/target/release/librust_sleep_eeg.so frontend/build/linux/x64/release/bundle/
-          cp analyseNidra/target/release/analyse-nidra frontend/build/linux/x64/release/bundle/
-          test -x frontend/build/linux/x64/release/bundle/analyse-nidra
+          mkdir -p ~/.cargo/registry ~/.cargo/git ~/.pub-cache
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -v "$HOME/.cargo/registry:/root/.cargo/registry" \
+            -v "$HOME/.cargo/git:/root/.cargo/git" \
+            -v "$HOME/.pub-cache:/root/.pub-cache" \
+            -w /workspace \
+            ccs-builder-el8:latest \
+            bash scripts/build_linux_in_container.sh
 
-      - name: Build Linux installer (Lite)
-        run: |
-          bash scripts/package_linux_deb.sh \
-            frontend/build/linux/x64/release/bundle \
-            dist/CCSSleepStudio-lite-linux-amd64.deb \
-            lite
-          bash scripts/package_linux_rpm.sh \
-            frontend/build/linux/x64/release/bundle \
-            dist/CCSSleepStudio-lite-linux-x86_64.rpm \
-            lite
+      - name: Fix file permissions
+        if: always()
+        run: sudo chown -R $(id -u):$(id -g) .
 
-      # 2. Build and Package Full version
-      - name: Build Linux app (Full)
-        run: flutter build linux --release
-        working-directory: frontend
-
-      - name: Copy Rust backend and Models into Linux bundle (Full)
-        run: |
-          cp bridge/target/release/librust_sleep_eeg.so frontend/build/linux/x64/release/bundle/
-          cp analyseNidra/target/release/analyse-nidra frontend/build/linux/x64/release/bundle/
-          mkdir -p frontend/build/linux/x64/release/bundle/assets
-          cp -r analyseNidra/assets/models frontend/build/linux/x64/release/bundle/assets/
-          test -x frontend/build/linux/x64/release/bundle/analyse-nidra
-
-      - name: Build Linux installer (Full)
-        run: |
-          bash scripts/package_linux_deb.sh \
-            frontend/build/linux/x64/release/bundle \
-            dist/CCSSleepStudio-linux-amd64.deb \
-            full
-          bash scripts/package_linux_rpm.sh \
-            frontend/build/linux/x64/release/bundle \
-            dist/CCSSleepStudio-linux-x86_64.rpm \
-            full
-
-      - name: Validate RPM installers on AlmaLinux 9
+      - name: Validate RPM installers on AlmaLinux 8 (GLIBC 2.28)
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/dist:/packages:ro" \
-            almalinux:9 bash -lc '
+            almalinux:8 bash -lc '
               dnf install -y /packages/CCSSleepStudio-lite-linux-x86_64.rpm &&
               test -x /usr/bin/ccs-sleep-studio &&
               test -f /usr/share/applications/ccs-sleep-studio.desktop &&
-              ldd /usr/lib/ccs-sleep-studio/CCSSleepStudio > /tmp/ldd.txt &&
-              ! grep -E "not found|version .* not found" /tmp/ldd.txt
+              ldd /usr/lib/ccs-sleep-studio/CCSSleepStudio > /tmp/lite-ldd.txt &&
+              ! grep -E "not found|version .* not found" /tmp/lite-ldd.txt
             '
+          docker run --rm \
+            -v "${{ github.workspace }}/dist:/packages:ro" \
+            almalinux:8 bash -lc '
+              dnf install -y /packages/CCSSleepStudio-linux-x86_64.rpm &&
+              test -x /usr/bin/ccs-sleep-studio &&
+              test -x /usr/lib/ccs-sleep-studio/analyse-nidra &&
+              test -d /usr/lib/ccs-sleep-studio/assets/models &&
+              ldd /usr/lib/ccs-sleep-studio/CCSSleepStudio > /tmp/app-ldd.txt &&
+              ! grep -E "not found|version .* not found" /tmp/app-ldd.txt &&
+              ldd /usr/lib/ccs-sleep-studio/analyse-nidra > /tmp/cli-ldd.txt &&
+              ! grep -E "not found|version .* not found" /tmp/cli-ldd.txt &&
+              ldd /usr/lib/ccs-sleep-studio/librust_sleep_eeg.so > /tmp/so-ldd.txt &&
+              ! grep -E "not found|version .* not found" /tmp/so-ldd.txt
+            '
+
+      - name: Validate RPM installers on AlmaLinux 9 (GLIBC 2.34)
+        run: |
           docker run --rm \
             -v "${{ github.workspace }}/dist:/packages:ro" \
             almalinux:9 bash -lc '
               dnf install -y /packages/CCSSleepStudio-linux-x86_64.rpm &&
               test -x /usr/bin/ccs-sleep-studio &&
               test -x /usr/lib/ccs-sleep-studio/analyse-nidra &&
-              test -d /usr/lib/ccs-sleep-studio/assets/models &&
+              ldd /usr/lib/ccs-sleep-studio/CCSSleepStudio > /tmp/app-ldd.txt &&
+              ! grep -E "not found|version .* not found" /tmp/app-ldd.txt
+            '
+
+      - name: Validate DEB installers on Ubuntu 22.04
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/dist:/packages:ro" \
+            ubuntu:22.04 bash -lc '
+              apt-get update -y &&
+              apt-get install -y /packages/CCSSleepStudio-linux-amd64.deb &&
+              test -x /usr/bin/ccs-sleep-studio &&
+              test -x /usr/lib/ccs-sleep-studio/analyse-nidra &&
               ldd /usr/lib/ccs-sleep-studio/CCSSleepStudio > /tmp/app-ldd.txt &&
               ! grep -E "not found|version .* not found" /tmp/app-ldd.txt
             '

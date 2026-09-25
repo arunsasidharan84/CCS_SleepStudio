@@ -60,7 +60,11 @@ pub fn load(
     );
     let mut architecture = sleep_architecture(&stages, window);
     if let Some(stage_analysis) = crate::accs::analyse(&stages) {
-        architecture.values.extend(crate::accs::flatten(&stage_analysis));
+        // Un-prefixed ACCS names (N1_duration, N2_percentage, ...) must not
+        // overwrite the standard architecture values of the same name.
+        for (key, value) in crate::accs::flatten(&stage_analysis) {
+            architecture.values.entry(key).or_insert(value);
+        }
     }
     if !references.is_empty() {
         let reference_indices = references

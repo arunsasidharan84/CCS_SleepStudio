@@ -3,6 +3,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 
+import 'analyse_options.dart';
 import 'autoscore_command.dart';
 
 class MtKcdDialog extends StatefulWidget {
@@ -1565,6 +1566,7 @@ typedef AnalyseNidraRunCallback = void Function(
   List<String> references, {
   bool perChannel,
   String? regionMapJson,
+  AnalyseNidraOptions? options,
 });
 
 class AnalyseNidraDialog extends StatefulWidget {
@@ -1573,11 +1575,13 @@ class AnalyseNidraDialog extends StatefulWidget {
     required this.channelLabels,
     required this.batchCount,
     required this.onRun,
+    this.initialOptions,
   });
 
   final List<String> channelLabels;
   final int batchCount;
   final AnalyseNidraRunCallback onRun;
+  final AnalyseNidraOptions? initialOptions;
 
   @override
   State<AnalyseNidraDialog> createState() => _AnalyseNidraDialogState();
@@ -1588,10 +1592,12 @@ class _AnalyseNidraDialogState extends State<AnalyseNidraDialog> {
   late final Map<String, bool> _references;
   bool _perChannel = false;
   Map<String, String> _customRegionMap = {};
+  late AnalyseNidraOptions _options;
 
   @override
   void initState() {
     super.initState();
+    _options = widget.initialOptions?.copyWith() ?? AnalyseNidraOptions();
     _channels = {};
     _references = {};
     for (final channel in widget.channelLabels) {
@@ -1638,9 +1644,14 @@ class _AnalyseNidraDialogState extends State<AnalyseNidraDialog> {
       ),
       content: SizedBox(
         width: 640,
-        height: 480,
+        height: 620,
         child: Column(
           children: [
+            AnalyseNidraOptionsPanel(
+              options: _options,
+              onChanged: (o) => setState(() => _options = o),
+            ),
+            const SizedBox(height: 10),
             Expanded(
               child: Row(
                 children: [
@@ -1709,6 +1720,13 @@ class _AnalyseNidraDialogState extends State<AnalyseNidraDialog> {
               );
               return;
             }
+            if (_options.analyses.isEmpty ||
+                (_options.analyses.length == 1 && _options.analyses.contains('nlg') && _options.nlgBands.isEmpty)) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Select at least one analysis to run.')),
+              );
+              return;
+            }
             Navigator.of(context).pop();
             final regionMapJson = (!_perChannel && _customRegionMap.isNotEmpty)
                 ? jsonEncode(_customRegionMap)
@@ -1718,6 +1736,7 @@ class _AnalyseNidraDialogState extends State<AnalyseNidraDialog> {
               references,
               perChannel: _perChannel,
               regionMapJson: regionMapJson,
+              options: _options,
             );
           },
           child: const Text('Run analysis'),

@@ -1,6 +1,4 @@
 use analyse_nidra::events;
-use analyse_nidra::features::{acw50, bandpowers};
-use analyse_nidra::nonlinear;
 use analyse_nidra::pac;
 use analyse_nidra::pipeline;
 use analyse_nidra::regional;
@@ -12,12 +10,14 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const VERSION: &str = "1.21.0";
+const VERSION: &str = "1.22.0";
 
 const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
 [core.json|-] [pac.json|-] [slow-waves.json|-] [spindles.json|-] [regional.csv|-] \
 [--out-dir <path>] [--channels F3,F4,C3,C4,O1,O2] [--references M1,M2] \
-[--lights-off-sec SEC] [--lights-on-sec SEC] [--per-channel] [--region-map <json_or_file>] [--version]\n\
+[--lights-off-sec SEC] [--lights-on-sec SEC] [--per-channel] [--region-map <json_or_file>] \
+[--analyses core,pac,slow_waves,spindles,nlg | --skip <list>] [--nlg-out <nlg.json>] [--nlg-bands slow_wave,sigma[,alpha]] \
+[--nlg-smooth-rate 0.01666] [--nlg-undersample N] [--nlg-edf-dir DIR] [--version]\n\
    or: analyse-nidra --preprocess <recording.edf> [--out-dir <dir>] [--steps <stimartifact,filter,badchannel,interpolate,gedai,save>] \
 [--downsample-hz <hz>] [--bandpass-lo <lo>] [--bandpass-hi <hi>] [--notch-hz <notch>] [--suffix <_clean>] \
 [--stim-f0 <hz>] [--stim-win <sec>] [--stim-max-combs <n>]\n\
@@ -33,6 +33,8 @@ const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
    or: analyse-nidra --cap <recording.edf> --scoring <s.json> [--eeg C4-M1] [--respiratory-json <r.json>] \
 [--plm-json <p.json>] [--arousals prefer-manual|none] [--sensitivity conservative|standard|sensitive] \
 [--a-phases prefer-manual|manual|auto] [--out <c.json>]\n\
+   or: analyse-nidra --nlg <recording.edf> [--scoring s.json] [--eeg C4,C3] [--references M1,M2] [--bands slow_wave,sigma] \
+[--smooth-rate 0.01666] [--undersample N] [--edf-dir DIR] [--out <n.json>]\n\
    or: analyse-nidra --list-signals <recording.edf>";
 
 #[derive(Debug)]
@@ -48,6 +50,99 @@ struct Cli {
     lights_on_seconds: Option<f64>,
     per_channel: bool,
     region_map: Option<BTreeMap<String, String>>,
+    /// Analyses to run (core, pac, slow_waves, spindles, nlg).
+    analyses: HashSet<String>,
+    nlg_out: Option<PathBuf>,
+    nlg: NlgCli,
+}
+
+#[derive(Debug, Clone)]
+struct NlgCli {
+    bands: Vec<String>,
+    smooth_rate: f64,
+    undersampler: i32,
+    lp_hz: Option<f64>,
+    edf_dir: Option<PathBuf>,
+    keep_series: bool,
+}
+
+impl Default for NlgCli {
+    fn default() -> Self {
+        Self {
+            bands: vec!["slow_wave".into(), "sigma".into()],
+            smooth_rate: 0.01666,
+            undersampler: 0,
+            lp_hz: None,
+            edf_dir: None,
+            keep_series: true,
+        }
+    }
+}
+
+impl NlgCli {
+    fn options(&self) -> Result<analyse_nidra::nlg::NlgOptions> {
+        let bands = self
+            .bands
+            .iter()
+            .map(|b| analyse_nidra::nlg::NlgBand::parse(b, self.smooth_rate))
+            .collect::<Result<Vec<_>>>()?;
+        if bands.is_empty() {
+            bail!("--nlg-bands needs at least one band");
+        }
+        Ok(analyse_nidra::nlg::NlgOptions {
+            bands,
+            undersampler: self.undersampler,
+            lp_hz: self.lp_hz,
+            keep_series: self.keep_series,
+            write_edf_dir: self.edf_dir.clone(),
+        })
+    }
+
+    /// Handles one `--nlg-*` option; returns false when `key` is not one.
+    fn accept(&mut self, key: &str, value: &mut dyn FnMut() -> Option<String>) -> Result<bool> {
+        match key {
+            "--nlg-bands" => {
+                self.bands = split_channel_arg(&value().context("--nlg-bands requires a value")?);
+            }
+            "--nlg-smooth-rate" => {
+                self.smooth_rate = value().context("--nlg-smooth-rate requires a value")?.parse()?;
+            }
+            "--nlg-undersample" => {
+                self.undersampler = value().context("--nlg-undersample requires a value")?.parse()?;
+            }
+            "--nlg-lp" => {
+                self.lp_hz = Some(value().context("--nlg-lp requires a value")?.parse()?);
+            }
+            "--nlg-edf-dir" => {
+                self.edf_dir = value().map(PathBuf::from);
+            }
+            "--nlg-no-series" => self.keep_series = false,
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+}
+
+pub const ALL_ANALYSES: [&str; 5] = ["core", "pac", "slow_waves", "spindles", "nlg"];
+
+fn parse_analyses(value: &str) -> Result<HashSet<String>> {
+    let mut out = HashSet::new();
+    for item in value.split(',').map(|v| v.trim().to_ascii_lowercase()).filter(|v| !v.is_empty()) {
+        let canonical = match item.as_str() {
+            "all" => {
+                out.extend(ALL_ANALYSES.iter().map(|v| v.to_string()));
+                continue;
+            }
+            "core" | "features" | "spectral" => "core",
+            "pac" | "coupling" => "pac",
+            "slow_waves" | "slowwaves" | "sw" => "slow_waves",
+            "spindles" | "sp" => "spindles",
+            "nlg" | "neuroloopgain" => "nlg",
+            other => bail!("unknown analysis '{other}' (use {})", ALL_ANALYSES.join(",")),
+        };
+        out.insert(canonical.to_string());
+    }
+    Ok(out)
 }
 
 fn parse_region_map(value: OsString) -> Result<BTreeMap<String, String>> {
@@ -136,8 +231,38 @@ fn parse_cli(arguments: impl IntoIterator<Item = OsString>) -> Result<Cli> {
     let mut out_dir: Option<PathBuf> = None;
     let mut per_channel = false;
     let mut region_map = None;
+    let mut analyses: Option<HashSet<String>> = None;
+    let mut nlg_out: Option<PathBuf> = None;
+    let mut nlg = NlgCli::default();
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
+        let text = argument.to_string_lossy().to_string();
+        let (key, inline) = match text.split_once('=') {
+            Some((k, v)) if k.starts_with("--nlg") || k == "--analyses" || k == "--skip" => {
+                (k.to_string(), Some(v.to_string()))
+            }
+            _ => (text.clone(), None),
+        };
+        {
+            let mut next_value = || inline.clone().or_else(|| arguments.next().map(|v| v.to_string_lossy().to_string()));
+            if key == "--analyses" {
+                analyses = Some(parse_analyses(&next_value().context("--analyses requires a list")?)?);
+                continue;
+            }
+            if key == "--skip" {
+                let skip = parse_analyses(&next_value().context("--skip requires a list")?)?;
+                let base = analyses.take().unwrap_or_else(|| ALL_ANALYSES.iter().map(|v| v.to_string()).collect());
+                analyses = Some(base.difference(&skip).cloned().collect());
+                continue;
+            }
+            if key == "--nlg-out" {
+                nlg_out = next_value().map(PathBuf::from);
+                continue;
+            }
+            if nlg.accept(&key, &mut next_value)? {
+                continue;
+            }
+        }
         if argument == "--version" {
             println!("analyse-nidra {VERSION}");
             std::process::exit(0);
@@ -252,6 +377,9 @@ to write results automatically"
                 outputs[idx] = Some(dir.join(format!("{stem}_analyse_{name}.{ext}")));
             }
         }
+        if nlg_out.is_none() {
+            nlg_out = Some(dir.join(format!("{stem}_analyse_nlg.json")));
+        }
     }
 
     Ok(Cli {
@@ -275,6 +403,9 @@ to write results automatically"
         lights_on_seconds,
         per_channel,
         region_map,
+        analyses: analyses.unwrap_or_else(|| ALL_ANALYSES.iter().map(|v| v.to_string()).collect()),
+        nlg_out,
+        nlg,
     })
 }
 
@@ -680,6 +811,61 @@ fn handle_cap_cli(args: Vec<OsString>) -> Result<()> {
     Ok(())
 }
 
+fn handle_nlg_cli(args: Vec<OsString>) -> Result<()> {
+    let (edf, kv) = parse_kv(args, "--nlg");
+    let edf = edf.context(
+        "usage: analyse-nidra --nlg <recording.edf> [--scoring s.json] [--eeg C4,C3] [--references M1,M2] \
+[--bands slow_wave,sigma] [--smooth-rate 0.01666] [--undersample N] [--lp HZ] [--edf-dir DIR] [--out n.json]",
+    )?;
+    let s = |k: &str| kv.get(k).cloned().filter(|v| !v.trim().is_empty());
+    let mut cli = NlgCli::default();
+    if let Some(v) = s("bands") {
+        cli.bands = split_channel_arg(&v);
+    }
+    if let Some(v) = s("smooth-rate") {
+        cli.smooth_rate = v.parse().context("--smooth-rate")?;
+    }
+    if let Some(v) = s("undersample") {
+        cli.undersampler = v.parse().context("--undersample")?;
+    }
+    cli.lp_hz = s("lp").and_then(|v| v.parse().ok());
+    cli.edf_dir = s("edf-dir").map(PathBuf::from);
+    if yes(kv.get("no-series"), false) {
+        cli.keep_series = false;
+    }
+    let opts = cli.options()?;
+    let channels = s("eeg").map(|v| split_channel_arg(&v)).unwrap_or_else(|| vec!["C4".into(), "C3".into()]);
+    let references = s("references")
+        .filter(|v| !(v == "-" || v.eq_ignore_ascii_case("none")))
+        .map(|v| split_channel_arg(&v))
+        .unwrap_or_default();
+    let stages = match s("scoring") {
+        Some(p) => Some(analyse_nidra::hypnogram::read_sleepgpt(Path::new(&p))?),
+        None => None,
+    };
+    if let Some(d) = &opts.write_edf_dir {
+        std::fs::create_dir_all(d)?;
+    }
+    let out = s("out").map(PathBuf::from).unwrap_or_else(|| default_sidecar(&edf, kv.get("out-dir"), "_analyse_nlg.json"));
+    let started = Instant::now();
+    println!("PROGRESS 0.05 NeuroLoopGain on {}", channels.join(","));
+    let report = analyse_nidra::nlg::analyse_recording(&edf, stages.as_deref(), &channels, &references, &opts)?;
+    serde_json::to_writer(std::io::BufWriter::new(File::create(&out)?), &report)?;
+    for w in &report.warnings {
+        println!("WARNING {w}");
+    }
+    for (band, avg) in &report.average {
+        println!(
+            "{band}: NREM gain {:.1}%, index {:.1}%",
+            avg.get("NREM_mean").copied().unwrap_or(f64::NAN),
+            avg.get("upper_quartile_index").copied().unwrap_or(f64::NAN)
+        );
+    }
+    println!("OUTPUT_NLG {}", out.display());
+    println!("PROGRESS 1.00 Done in {:.1}s", started.elapsed().as_secs_f64());
+    Ok(())
+}
+
 fn handle_apply_sleepgpt_cli(args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let mut scoring_path: Option<PathBuf> = None;
     let mut out_json: Option<PathBuf> = None;
@@ -768,6 +954,9 @@ fn main() -> Result<()> {
     if raw_args.iter().any(|a| a == "--plm") {
         return handle_plm_cli(raw_args);
     }
+    if raw_args.iter().any(|a| a == "--nlg") {
+        return handle_nlg_cli(raw_args);
+    }
     if raw_args.iter().any(|a| a == "--cap") {
         return handle_cap_cli(raw_args);
     }
@@ -852,126 +1041,115 @@ fn main() -> Result<()> {
     for (name, value) in &recording.architecture.values {
         println!("  {name}: {value}");
     }
+    let run = |name: &str| cli.analyses.contains(name);
+    println!(
+        "analyses: {}",
+        ALL_ANALYSES.iter().filter(|a| run(a)).copied().collect::<Vec<_>>().join(",")
+    );
     let nrem_samples = recording
         .sample_stages
         .iter()
         .filter(|&&stage| matches!(stage, 2 | 3))
         .count();
-    if nrem_samples == 0
-        && (pac_output_path.is_some()
-            || slow_wave_output_path.is_some()
-            || spindle_output_path.is_some()
-            || regional_output_path.is_some())
-    {
+    if nrem_samples == 0 && (run("pac") || run("slow_waves") || run("spindles")) {
         bail!(
-            "sleep scoring contains no N2 or N3 epochs; spindle, slow-wave, coupling, PAC, and regional analysis cannot be computed"
+            "sleep scoring contains no N2 or N3 epochs; spindle, slow-wave, coupling and PAC analysis cannot be computed \
+(deselect them to run the other analyses)"
         );
     }
-
-    // Fast smoke calculation on the first complete 15-second N2 window.
-    let stage = 2_i8;
-    let samples = (15.0 * recording.edf.sfreq) as usize;
-    let indices: Vec<usize> = recording
-        .sample_stages
-        .iter()
-        .enumerate()
-        .filter_map(|(index, &value)| (value == stage).then_some(index))
-        .take(samples)
-        .collect();
-    if indices.len() == samples {
-        println!("first N2 window:");
-        for (channel_name, channel) in recording.edf.channels.iter().zip(&recording.edf.data_uv) {
-            let window: Vec<f64> = indices.iter().map(|&index| channel[index]).collect();
-            let powers = bandpowers(&window, recording.edf.sfreq);
-            println!(
-                "  {channel_name}: Delta={:.8}, Alpha={:.8}, ACW={:.4}s",
-                powers["Delta_PSD"],
-                powers["Alpha_PSD"],
-                acw50(&window, recording.edf.sfreq)
-            );
-            if channel_name == "F3" {
-                println!("  F3 nonlinear: {:?}", nonlinear::all(&window));
-            }
-        }
-    }
-    // Each analysis is computed once and shared by its own output file and the
-    // regional CSV (the CSV used to recompute core features, spindles, slow
-    // waves and PAC from scratch, roughly doubling the run time).
     let need_regional = regional_output_path.is_some();
-    let core = if output_path.is_some() || need_regional {
-        let feature_started = Instant::now();
+    let write_json = |path: &Path, value: &dyn erased_json::Json, what: &str| -> Result<()> {
+        value.write(path)?;
+        println!("wrote {what} to {}", path.display());
+        Ok(())
+    };
+    let core = if run("core") && (output_path.is_some() || need_regional) {
+        let t = Instant::now();
         let features = pipeline::compute_core_stage_features(&recording);
-        println!("computed core stage features in {:.3}s", feature_started.elapsed().as_secs_f64());
+        println!("computed core stage features in {:.3}s", t.elapsed().as_secs_f64());
         Some(features)
     } else {
         None
     };
-    if let (Some(output_path), Some(features)) = (&output_path, &core) {
-        serde_json::to_writer_pretty(
-            File::create(output_path)
-                .with_context(|| format!("creating {}", output_path.display()))?,
-            features,
-        )?;
-        println!("wrote core stage features to {}", output_path.display());
+    if let (Some(p), Some(v)) = (&output_path, &core) {
+        write_json(p, v, "core stage features")?;
     }
-    let pac_values = if pac_output_path.is_some() || need_regional {
-        let pac_started = Instant::now();
+    let pac_values = if run("pac") && (pac_output_path.is_some() || need_regional) {
+        let t = Instant::now();
         let values = pac::compute(&recording);
-        println!("computed PAC in {:.3}s", pac_started.elapsed().as_secs_f64());
+        println!("computed PAC in {:.3}s", t.elapsed().as_secs_f64());
         Some(values)
     } else {
         None
     };
-    if let (Some(output_path), Some(values)) = (&pac_output_path, &pac_values) {
-        serde_json::to_writer_pretty(
-            File::create(output_path)
-                .with_context(|| format!("creating {}", output_path.display()))?,
-            values,
-        )?;
-        println!("wrote PAC results to {}", output_path.display());
+    if let (Some(p), Some(v)) = (&pac_output_path, &pac_values) {
+        write_json(p, v, "PAC results")?;
     }
-    let slow_wave_values = if slow_wave_output_path.is_some() || need_regional {
-        let event_started = Instant::now();
+    let slow_wave_values = if run("slow_waves") && (slow_wave_output_path.is_some() || need_regional) {
+        let t = Instant::now();
         let values = events::slow_waves(&recording);
-        println!("detected slow waves in {:.3}s", event_started.elapsed().as_secs_f64());
+        println!("detected slow waves in {:.3}s", t.elapsed().as_secs_f64());
         Some(values)
     } else {
         None
     };
-    if let (Some(output_path), Some(values)) = (&slow_wave_output_path, &slow_wave_values) {
-        serde_json::to_writer_pretty(
-            File::create(output_path)
-                .with_context(|| format!("creating {}", output_path.display()))?,
-            values,
-        )?;
-        println!("wrote slow-wave results to {}", output_path.display());
+    if let (Some(p), Some(v)) = (&slow_wave_output_path, &slow_wave_values) {
+        write_json(p, v, "slow-wave results")?;
     }
-    let spindle_values = if spindle_output_path.is_some() || need_regional {
-        let event_started = Instant::now();
+    let spindle_values = if run("spindles") && (spindle_output_path.is_some() || need_regional) {
+        let t = Instant::now();
         let values = events::spindles(&recording);
-        println!("detected spindles in {:.3}s", event_started.elapsed().as_secs_f64());
+        println!("detected spindles in {:.3}s", t.elapsed().as_secs_f64());
         Some(values)
     } else {
         None
     };
-    if let (Some(output_path), Some(values)) = (&spindle_output_path, &spindle_values) {
-        serde_json::to_writer_pretty(
-            File::create(output_path)
-                .with_context(|| format!("creating {}", output_path.display()))?,
-            values,
-        )?;
-        println!("wrote spindle results to {}", output_path.display());
+    if let (Some(p), Some(v)) = (&spindle_output_path, &spindle_values) {
+        write_json(p, v, "spindle results")?;
     }
-    if let (Some(output_path), Some(core), Some(spindle_values), Some(slow_wave_values), Some(pac_values)) =
-        (&regional_output_path, &core, &spindle_values, &slow_wave_values, &pac_values)
-    {
+    let nlg_report = if run("nlg") && (cli.nlg_out.is_some() || need_regional) {
+        let t = Instant::now();
+        let opts = cli.nlg.options()?;
+        match analyse_nidra::nlg::analyse_recording(
+            &edf_path,
+            Some(&recording.stages),
+            &cli.channels,
+            &cli.references,
+            &opts,
+        ) {
+            Ok(report) => {
+                for w in &report.warnings {
+                    println!("WARNING NeuroLoopGain {w}");
+                }
+                println!("computed NeuroLoopGain in {:.3}s", t.elapsed().as_secs_f64());
+                Some(report)
+            }
+            Err(e) => {
+                println!("WARNING NeuroLoopGain failed: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let (Some(p), Some(v)) = (&cli.nlg_out, &nlg_report) {
+        // Compact JSON: the 1-s gain traces make the pretty form ~4x larger.
+        serde_json::to_writer(
+            std::io::BufWriter::new(File::create(p).with_context(|| format!("creating {}", p.display()))?),
+            v,
+        )?;
+        println!("wrote NeuroLoopGain results to {}", p.display());
+        println!("OUTPUT_NLG {}", p.display());
+    }
+    if let Some(output_path) = &regional_output_path {
         let regional_started = Instant::now();
         let rows = regional::compile(
             &recording,
-            core,
-            spindle_values,
-            slow_wave_values,
-            pac_values,
+            core.as_ref(),
+            spindle_values.as_ref(),
+            slow_wave_values.as_ref(),
+            pac_values.as_ref(),
+            nlg_report.as_ref(),
             cli.per_channel,
             cli.region_map.as_ref(),
         );
@@ -1104,6 +1282,33 @@ mod tests {
     }
 
     #[test]
+    fn cli_selects_analyses_and_nlg_options() {
+        let cli = parse_cli(
+            [
+                "rec.edf",
+                "sc.json",
+                "--analyses",
+                "spindles,nlg",
+                "--nlg-bands=sigma,alpha",
+                "--nlg-smooth-rate",
+                "0.01",
+                "--out-dir",
+                "/tmp/o",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap();
+        assert!(cli.analyses.contains("spindles") && cli.analyses.contains("nlg"));
+        assert!(!cli.analyses.contains("pac"));
+        assert_eq!(cli.nlg.bands, ["sigma", "alpha"]);
+        assert_eq!(cli.nlg.smooth_rate, 0.01);
+        assert_eq!(cli.nlg_out.as_deref(), Some(std::path::Path::new("/tmp/o/rec_analyse_nlg.json")));
+        let skip = parse_cli(["rec.edf", "sc.json", "--skip", "pac,nlg"].map(OsString::from)).unwrap();
+        assert_eq!(skip.analyses.len(), 3);
+        assert!(parse_cli(["rec.edf", "sc.json", "--analyses", "bogus"].map(OsString::from)).is_err());
+    }
+
+    #[test]
     fn cli_accepts_per_channel_and_region_map() {
         let cli = parse_cli(
             [
@@ -1122,5 +1327,24 @@ mod tests {
         assert_eq!(map.get("F3").map(String::as_str), Some("Frontal"));
         assert_eq!(map.get("F4").map(String::as_str), Some("Frontal"));
         assert_eq!(map.get("C3").map(String::as_str), Some("Central"));
+    }
+}
+
+
+mod erased_json {
+    use anyhow::{Context, Result};
+    use std::path::Path;
+
+    /// Object-safe "serialize to a pretty JSON file".
+    pub trait Json {
+        fn write(&self, path: &Path) -> Result<()>;
+    }
+
+    impl<T: serde::Serialize> Json for T {
+        fn write(&self, path: &Path) -> Result<()> {
+            let file = std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
+            serde_json::to_writer_pretty(std::io::BufWriter::new(file), self)?;
+            Ok(())
+        }
     }
 }

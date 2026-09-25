@@ -1,6 +1,6 @@
 ; Inno Setup Script for CCS Sleep Studio Lite
 #ifndef AppVer
-  #define AppVer "1.21.0"
+  #define AppVer "1.22.0"
 #endif
 
 [Setup]

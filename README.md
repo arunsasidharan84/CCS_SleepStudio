@@ -10,7 +10,7 @@
   <b>National Institute of Mental Health and Neurosciences (NIMHANS)</b>, Bangalore, India.
 </p>
 
-**Version:** 1.21.0
+**Version:** 1.22.0
 
 Welcome to **CCS Sleep Studio**, a high-performance, cross-platform desktop application designed to assist researchers and clinicians in sleep EEG visualization, event annotation, sleep scoring, automated staging, and advanced EEG analysis.
 
@@ -18,6 +18,11 @@ CCS Sleep Studio is comprised of the following key modules:
 *   **ScoringNidra**: Interactive sleep scoring and event annotation module supporting EDF, Brain Products (.vhdr / .vmrk), Nihon Kohden (.EEG / .LOG), EMBLA (.ebm), Orbit (.orb), and R09 (.r09).
 *   **AutoscoreNidra**: Automated sleep scoring module with both interactive and batch modes.
 *   **AnalyseNidra**: Automated sleep EEG analysis and reporting module operating in both interactive and batch modes.
+
+### 🌟 New in Version 1.22.0
+*   **NeuroLoopGain** (Kemp et al., IEEE-BME 2000): a native port of the open-source NeuroLoopGain 2.x analyser, giving amplitude-independent slow-wave, sigma (and optionally alpha) feedback-loop gain per second. The output matches the reference program sample for sample: all 14 traces, 144 runs on the four sample PSG nights (6 channels × 3 bands × 2 smoother rates). It runs as part of AnalyseNidra (interactive and batch). The gain curves can be overlaid on the hypnogram (*Overlay: NeuroLoopGain*). Stage-wise, per-cycle and per-hour gain and the ACCS upper-quartile index are added to the regional CSV (`NLG_SW_*`, `NLG_Sigma_*`), and a NeuroLoopGain page is added to the PDF report. Polyman-compatible `_NeuroLoopGain.edf` files can also be written (`--nlg-edf-dir`).
+*   **Choose which analyses to run** in AnalyseNidra (interactive dialog and batch panel): spectral & complexity features, spindles, slow waves & SO–spindle coupling, PAC, and NeuroLoopGain (`--analyses` / `--skip` on the command line).
+*   **Compare multiple scorings** (Compare menu): compare every scoring of a recording (manual, autoscorers, saved files) against the reference you choose. Shows hypnogram strips with Cohen's kappa, agreement and macro-F1, confusion matrices, per-stage F1, and CSV / PNG export.
 
 ### 🌟 New in Version 1.21.0
 *   **Sleep cycles & stage dynamics** (port of the NIMHANS ACCS `accs_sleep_StageAnalyser`): sleep cycles (NREM ≥15 min, REM periods merged across gaps ≤25 min, cycle end at long awakenings), stage arousals, short awakenings, stage transitions and cycle-wise NREM/REM composition. Non-redundant stage dynamics (`SleepCycle_number`, `Stage_transitions`, `Stage_arousals`, `ShortAwakenings`) and cycle-wise measures (`C1`..`C5`) are written to the AnalyseNidra CSV without confusing redundant duplicates or prefixes, and presented on a new *Sleep cycles & stage dynamics* page of the PDF report. Verified value-for-value against the MATLAB code (Octave) on the sample nights and 900 synthetic hypnograms.

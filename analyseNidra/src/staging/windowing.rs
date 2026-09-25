@@ -29,6 +29,15 @@ pub fn normalize_epoch_iqr(epoch: &[f64]) -> Vec<f32> {
     epoch.iter().map(|&x| ((x - median) / iqr) as f32).collect()
 }
 
+/// Per-epoch z-score normalisation (mean / standard deviation), as used when
+/// the PhysioEx TinySleepNet model was trained on raw single-channel EEG.
+pub fn normalize_epoch_zscore(epoch: &[f64]) -> Vec<f32> {
+    let n = epoch.len().max(1) as f64;
+    let mean = epoch.iter().sum::<f64>() / n;
+    let std = (epoch.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n).sqrt().max(1e-6);
+    epoch.iter().map(|&x| ((x - mean) / std) as f32).collect()
+}
+
 /// Prepares full recording into a series of normalized 30-second 100 Hz epochs.
 pub fn prepare_staging_epochs(raw_signal: &[f64], original_sfreq: f64) -> Vec<Vec<f32>> {
     let resampled = if (original_sfreq - TARGET_STAGING_HZ).abs() > 0.01 {
@@ -43,7 +52,7 @@ pub fn prepare_staging_epochs(raw_signal: &[f64], original_sfreq: f64) -> Vec<Ve
     for ep in 0..n_epochs {
         let start = ep * SAMPLES_PER_EPOCH;
         let end = start + SAMPLES_PER_EPOCH;
-        let norm_ep = normalize_epoch_iqr(&resampled[start..end]);
+        let norm_ep = normalize_epoch_zscore(&resampled[start..end]);
         epochs.push(norm_ep);
     }
 

@@ -12,7 +12,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const VERSION: &str = "1.20.0";
+const VERSION: &str = "1.21.0";
 
 const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
 [core.json|-] [pac.json|-] [slow-waves.json|-] [spindles.json|-] [regional.csv|-] \
@@ -21,7 +21,7 @@ const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
    or: analyse-nidra --preprocess <recording.edf> [--out-dir <dir>] [--steps <stimartifact,filter,badchannel,interpolate,gedai,save>] \
 [--downsample-hz <hz>] [--bandpass-lo <lo>] [--bandpass-hi <hi>] [--notch-hz <notch>] [--suffix <_clean>] \
 [--stim-f0 <hz>] [--stim-win <sec>] [--stim-max-combs <n>]\n\
-   or: analyse-nidra --stage <recording.edf> [--algorithm <tinysleepnet|yasa|usleep|luna|gssc|seqsleepnet|sleeptransformer|dreamento|sleepeegpy>] \
+   or: analyse-nidra --stage <recording.edf> [--algorithm <yasa|luna|sleeptransformer|gssc|tinysleepnet|seqsleepnet|usleep|dreamento|sleepeegpy>] (default yasa + sleepgpt) \
 [--sequence-correction <none|sleepgpt>] [--eeg C4,C3] [--ref M1,M2] [--eog E1,E2] [--emg Chin1,Chin2] [--out <output.json>] [--out-dir <dir>] \
 [--sleepgpt-alpha <0.1>] [--sleepgpt-ngram <30>]\n\
    or: analyse-nidra --apply-sleepgpt <scoring.json> [--out <output.json>] [--alpha <0.1>] [--ngram <30>]\n\
@@ -386,8 +386,10 @@ fn split_channel_arg(value: &str) -> Vec<String> {
 fn handle_stage_cli(args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let mut edf_path: Option<PathBuf> = None;
     let mut opts = analyse_nidra::staging::scorer::StageOptions {
-        algorithm: "tinysleepnet".into(),
-        sequence_correction: "none".into(),
+        // Default: YASA with SleepGPT sequence correction (best agreement
+        // with manual scoring on the bundled control recordings).
+        algorithm: "yasa".into(),
+        sequence_correction: "sleepgpt".into(),
         ..Default::default()
     };
 
@@ -892,74 +894,84 @@ fn main() -> Result<()> {
             }
         }
     }
-    if let Some(output_path) = output_path {
+    // Each analysis is computed once and shared by its own output file and the
+    // regional CSV (the CSV used to recompute core features, spindles, slow
+    // waves and PAC from scratch, roughly doubling the run time).
+    let need_regional = regional_output_path.is_some();
+    let core = if output_path.is_some() || need_regional {
         let feature_started = Instant::now();
         let features = pipeline::compute_core_stage_features(&recording);
+        println!("computed core stage features in {:.3}s", feature_started.elapsed().as_secs_f64());
+        Some(features)
+    } else {
+        None
+    };
+    if let (Some(output_path), Some(features)) = (&output_path, &core) {
         serde_json::to_writer_pretty(
-            File::create(&output_path)
+            File::create(output_path)
                 .with_context(|| format!("creating {}", output_path.display()))?,
-            &features,
+            features,
         )?;
-        println!(
-            "wrote core stage features to {} in {:.3}s",
-            output_path.display(),
-            feature_started.elapsed().as_secs_f64()
-        );
+        println!("wrote core stage features to {}", output_path.display());
     }
-    if let Some(output_path) = pac_output_path {
+    let pac_values = if pac_output_path.is_some() || need_regional {
         let pac_started = Instant::now();
         let values = pac::compute(&recording);
+        println!("computed PAC in {:.3}s", pac_started.elapsed().as_secs_f64());
+        Some(values)
+    } else {
+        None
+    };
+    if let (Some(output_path), Some(values)) = (&pac_output_path, &pac_values) {
         serde_json::to_writer_pretty(
-            File::create(&output_path)
+            File::create(output_path)
                 .with_context(|| format!("creating {}", output_path.display()))?,
-            &values,
+            values,
         )?;
-        println!(
-            "wrote PAC results to {} in {:.3}s",
-            output_path.display(),
-            pac_started.elapsed().as_secs_f64()
-        );
+        println!("wrote PAC results to {}", output_path.display());
     }
-    if let Some(output_path) = slow_wave_output_path {
+    let slow_wave_values = if slow_wave_output_path.is_some() || need_regional {
         let event_started = Instant::now();
         let values = events::slow_waves(&recording);
+        println!("detected slow waves in {:.3}s", event_started.elapsed().as_secs_f64());
+        Some(values)
+    } else {
+        None
+    };
+    if let (Some(output_path), Some(values)) = (&slow_wave_output_path, &slow_wave_values) {
         serde_json::to_writer_pretty(
-            File::create(&output_path)
+            File::create(output_path)
                 .with_context(|| format!("creating {}", output_path.display()))?,
-            &values,
+            values,
         )?;
-        println!(
-            "wrote slow-wave results to {} in {:.3}s",
-            output_path.display(),
-            event_started.elapsed().as_secs_f64()
-        );
+        println!("wrote slow-wave results to {}", output_path.display());
     }
-    if let Some(output_path) = spindle_output_path {
+    let spindle_values = if spindle_output_path.is_some() || need_regional {
         let event_started = Instant::now();
         let values = events::spindles(&recording);
+        println!("detected spindles in {:.3}s", event_started.elapsed().as_secs_f64());
+        Some(values)
+    } else {
+        None
+    };
+    if let (Some(output_path), Some(values)) = (&spindle_output_path, &spindle_values) {
         serde_json::to_writer_pretty(
-            File::create(&output_path)
+            File::create(output_path)
                 .with_context(|| format!("creating {}", output_path.display()))?,
-            &values,
+            values,
         )?;
-        println!(
-            "wrote spindle results to {} in {:.3}s",
-            output_path.display(),
-            event_started.elapsed().as_secs_f64()
-        );
+        println!("wrote spindle results to {}", output_path.display());
     }
-    if let Some(output_path) = regional_output_path {
+    if let (Some(output_path), Some(core), Some(spindle_values), Some(slow_wave_values), Some(pac_values)) =
+        (&regional_output_path, &core, &spindle_values, &slow_wave_values, &pac_values)
+    {
         let regional_started = Instant::now();
-        let core = pipeline::compute_core_stage_features(&recording);
-        let spindle_values = events::spindles(&recording);
-        let slow_wave_values = events::slow_waves(&recording);
-        let pac_values = pac::compute(&recording);
         let rows = regional::compile(
             &recording,
-            &core,
-            &spindle_values,
-            &slow_wave_values,
-            &pac_values,
+            core,
+            spindle_values,
+            slow_wave_values,
+            pac_values,
             cli.per_channel,
             cli.region_map.as_ref(),
         );
@@ -967,13 +979,14 @@ fn main() -> Result<()> {
             .file_stem()
             .and_then(|value| value.to_str())
             .context("EDF filename is not valid UTF-8")?;
-        regional::write_csv(&output_path, recording_name, &recording, &rows)?;
+        regional::write_csv(output_path, recording_name, &recording, &rows)?;
         println!(
             "wrote final regional CSV to {} in {:.3}s",
             output_path.display(),
             regional_started.elapsed().as_secs_f64()
         );
     }
+    println!("total analysis time {:.1}s", started.elapsed().as_secs_f64());
     Ok(())
 }
 

@@ -1093,8 +1093,8 @@ class AutoScoringDialog extends StatefulWidget {
 }
 
 class _AutoScoringDialogState extends State<AutoScoringDialog> {
-  String _algorithm = 'tinysleepnet';
-  String _correction = 'none';
+  String _algorithm = kDefaultAutoscoreAlgorithm;
+  String _correction = kDefaultSequenceCorrection;
   double _sleepgptAlpha = 0.1;
   int _sleepgptNgram = 30;
 
@@ -1912,8 +1912,8 @@ class _EditRegionMappingDialogState extends State<EditRegionMappingDialog> {
 }
 
 class _BatchAutoScoringDialogState extends State<BatchAutoScoringDialog> {
-  String _algorithm = 'tinysleepnet';
-  String _correction = 'none';
+  String _algorithm = kDefaultAutoscoreAlgorithm;
+  String _correction = kDefaultSequenceCorrection;
   double _sleepgptAlpha = 0.1;
   int _sleepgptNgram = 30;
 

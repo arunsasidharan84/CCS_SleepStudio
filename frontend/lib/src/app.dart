@@ -88,8 +88,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   // Batch Staging State
   final List<String> _batchStagingFiles = [];
-  String _batchStagingAlgorithm = 'yasa';
-  String _batchStagingCorrection = 'none';
+  String _batchStagingAlgorithm = kDefaultAutoscoreAlgorithm;
+  String _batchStagingCorrection = kDefaultSequenceCorrection;
   final TextEditingController _batchStagingEegController =
       TextEditingController();
   final TextEditingController _batchStagingRefController =

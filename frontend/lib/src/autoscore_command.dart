@@ -231,8 +231,9 @@ List<String> buildNativeStageArgs({
     canonicalAutoscoreAlgorithm(algorithm),
   ];
   final correction = sequenceCorrection?.trim() ?? '';
+  // Always pass the choice explicitly: the engine defaults to SleepGPT.
+  args.addAll(['--sequence-correction', correction.isEmpty ? 'none' : correction]);
   if (correction.isNotEmpty && correction != 'none') {
-    args.addAll(['--sequence-correction', correction]);
     if (correction == 'sleepgpt') {
       if (sleepgptAlpha != null) {
         args.addAll(['--sleepgpt-alpha', sleepgptAlpha.toString()]);
@@ -280,13 +281,17 @@ String nativeStageOutputPath(
 /// Autoscoring algorithms offered in every AutoscoreNidra dialog, all run by
 /// the native `analyse-nidra` engine: (key, label).
 const List<(String, String)> autoscoreAlgorithmOptions = [
-  ('tinysleepnet', 'TinySleepNet'),
-  ('yasa', 'YASA LightGBM'),
-  ('usleep', 'U-Sleep'),
+  ('yasa', 'YASA LightGBM (recommended, with SleepGPT)'),
   ('luna', 'Luna POPS'),
-  ('gssc', 'Greifswald Sleep Stage Classifier (GSSC)'),
-  ('seqsleepnet', 'SeqSleepNet (PhysioEx)'),
   ('sleeptransformer', 'SleepTransformer (PhysioEx)'),
-  ('dreamento', 'Dreamento (YASA-based)'),
-  ('sleepeegpy', 'SleepEEGpy (YASA-based)'),
+  ('gssc', 'Greifswald Sleep Stage Classifier (GSSC)'),
+  ('tinysleepnet', 'TinySleepNet (PhysioEx)'),
+  ('seqsleepnet', 'SeqSleepNet (PhysioEx)'),
+  ('usleep', 'U-Sleep (experimental)'),
+  ('dreamento', 'Dreamento (same engine as YASA)'),
+  ('sleepeegpy', 'SleepEEGpy (same engine as YASA)'),
 ];
+
+/// Default autoscoring setup: YASA with SleepGPT sequence correction.
+const String kDefaultAutoscoreAlgorithm = 'yasa';
+const String kDefaultSequenceCorrection = 'sleepgpt';

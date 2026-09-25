@@ -10,7 +10,7 @@
   <b>National Institute of Mental Health and Neurosciences (NIMHANS)</b>, Bangalore, India.
 </p>
 
-**Version:** 1.20.0
+**Version:** 1.21.0
 
 Welcome to **CCS Sleep Studio**, a high-performance, cross-platform desktop application designed to assist researchers and clinicians in sleep EEG visualization, event annotation, sleep scoring, automated staging, and advanced EEG analysis.
 
@@ -18,6 +18,11 @@ CCS Sleep Studio is comprised of the following key modules:
 *   **ScoringNidra**: Interactive sleep scoring and event annotation module supporting EDF, Brain Products (.vhdr / .vmrk), Nihon Kohden (.EEG / .LOG), EMBLA (.ebm), Orbit (.orb), and R09 (.r09).
 *   **AutoscoreNidra**: Automated sleep scoring module with both interactive and batch modes.
 *   **AnalyseNidra**: Automated sleep EEG analysis and reporting module operating in both interactive and batch modes.
+
+### 🌟 New in Version 1.21.0
+*   **Sleep cycles & stage dynamics** (port of the NIMHANS ACCS `accs_sleep_StageAnalyser`): sleep cycles (NREM ≥15 min, REM periods merged across gaps ≤25 min, cycle end at long awakenings), stage arousals, short awakenings, stage transitions and cycle-wise NREM/REM composition. Non-redundant stage dynamics (`SleepCycle_number`, `Stage_transitions`, `Stage_arousals`, `ShortAwakenings`) and cycle-wise measures (`C1`..`C5`) are written to the AnalyseNidra CSV without confusing redundant duplicates or prefixes, and presented on a new *Sleep cycles & stage dynamics* page of the PDF report. Verified value-for-value against the MATLAB code (Octave) on the sample nights and 900 synthetic hypnograms.
+*   **Autoscoring fixes**: SeqSleepNet and SleepTransformer (spectrogram scaling), TinySleepNet (epoch normalisation) and U-Sleep now use the same 50 Hz notch and 0.3–35 Hz band-pass as the original models. U-Sleep is marked experimental. **YASA + SleepGPT** is the default everywhere.
+*   **Faster AnalyseNidra**: features are computed once and reused for the regional CSV, PAC/coupling is accumulated window by window (much lower memory use) and sample entropy uses a faster exact search — about 2× faster than 1.20 on full PSG nights.
 
 ### 🌟 New in Version 1.20.0
 *   **Cyclic alternating pattern (CAP) analysis (Utilities menu and batch)** following Terzano et al. (2001): automatic A-phase detection (or your own A1/A2/A3 markers), A1/A2/A3 subtyping, CAP cycles and sequences, CAP rate overall, per NREM stage, per hour and per half of the night, A-phase indices and durations, B-phase duration, isolated A-phases, cycle variability, and coupling of A-phases with arousals, respiratory events and leg movements. A-phases and CAP sequences are drawn on the waveforms and hypnogram, and a CAP page is added to the PDF report.

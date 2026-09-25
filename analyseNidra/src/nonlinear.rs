@@ -74,6 +74,50 @@ pub fn svd_entropy(signal: &[f64]) -> f64 {
 }
 
 pub fn sample_entropy(signal: &[f64]) -> f64 {
+    // Exact same pair counts as the classic diagonal-streaming algorithm
+    // (`sample_entropy_reference` in the tests): all template pairs among the
+    // first `size - order` positions whose first `order` (denominator) or
+    // `order + 1` (numerator) samples all differ by less than the tolerance.
+    // Templates are sorted by their first sample so only pairs already close
+    // in that coordinate are examined -- about 5-8x faster than comparing
+    // every pair; this was the most expensive core-stage feature.
+    let order = 2;
+    let tolerance = 0.2 * population_std(signal);
+    let size = signal.len();
+    if size <= order + 1 {
+        return f64::NAN;
+    }
+    let n_templates = size - order;
+    let mut sorted: Vec<usize> = (0..n_templates).collect();
+    sorted.sort_unstable_by(|&i, &j| signal[i].total_cmp(&signal[j]));
+    let mut numerator = 0_u64;
+    let mut denominator = 0_u64;
+    for p in 0..n_templates {
+        let i = sorted[p];
+        let xi = signal[i];
+        for &j in &sorted[p + 1..] {
+            if signal[j] - xi >= tolerance {
+                break;
+            }
+            if (1..order).all(|k| (signal[i + k] - signal[j + k]).abs() < tolerance) {
+                denominator += 1;
+                if (signal[i + order] - signal[j + order]).abs() < tolerance {
+                    numerator += 1;
+                }
+            }
+        }
+    }
+    if denominator == 0 {
+        f64::NAN
+    } else if numerator == 0 {
+        f64::INFINITY
+    } else {
+        -(numerator as f64 / denominator as f64).ln()
+    }
+}
+
+#[cfg(test)]
+fn sample_entropy_reference(signal: &[f64]) -> f64 {
     let order = 2;
     let tolerance = 0.2 * population_std(signal);
     let size = signal.len();
@@ -271,4 +315,25 @@ pub fn all(signal: &[f64]) -> BTreeMap<&'static str, f64> {
         ("higuchi_nonlinear", higuchi_fd(signal)),
         ("lziv_nonlinear", lziv_complexity(signal)),
     ])
+}
+
+#[cfg(test)]
+mod sample_entropy_tests {
+    use super::*;
+
+    #[test]
+    fn fast_sample_entropy_matches_reference() {
+        let mut seed = 7u64;
+        for n in [50usize, 333, 1000, 3750] {
+            let x: Vec<f64> = (0..n)
+                .map(|i| {
+                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    ((seed >> 33) as f64 / 2e9) + (i as f64 * 0.07).sin() * 3.0
+                })
+                .collect();
+            let a = sample_entropy(&x);
+            let b = sample_entropy_reference(&x);
+            assert!((a - b).abs() < 1e-12 || (a.is_nan() && b.is_nan()), "n={n}: {a} vs {b}");
+        }
+    }
 }

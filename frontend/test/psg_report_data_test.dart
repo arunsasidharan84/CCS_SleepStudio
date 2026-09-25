@@ -159,4 +159,61 @@ void main() {
     expect(text, contains('PERIODIC LIMB MOVEMENTS'));
     expect(bytes.every((b) => b >= 0 && b <= 255), isTrue);
   });
+
+  test('adds the sleep-cycle page when stage dynamics analysis is available (unprefixed)', () {
+    final viewport = EegBackend().loadDemoViewport();
+    final bytes = buildPublicationSleepReport(
+      viewport: viewport,
+      recordingName: 'psg.edf',
+      regionalRows: const [
+        {
+          'SleepCycle_number': '2',
+          'SOL': '6.5',
+          'Stage_transitions': '9.8',
+          'Stage_arousals': '2.2',
+          'ShortAwakenings': '1.5',
+          'C1_start_epoch': '13',
+          'C1_end_epoch': '67',
+          'C1_Sleep_duration_cycle': '27.5',
+          'C1_NREM_StageArousals_cycle': '5.7',
+          'C2_start_epoch': '80',
+          'C2_end_epoch': '134',
+          'C2_REM_duration_cycle': '7.5',
+        },
+      ],
+      includePages: const [true, false, false, false, false],
+    );
+    final text = latin1.decode(bytes);
+    expect(text, contains('/Count 2'));
+    expect(text, contains('SLEEP CYCLES & STAGE DYNAMICS'));
+    expect(text, contains('C2'));
+  });
+
+  test('adds the sleep-cycle page when ACCS stage analysis is available (legacy accs_ prefix)', () {
+    final viewport = EegBackend().loadDemoViewport();
+    final bytes = buildPublicationSleepReport(
+      viewport: viewport,
+      recordingName: 'psg.edf',
+      regionalRows: const [
+        {
+          'accs_SleepCycle_number': '2',
+          'accs_SleepOnsetLatency': '6.5',
+          'accs_Stage_transitions': '9.8',
+          'accs_Stage_arousals': '2.2',
+          'accs_C1_start_epoch': '13',
+          'accs_C1_end_epoch': '67',
+          'accs_C1_Sleep_duration_cycle': '27.5',
+          'accs_C1_NREM_StageArousals_cycle': '5.7',
+          'accs_C2_start_epoch': '80',
+          'accs_C2_end_epoch': '134',
+          'accs_C2_REM_duration_cycle': '7.5',
+        },
+      ],
+      includePages: const [true, false, false, false, false],
+    );
+    final text = latin1.decode(bytes);
+    expect(text, contains('/Count 2'));
+    expect(text, contains('SLEEP CYCLES & STAGE DYNAMICS'));
+    expect(text, contains('C2'));
+  });
 }

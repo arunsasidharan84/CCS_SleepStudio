@@ -37,7 +37,10 @@ List<int> buildPublicationSleepReport({
       : regionalRows.first;
   final regions = regionalRows.isEmpty ? <Map<String, String>>[] : regionalRows;
 
+  final hasCycles =
+      includePages[0] && _number(architecture, 'SleepCycle_number') != null;
   final totalPages = includePages.where((b) => b).length +
+      (hasCycles ? 1 : 0) +
       (respiratoryReport != null ? 1 : 0) +
       (plmReport != null ? 1 : 0) +
       (capReport != null ? 1 : 0);
@@ -53,6 +56,11 @@ List<int> buildPublicationSleepReport({
         pageNum++,
         totalPages,
       ),
+    );
+  }
+  if (hasCycles) {
+    report.addPage(
+      _buildSleepCyclePage(viewport, architecture, pageNum++, totalPages),
     );
   }
   if (respiratoryReport != null) {
@@ -1517,6 +1525,10 @@ double? _number(Map<String, String> row, String key) {
     raw = row['sp_all_${key.substring(3)}']?.trim();
   } else if ((raw == null || raw.isEmpty) && key.startsWith('sp_all_')) {
     raw = row['sp_${key.substring(7)}']?.trim();
+  } else if ((raw == null || raw.isEmpty) && key.startsWith('accs_')) {
+    raw = row[key.substring(5)]?.trim();
+  } else if ((raw == null || raw.isEmpty) && !key.startsWith('accs_')) {
+    raw = row['accs_$key']?.trim();
   }
   if (raw == null || raw.isEmpty || raw.toLowerCase() == 'nan') return null;
   final value = double.tryParse(raw);
@@ -2196,6 +2208,154 @@ String _buildCapPage(
   _footer(
     p,
     'CAP rate = CAP time / NREM time; A-phase indices count A-phases within CAP sequences per hour of NREM sleep.',
+  );
+  return p.build();
+}
+
+
+/// Sleep-cycle and stage-dynamics page (port of accs_sleep_StageAnalyser).
+String _buildSleepCyclePage(
+  EegViewport viewport,
+  Map<String, String> row,
+  int pageNum,
+  int totalPages,
+) {
+  final p = _PdfPage();
+  _header(p, 'SLEEP CYCLES & STAGE DYNAMICS', 'Page $pageNum of $totalPages');
+  p.text(
+    'NIMHANS ACCS sleep-stage analyser rules | cycles start at the first N2/N3 after >=15 min NREM, '
+    'end at the last REM of a REM period (gaps <=25 min) or before >=5 min wake',
+    50,
+    704,
+    size: 6.5,
+    color: _slate,
+  );
+  _psgCards(p, [
+    ('Sleep cycles', _metric(row, 'SleepCycle_number', decimals: 0)),
+    ('Sleep onset (min)', _metric(row, 'SOL', fallback: _number(row, 'SleepOnsetLatency'))),
+    ('Transitions (/h)', _metric(row, 'Stage_transitions')),
+    ('Stage arousals (/h)', _metric(row, 'Stage_arousals')),
+    ('Short awak. (/h)', _metric(row, 'ShortAwakenings')),
+    ('WASO (%)', _metric(row, 'WASO_percentage', fallback: _number(row, 'WASO'))),
+  ], 650);
+
+  final cycles = <(int, double, double)>[];
+  for (var c = 1; c <= 5; c++) {
+    final start = _number(row, 'C${c}_start_epoch');
+    final end = _number(row, 'C${c}_end_epoch');
+    if (start == null || end == null) continue;
+    cycles.add((c, (start - 1) * 30.0, end * 30.0));
+  }
+
+  p.section('Hypnogram with sleep cycles', 50, 622);
+  const x = 80.0;
+  const width = 480.0;
+  _hypnogram(p, viewport, x, 522, width, 88);
+  final duration = math.max(1.0, (viewport.stages.length * viewport.epochSeconds).toDouble());
+  _eventRaster(
+    p,
+    x: x,
+    y: 500,
+    width: width,
+    durationSec: duration,
+    rows: [
+      ('Odd', _navy, [for (final c in cycles) if (c.$1.isOdd) (c.$2, c.$3)]),
+      ('Even', _stageColor(SleepStage.rem), [for (final c in cycles) if (c.$1.isEven) (c.$2, c.$3)]),
+    ],
+  );
+  for (final c in cycles) {
+    final cx = x + width * ((c.$2 + c.$3) / 2).clamp(0.0, duration) / duration;
+    p.text('C${c.$1}', cx - 4, 482, bold: true, size: 6.5, color: _navy);
+  }
+
+  p.section('Cycle-wise composition (minutes) and stage dynamics (events per hour)', 50, 466);
+  const cols = <(String, double)>[
+    ('Cycle', 52),
+    ('Start-end (min)', 82),
+    ('Length', 152),
+    ('W', 190),
+    ('N1', 218),
+    ('N2', 246),
+    ('N3', 278),
+    ('REM', 310),
+    ('NREM trans.', 344),
+    ('NREM arous.', 398),
+    ('REM trans.', 452),
+    ('Short awak.', 504),
+  ];
+  var ty = 448.0;
+  for (final col in cols) {
+    p.text(col.$1, col.$2, ty, bold: true, size: 6.6, color: _navy);
+  }
+  ty -= 4;
+  p.line(50, ty, 562, ty, color: _lightGray);
+  ty -= 11;
+  if (cycles.isEmpty) {
+    p.text('No complete sleep cycle was identified.', 52, ty, size: 7, color: _slate);
+    ty -= 11;
+  }
+  for (final c in cycles) {
+    String v(String key, {int decimals = 1}) => _metric(row, 'C${c.$1}_$key', decimals: decimals);
+    String shortAwake() {
+      final nrem = _number(row, 'C${c.$1}_NREM_ShortAwakenings_cycle');
+      final rem = _number(row, 'C${c.$1}_REM_ShortAwakenings_cycle');
+      if (nrem == null && rem == null) return '-';
+      return '${(nrem ?? 0).toStringAsFixed(1)} / ${(rem ?? 0).toStringAsFixed(1)}';
+    }
+    final cells = [
+      'C${c.$1}',
+      '${(c.$2 / 60).toStringAsFixed(0)}-${(c.$3 / 60).toStringAsFixed(0)}',
+      v('Sleep_duration_cycle'),
+      v('Wake_duration_cycle'),
+      v('N1_duration_cycle'),
+      v('N2_duration_cycle'),
+      v('N3_duration_cycle'),
+      v('REM_duration_cycle'),
+      v('NREM_StageTransitions_cycle'),
+      v('NREM_StageArousals_cycle'),
+      v('REM_StageTransitions_cycle'),
+      shortAwake(),
+    ];
+    for (var i = 0; i < cols.length; i++) {
+      p.text(cells[i], cols[i].$2, ty, size: 6.8, color: _charcoal);
+    }
+    ty -= 10;
+  }
+
+  final tableTop = math.min(ty - 18, 370.0);
+  p.section('Full-night stage analysis (ACCS definitions)', 50, tableTop);
+  _psgTable(p, [
+    ('Durations', [
+      ('Total recording (min)', _metric(row, 'TRT', fallback: _number(row, 'TotalRecording_duration'))),
+      ('Total sleep period (min)', _metric(row, 'SPT', fallback: _number(row, 'TotalSleep_duration'))),
+      ('Actual sleep (min)', _metric(row, 'TST', fallback: _number(row, 'ActualSleep_duration'))),
+      ('WASO (min)', _metric(row, 'WASO', fallback: _number(row, 'WASO_duration'))),
+      ('Sleep efficiency (%)', _metric(row, 'Sleep_efficiency', fallback: _number(row, 'SleepEfficiency_percentage'))),
+    ]),
+    ('Stage share of actual sleep (%)', [
+      ('N1', _metric(row, 'N1_percentage')),
+      ('N2', _metric(row, 'N2_percentage')),
+      ('N3', _metric(row, 'N3_percentage')),
+      ('REM', _metric(row, 'R_percentage', fallback: _number(row, 'REM_percentage'))),
+    ]),
+  ], 50, tableTop - 18);
+  _psgTable(p, [
+    ('Latencies (min)', [
+      ('N1 (from lights off)', _metric(row, 'N1_onset', fallback: _number(row, 'N1_latency'))),
+      ('N2 (from lights off)', _metric(row, 'N2_onset', fallback: _number(row, 'N2_latency'))),
+      ('N3 (from sleep onset)', _metric(row, 'N3_onset', fallback: _number(row, 'N3_latency'))),
+      ('REM (from sleep onset)', _metric(row, 'R_onset', fallback: _number(row, 'REM_latency'))),
+    ]),
+    ('Stage dynamics (per hour of sleep)', [
+      ('Stage transitions', _metric(row, 'Stage_transitions')),
+      ('Stage arousals (deeper -> lighter)', _metric(row, 'Stage_arousals')),
+      ('Short awakenings (<2 min)', _metric(row, 'ShortAwakenings')),
+    ]),
+  ], 312, tableTop - 18);
+
+  _footer(
+    p,
+    'Sleep onset = first N2/N3/REM epoch. Stage arousals = N2->N1, N3->N2, N3->N1, REM->N1 shifts per hour of N2+N3+REM.',
   );
   return p.build();
 }

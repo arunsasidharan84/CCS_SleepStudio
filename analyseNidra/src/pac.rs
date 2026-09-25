@@ -191,97 +191,117 @@ fn phase_bins(phase: &[f64]) -> Vec<usize> {
         .collect()
 }
 
-fn modulation_indices(
-    phases: &[Vec<f64>],
-    amplitudes: &[Vec<f64>],
-    global_counts: &[usize],
-) -> Vec<f64> {
-    let bins = 18;
-    let binned_phases = phases
-        .iter()
-        .map(|phase| phase_bins(phase))
-        .collect::<Vec<_>>();
-    binned_phases
-        .iter()
-        .zip(amplitudes)
-        .map(|(epoch_bins, amplitude)| {
-            let mut means = vec![0.0; bins];
-            for (&bin, &value) in epoch_bins.iter().zip(amplitude) {
-                means[bin] += value;
-            }
-            for (mean, &count) in means.iter_mut().zip(global_counts) {
-                if count > 0 {
-                    *mean /= count as f64;
-                }
-            }
-            let total = means.iter().sum::<f64>();
-            if total == 0.0 || means.iter().any(|&value| value <= 0.0) {
-                return 0.0;
-            }
-            1.0 + means
-                .iter()
-                .map(|value| {
-                    let probability = value / total;
-                    probability * probability.ln()
-                })
-                .sum::<f64>()
-                / (bins as f64).ln()
-        })
-        .collect()
+/// Per-window intermediate results. Windows are processed one at a time (in
+/// parallel) so only a window's band-filtered signals are ever held in memory;
+/// keeping every band x window x sample array (plus their copula-normalised
+/// copies for gcPAC) needed several GB per channel and made the analysis swap
+/// on machines with less RAM.
+struct WindowPac {
+    /// phase-bin counts over every phase band (TensorPAC global counts)
+    counts: [usize; 18],
+    /// per (amplitude, phase) pair: summed amplitude in each phase bin
+    sums: Vec<[f64; 18]>,
+    /// per (amplitude, phase) pair: Gaussian-copula MI
+    gc: Vec<f64>,
 }
 
-fn channel_pac(windows: &[Vec<f64>], bank: &FilterBank) -> PacChannelResult {
-    let phase_values: Vec<Vec<Vec<f64>>> = bank
+fn window_pac(window: &[f64], bank: &FilterBank) -> WindowPac {
+    let phases: Vec<Vec<f64>> = bank
         .phase
-        .par_iter()
+        .iter()
         .map(|filter| {
-            windows
-                .iter()
-                .map(|window| {
-                    let filtered = scipy_filtfilt_fir(window, &filter.coefficients, filter.order);
-                    analytic_signal(&filtered)
-                        .into_iter()
-                        .map(|value| value.arg())
-                        .collect()
-                })
-                .collect()
+            let filtered = scipy_filtfilt_fir(window, &filter.coefficients, filter.order);
+            analytic_signal(&filtered).into_iter().map(|value| value.arg()).collect()
         })
         .collect();
-    let amplitude_values: Vec<Vec<Vec<f64>>> = bank
+    let amplitudes: Vec<Vec<f64>> = bank
         .amplitude
-        .par_iter()
+        .iter()
         .map(|filter| {
-            windows
-                .iter()
-                .map(|window| {
-                    let filtered = scipy_filtfilt_fir(window, &filter.coefficients, filter.order);
-                    analytic_signal(&filtered)
-                        .into_iter()
-                        .map(|value| value.norm())
-                        .collect()
-                })
-                .collect()
+            let filtered = scipy_filtfilt_fir(window, &filter.coefficients, filter.order);
+            analytic_signal(&filtered).into_iter().map(|value| value.norm()).collect()
         })
         .collect();
-
-    // Tensorpac's tensor implementation uses idx.sum() across every phase
-    // band and epoch when averaging each phase bin.
-    let mut global_counts = vec![0_usize; 18];
-    for phase_band in &phase_values {
-        for epoch in phase_band {
-            for bin in phase_bins(epoch) {
-                global_counts[bin] += 1;
+    let bins: Vec<Vec<usize>> = phases.iter().map(|phase| phase_bins(phase)).collect();
+    let mut counts = [0_usize; 18];
+    for band in &bins {
+        for &bin in band {
+            counts[bin] += 1;
+        }
+    }
+    let n_phase = phases.len();
+    let mut sums = vec![[0.0_f64; 18]; amplitudes.len() * n_phase];
+    for (a, amplitude) in amplitudes.iter().enumerate() {
+        for (p, band) in bins.iter().enumerate() {
+            let acc = &mut sums[a * n_phase + p];
+            for (&bin, &value) in band.iter().zip(amplitude) {
+                acc[bin] += value;
             }
         }
     }
-    let mut means = vec![vec![0.0; bank.phase.len()]; bank.amplitude.len()];
-    for (amplitude_index, amplitudes) in amplitude_values.iter().enumerate() {
-        for (phase_index, phases) in phase_values.iter().enumerate() {
-            means[amplitude_index][phase_index] =
-                modulation_indices(phases, amplitudes, &global_counts)
-                    .into_iter()
-                    .sum::<f64>()
-                    / windows.len() as f64;
+    let phase_cop: Vec<(Vec<f64>, Vec<f64>)> = phases
+        .iter()
+        .map(|phase| {
+            let sin_vals: Vec<f64> = phase.iter().map(|&p| p.sin()).collect();
+            let cos_vals: Vec<f64> = phase.iter().map(|&p| p.cos()).collect();
+            (copnorm(&sin_vals), copnorm(&cos_vals))
+        })
+        .collect();
+    let mut gc = Vec::with_capacity(amplitudes.len() * n_phase);
+    for amplitude in &amplitudes {
+        let amp_u = copnorm(amplitude);
+        for (sin_u, cos_u) in &phase_cop {
+            gc.push(gc_mi_copnormed(sin_u, cos_u, &amp_u));
+        }
+    }
+    WindowPac { counts, sums, gc }
+}
+
+fn modulation_index_from_sums(sums: &[f64; 18], global_counts: &[usize]) -> f64 {
+    let bins = 18;
+    let mut means = *sums;
+    for (mean, &count) in means.iter_mut().zip(global_counts) {
+        if count > 0 {
+            *mean /= count as f64;
+        }
+    }
+    let total = means.iter().sum::<f64>();
+    if total == 0.0 || means.iter().any(|&value| value <= 0.0) {
+        return 0.0;
+    }
+    1.0 + means
+        .iter()
+        .map(|value| {
+            let probability = value / total;
+            probability * probability.ln()
+        })
+        .sum::<f64>()
+        / (bins as f64).ln()
+}
+
+fn channel_pac(windows: &[Vec<f64>], bank: &FilterBank) -> PacChannelResult {
+    let per_window: Vec<WindowPac> = windows.par_iter().map(|w| window_pac(w, bank)).collect();
+    let n_phase = bank.phase.len();
+    // Tensorpac's tensor implementation uses idx.sum() across every phase
+    // band and epoch when averaging each phase bin.
+    let mut global_counts = vec![0_usize; 18];
+    for w in &per_window {
+        for (g, c) in global_counts.iter_mut().zip(w.counts.iter()) {
+            *g += c;
+        }
+    }
+    let mut means = vec![vec![0.0; n_phase]; bank.amplitude.len()];
+    let mut means_gc = vec![vec![0.0; n_phase]; bank.amplitude.len()];
+    for (amplitude_index, (row, row_gc)) in means.iter_mut().zip(means_gc.iter_mut()).enumerate() {
+        for phase_index in 0..n_phase {
+            let k = amplitude_index * n_phase + phase_index;
+            row[phase_index] = per_window
+                .iter()
+                .map(|w| modulation_index_from_sums(&w.sums[k], &global_counts))
+                .sum::<f64>()
+                / windows.len() as f64;
+            row_gc[phase_index] =
+                per_window.iter().map(|w| w.gc[k]).sum::<f64>() / windows.len().max(1) as f64;
         }
     }
     let mut maximum = f64::NEG_INFINITY;
@@ -297,42 +317,6 @@ fn channel_pac(windows: &[Vec<f64>], bank: &FilterBank) -> PacChannelResult {
         }
     }
 
-    // Precompute copnorm for phase (sin and cos) across all phase filters and windows
-    let phase_copnorm: Vec<Vec<(Vec<f64>, Vec<f64>)>> = phase_values
-        .par_iter()
-        .map(|phase_windows| {
-            phase_windows
-                .iter()
-                .map(|window| {
-                    let sin_vals: Vec<f64> = window.iter().map(|&p| p.sin()).collect();
-                    let cos_vals: Vec<f64> = window.iter().map(|&p| p.cos()).collect();
-                    (copnorm(&sin_vals), copnorm(&cos_vals))
-                })
-                .collect()
-        })
-        .collect();
-
-    // Precompute copnorm for amplitudes across all amplitude filters and windows
-    let amplitude_copnorm: Vec<Vec<Vec<f64>>> = amplitude_values
-        .par_iter()
-        .map(|amp_windows| {
-            amp_windows
-                .iter()
-                .map(|window| copnorm(window))
-                .collect()
-        })
-        .collect();
-
-    let mut means_gc = vec![vec![0.0; bank.phase.len()]; bank.amplitude.len()];
-    for (amplitude_index, amp_windows) in amplitude_copnorm.iter().enumerate() {
-        for (phase_index, phase_windows) in phase_copnorm.iter().enumerate() {
-            let mut sum_gc = 0.0;
-            for (amp_u, (sin_u, cos_u)) in amp_windows.iter().zip(phase_windows) {
-                sum_gc += gc_mi_copnormed(sin_u, cos_u, amp_u);
-            }
-            means_gc[amplitude_index][phase_index] = sum_gc / windows.len().max(1) as f64;
-        }
-    }
     let mut maximum_gc = f64::NEG_INFINITY;
     let mut maximum_amplitude_gc = 0;
     let mut maximum_phase_gc = 0;

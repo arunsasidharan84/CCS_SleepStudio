@@ -58,7 +58,10 @@ pub fn load(
         lights_off_seconds,
         lights_on_seconds,
     );
-    let architecture = sleep_architecture(&stages, window);
+    let mut architecture = sleep_architecture(&stages, window);
+    if let Some(stage_analysis) = crate::accs::analyse(&stages) {
+        architecture.values.extend(crate::accs::flatten(&stage_analysis));
+    }
     if !references.is_empty() {
         let reference_indices = references
             .iter()

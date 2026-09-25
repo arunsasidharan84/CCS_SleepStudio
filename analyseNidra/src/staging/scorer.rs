@@ -293,6 +293,18 @@ fn prob_map(probs: &[f64; 5]) -> HashMap<String, f64> {
     m
 }
 
+/// Staging pre-filter used by the neural models (as in the retired Python
+/// backend): 50 Hz notch and a 0.3-35 Hz band-pass at the native rate.
+fn staging_prefilter(signal: &[f64], sfreq: f64) -> Vec<f64> {
+    use crate::psg::common::{butter_filtfilt, notch_filtfilt};
+    let mut x = signal.to_vec();
+    if sfreq / 2.0 > 51.0 {
+        x = notch_filtfilt(&x, sfreq, 50.0);
+    }
+    let hi = 35.0f64.min(sfreq / 2.0 - 1.0);
+    butter_filtfilt(&x, sfreq, Some(0.3), Some(hi))
+}
+
 /// Runs one algorithm on one derivation and returns per-epoch probabilities
 /// in [W, N1, N2, N3, R] order.
 fn score_montage(
@@ -322,13 +334,15 @@ fn score_montage(
             progress(0.0, "Loading U-Sleep model");
             let model = USleepModel::load_from_path(&USleepModel::resolve_model(None)?)?;
             progress(0.2, "Running U-Sleep");
-            score_usleep_recording(&eeg.signal, eog, eeg.sfreq, &model)
+            let x = staging_prefilter(&eeg.signal, eeg.sfreq);
+            let e = eog.map(|e| staging_prefilter(e, eeg.sfreq));
+            score_usleep_recording(&x, e.as_deref(), eeg.sfreq, &model)
         }
         "seqsleepnet" | "sleeptransformer" => {
             progress(0.0, &format!("Loading {algo} model"));
             let model = PhysioExModel::load_from_path(&PhysioExModel::resolve_model(algo)?, algo)?;
             progress(0.2, &format!("Running {algo}"));
-            score_physioex_channel(&eeg.signal, eeg.sfreq, &model)
+            score_physioex_channel(&staging_prefilter(&eeg.signal, eeg.sfreq), eeg.sfreq, &model)
         }
         "gssc" => {
             progress(0.0, "Locating GSSC models");
@@ -345,7 +359,7 @@ fn score_montage(
         _ => {
             progress(0.0, "Loading TinySleepNet model");
             let model = StagingModel::load_from_path(&StagingModel::resolve_model(None)?)?;
-            let epochs = prepare_staging_epochs(&eeg.signal, eeg.sfreq);
+            let epochs = prepare_staging_epochs(&staging_prefilter(&eeg.signal, eeg.sfreq), eeg.sfreq);
             let n = epochs.len();
             progress(0.2, &format!("Scoring {n} epochs with TinySleepNet"));
             use rayon::prelude::*;
@@ -595,7 +609,7 @@ pub fn score_edf_file(
     score_recording(
         edf_path,
         &StageOptions {
-            algorithm: algorithm_arg.unwrap_or("tinysleepnet").to_string(),
+            algorithm: algorithm_arg.unwrap_or("yasa").to_string(),
             sequence_correction: sequence_correction_arg.unwrap_or("none").to_string(),
             eeg: split(preferred_channel),
             refs: split(preferred_ref),

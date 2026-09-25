@@ -397,6 +397,45 @@ fn event_columns() -> Vec<String> {
     .collect()
 }
 
+pub const STAGE_DYNAMICS_COLUMNS: [&str; 4] = [
+    "SleepCycle_number",
+    "Stage_transitions",
+    "Stage_arousals",
+    "ShortAwakenings",
+];
+
+pub const STAGE_CYCLE_COLUMNS: [&str; 19] = [
+    "start_epoch",
+    "end_epoch",
+    "Sleep_duration_cycle",
+    "Wake_duration_cycle",
+    "N1_duration_cycle",
+    "N2_duration_cycle",
+    "N3_duration_cycle",
+    "REM_duration_cycle",
+    "Wake_percentage_cycle",
+    "N1_percentage_cycle",
+    "N2_percentage_cycle",
+    "N3_percentage_cycle",
+    "REM_percentage_cycle",
+    "NREM_StageTransitions_cycle",
+    "NREM_StageArousals_cycle",
+    "NREM_ShortAwakenings_cycle",
+    "REM_StageTransitions_cycle",
+    "REM_StageArousals_cycle",
+    "REM_ShortAwakenings_cycle",
+];
+
+fn stage_dynamics_columns() -> Vec<String> {
+    let mut out: Vec<String> = STAGE_DYNAMICS_COLUMNS.iter().map(|&c| c.to_string()).collect();
+    for cycle in 1..=5 {
+        for c in STAGE_CYCLE_COLUMNS {
+            out.push(format!("C{cycle}_{c}"));
+        }
+    }
+    out
+}
+
 fn csv_escape(value: &str) -> String {
     if value.contains([',', '"', '\n']) {
         format!("\"{}\"", value.replace('"', "\"\""))
@@ -418,6 +457,10 @@ pub fn write_csv(
     columns.extend(["Subjname".into(), "Sessname".into(), "Chan".into()]);
     columns.extend(event_columns());
     columns.extend(feature_columns());
+    // Stage dynamics and sleep-cycle parameters: non-redundant full-night
+    // dynamics plus the first five sleep cycles (without accs_ prefix).
+    let stage_dyn_columns = stage_dynamics_columns();
+    columns.extend(stage_dyn_columns.iter().cloned());
     let mut writer =
         BufWriter::new(File::create(path).with_context(|| format!("creating {}", path.display()))?);
     writeln!(writer, "{}", columns.join(","))?;
@@ -436,6 +479,10 @@ pub fn write_csv(
             } else {
                 String::new()
             });
+        }
+        for column in &stage_dyn_columns {
+            let value = recording.architecture.values.get(column).copied().unwrap_or(f64::NAN);
+            values.push(if value.is_finite() { value.to_string() } else { String::new() });
         }
         writeln!(writer, "{}", values.join(","))?;
     }

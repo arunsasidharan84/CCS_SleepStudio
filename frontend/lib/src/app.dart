@@ -128,6 +128,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   bool _batchAnalyseRecursive = true;
   bool _batchAnalyseUseWildcard = false;
   bool _batchAnalyseAutoLoadScorings = true;
+  bool _batchAnalyseSkipExisting = true;
+  bool _batchAnalyseAutoCollate = true;
   final TextEditingController _batchAnalyseWildcardController =
       TextEditingController(text: '*.edf');
 
@@ -2496,6 +2498,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     bool perChannel = false,
     String? regionMapJson,
     AnalyseNidraOptions? options,
+    bool skipExisting = false,
+    bool autoCollate = false,
   }) {
     final analyseOptions = options ?? AnalyseNidraOptions();
     // Validate that all scoring files exist before starting
@@ -2556,6 +2560,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 perChannel: perChannel,
                 regionMapJson: regionMapJson,
                 options: analyseOptions,
+                skipExisting: skipExisting,
               ),
             ),
         ],
@@ -2572,21 +2577,44 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               }),
             );
           }
-          if (failed == 0) {
-            setState(() {
-              _lastAnalyseRegionalFiles = [
-                for (final job in jobs)
-                  (outputDir != null && outputDir.trim().isNotEmpty)
-                      ? '${outputDir.trim()}${Platform.pathSeparator}${_basename(job.edfPath).replaceAll(RegExp(r'\.[^.]+$'), '')}_analyse_regional.csv'
-                      : '${_sidecarPath(job.edfPath, '')}_analyse_regional.csv',
-              ];
-            });
+          final existingRegionalFiles = <String>[];
+          for (final job in jobs) {
+            final csvPath = (outputDir != null && outputDir.trim().isNotEmpty)
+                ? '${outputDir.trim()}${Platform.pathSeparator}${_basename(job.edfPath).replaceAll(RegExp(r'\.[^.]+$'), '')}_analyse_regional.csv'
+                : '${_sidecarPath(job.edfPath, '')}_analyse_regional.csv';
+            if (File(csvPath).existsSync()) {
+              existingRegionalFiles.add(csvPath);
+            }
           }
+          setState(() {
+            _lastAnalyseRegionalFiles = existingRegionalFiles;
+          });
           _setStatus(
             failed == 0
                 ? 'AnalyseNidra completed for ${jobs.length} recording(s)'
-                : 'AnalyseNidra finished: ${jobs.length - failed} completed, $failed failed',
+                : 'AnalyseNidra finished: ${jobs.length - failed} completed, $failed failed (${existingRegionalFiles.length} output CSVs available)',
           );
+          if (autoCollate && existingRegionalFiles.isNotEmpty) {
+            final targetDir = (outputDir != null && outputDir.trim().isNotEmpty)
+                ? outputDir.trim()
+                : File(jobs.first.edfPath).parent.path;
+            final masterCsvPath = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
+            unawaited(() async {
+              try {
+                final compiled = await compileRegionalCsvFiles(existingRegionalFiles);
+                await File(masterCsvPath).writeAsString(compiled);
+                if (mounted) {
+                  _setStatus(
+                    'Auto-compiled ${existingRegionalFiles.length} regional CSV(s) into ${_basename(masterCsvPath)}',
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  _setStatus('Auto-collation failed: $e');
+                }
+              }
+            }());
+          }
         },
       ),
     );
@@ -7678,7 +7706,30 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                               ],
                             ),
                           ),
-                          const SizedBox(height: 24),
+                          const SizedBox(height: 8),
+                          CheckboxListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Skip completed steps / recordings (resume)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                            subtitle: const Text(
+                              'Reuses existing output JSON/CSV files without recomputing, only completing missing analyses',
+                              style: TextStyle(fontSize: 10),
+                            ),
+                            value: _batchAnalyseSkipExisting,
+                            onChanged: (v) => setState(() => _batchAnalyseSkipExisting = v ?? true),
+                          ),
+                          CheckboxListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Auto-collate master sheet upon completion', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                            subtitle: const Text(
+                              'Automatically compiles all regional CSVs into AnalyseNidra_master_sheet.csv',
+                              style: TextStyle(fontSize: 10),
+                            ),
+                            value: _batchAnalyseAutoCollate,
+                            onChanged: (v) => setState(() => _batchAnalyseAutoCollate = v ?? true),
+                          ),
+                          const SizedBox(height: 16),
                           SizedBox(
                             width: double.infinity,
                             height: 40,
@@ -7753,6 +7804,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                         perChannel: _batchAnalysePerChannel,
                                         regionMapJson: regionMapJson,
                                         options: _batchAnalyseOptions,
+                                        skipExisting: _batchAnalyseSkipExisting,
+                                        autoCollate: _batchAnalyseAutoCollate,
                                       );
                                     },
                               child: const Text(
@@ -10756,6 +10809,7 @@ List<String> _analyseNidraArguments(
   String? regionMapJson,
   AnalyseNidraOptions? options,
   bool writeRegional = true,
+  bool skipExisting = false,
 }) {
   final baseDir = (outputDir != null && outputDir.trim().isNotEmpty)
       ? outputDir.trim()
@@ -10788,6 +10842,9 @@ List<String> _analyseNidraArguments(
   }
   if (perChannel) {
     args.add('--per-channel');
+  }
+  if (skipExisting) {
+    args.add('--skip-existing');
   }
   if (regionMapJson != null && regionMapJson.trim().isNotEmpty) {
     args.addAll(['--region-map', regionMapJson.trim()]);

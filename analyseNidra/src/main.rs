@@ -54,6 +54,7 @@ struct Cli {
     analyses: HashSet<String>,
     nlg_out: Option<PathBuf>,
     nlg: NlgCli,
+    skip_existing: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -234,6 +235,7 @@ fn parse_cli(arguments: impl IntoIterator<Item = OsString>) -> Result<Cli> {
     let mut analyses: Option<HashSet<String>> = None;
     let mut nlg_out: Option<PathBuf> = None;
     let mut nlg = NlgCli::default();
+    let mut skip_existing = false;
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         let text = argument.to_string_lossy().to_string();
@@ -293,6 +295,8 @@ fn parse_cli(arguments: impl IntoIterator<Item = OsString>) -> Result<Cli> {
             out_dir = Some(PathBuf::from(value));
         } else if argument == "--per-channel" || argument == "--no-grouping" {
             per_channel = true;
+        } else if argument == "--skip-existing" || argument == "--resume" {
+            skip_existing = true;
         } else if argument == "--region-map" {
             let value = arguments
                 .next()
@@ -406,6 +410,7 @@ to write results automatically"
         analyses: analyses.unwrap_or_else(|| ALL_ANALYSES.iter().map(|v| v.to_string()).collect()),
         nlg_out,
         nlg,
+        skip_existing,
     })
 }
 
@@ -1018,6 +1023,22 @@ fn main() -> Result<()> {
         bail!("scoring file not found: {}", scoring_path.display());
     }
 
+    let run = |name: &str| cli.analyses.contains(name);
+    let need_regional = regional_output_path.is_some();
+    let all_requested_exist = {
+        let core_ok = !run("core") || output_path.as_ref().map_or(true, |p| p.exists());
+        let pac_ok = !run("pac") || pac_output_path.as_ref().map_or(true, |p| p.exists());
+        let sw_ok = !run("slow_waves") || slow_wave_output_path.as_ref().map_or(true, |p| p.exists());
+        let sp_ok = !run("spindles") || spindle_output_path.as_ref().map_or(true, |p| p.exists());
+        let nlg_ok = !run("nlg") || cli.nlg_out.as_ref().map_or(true, |p| p.exists());
+        let reg_ok = !need_regional || regional_output_path.as_ref().map_or(true, |p| p.exists());
+        core_ok && pac_ok && sw_ok && sp_ok && nlg_ok && reg_ok
+    };
+    if cli.skip_existing && all_requested_exist {
+        println!("all requested outputs already exist for {}; skipping recording", edf_path.display());
+        return Ok(());
+    }
+
     let started = Instant::now();
     let recording = pipeline::load(
         &edf_path,
@@ -1064,105 +1085,236 @@ fn main() -> Result<()> {
         Ok(())
     };
     let core = if run("core") && (output_path.is_some() || need_regional) {
-        let t = Instant::now();
-        let features = pipeline::compute_core_stage_features(&recording);
-        println!("computed core stage features in {:.3}s", t.elapsed().as_secs_f64());
-        Some(features)
+        if cli.skip_existing && output_path.as_ref().map_or(false, |p| p.exists()) {
+            let p = output_path.as_ref().unwrap();
+            match std::fs::File::open(p)
+                .map_err(anyhow::Error::from)
+                .and_then(|f| serde_json::from_reader(std::io::BufReader::new(f)).map_err(anyhow::Error::from))
+            {
+                Ok(cached) => {
+                    println!("reusing existing core stage features from {}", p.display());
+                    Some(cached)
+                }
+                Err(e) => {
+                    println!("recomputing core stage features (cache read failed: {e})...");
+                    let t = Instant::now();
+                    let features = pipeline::compute_core_stage_features(&recording);
+                    println!("computed core stage features in {:.3}s", t.elapsed().as_secs_f64());
+                    Some(features)
+                }
+            }
+        } else {
+            let t = Instant::now();
+            let features = pipeline::compute_core_stage_features(&recording);
+            println!("computed core stage features in {:.3}s", t.elapsed().as_secs_f64());
+            Some(features)
+        }
     } else {
         None
     };
     if let (Some(p), Some(v)) = (&output_path, &core) {
-        write_json(p, v, "core stage features")?;
+        if !cli.skip_existing || !p.exists() {
+            write_json(p, v, "core stage features")?;
+        }
     }
     let pac_values = if run("pac") && (pac_output_path.is_some() || need_regional) {
-        let t = Instant::now();
-        let values = pac::compute(&recording);
-        println!("computed PAC in {:.3}s", t.elapsed().as_secs_f64());
-        Some(values)
+        if cli.skip_existing && pac_output_path.as_ref().map_or(false, |p| p.exists()) {
+            let p = pac_output_path.as_ref().unwrap();
+            match std::fs::File::open(p)
+                .map_err(anyhow::Error::from)
+                .and_then(|f| serde_json::from_reader(std::io::BufReader::new(f)).map_err(anyhow::Error::from))
+            {
+                Ok(cached) => {
+                    println!("reusing existing PAC results from {}", p.display());
+                    Some(cached)
+                }
+                Err(e) => {
+                    println!("recomputing PAC (cache read failed: {e})...");
+                    let t = Instant::now();
+                    let values = pac::compute(&recording);
+                    println!("computed PAC in {:.3}s", t.elapsed().as_secs_f64());
+                    Some(values)
+                }
+            }
+        } else {
+            let t = Instant::now();
+            let values = pac::compute(&recording);
+            println!("computed PAC in {:.3}s", t.elapsed().as_secs_f64());
+            Some(values)
+        }
     } else {
         None
     };
     if let (Some(p), Some(v)) = (&pac_output_path, &pac_values) {
-        write_json(p, v, "PAC results")?;
+        if !cli.skip_existing || !p.exists() {
+            write_json(p, v, "PAC results")?;
+        }
     }
     let slow_wave_values = if run("slow_waves") && (slow_wave_output_path.is_some() || need_regional) {
-        let t = Instant::now();
-        let values = events::slow_waves(&recording);
-        println!("detected slow waves in {:.3}s", t.elapsed().as_secs_f64());
-        Some(values)
+        if cli.skip_existing && slow_wave_output_path.as_ref().map_or(false, |p| p.exists()) {
+            let p = slow_wave_output_path.as_ref().unwrap();
+            match std::fs::File::open(p)
+                .map_err(anyhow::Error::from)
+                .and_then(|f| serde_json::from_reader(std::io::BufReader::new(f)).map_err(anyhow::Error::from))
+            {
+                Ok(cached) => {
+                    println!("reusing existing slow-wave results from {}", p.display());
+                    Some(cached)
+                }
+                Err(e) => {
+                    println!("recomputing slow waves (cache read failed: {e})...");
+                    let t = Instant::now();
+                    let values = events::slow_waves(&recording);
+                    println!("detected slow waves in {:.3}s", t.elapsed().as_secs_f64());
+                    Some(values)
+                }
+            }
+        } else {
+            let t = Instant::now();
+            let values = events::slow_waves(&recording);
+            println!("detected slow waves in {:.3}s", t.elapsed().as_secs_f64());
+            Some(values)
+        }
     } else {
         None
     };
     if let (Some(p), Some(v)) = (&slow_wave_output_path, &slow_wave_values) {
-        write_json(p, v, "slow-wave results")?;
+        if !cli.skip_existing || !p.exists() {
+            write_json(p, v, "slow-wave results")?;
+        }
     }
     let spindle_values = if run("spindles") && (spindle_output_path.is_some() || need_regional) {
-        let t = Instant::now();
-        let values = events::spindles(&recording);
-        println!("detected spindles in {:.3}s", t.elapsed().as_secs_f64());
-        Some(values)
+        if cli.skip_existing && spindle_output_path.as_ref().map_or(false, |p| p.exists()) {
+            let p = spindle_output_path.as_ref().unwrap();
+            match std::fs::File::open(p)
+                .map_err(anyhow::Error::from)
+                .and_then(|f| serde_json::from_reader(std::io::BufReader::new(f)).map_err(anyhow::Error::from))
+            {
+                Ok(cached) => {
+                    println!("reusing existing spindle results from {}", p.display());
+                    Some(cached)
+                }
+                Err(e) => {
+                    println!("recomputing spindles (cache read failed: {e})...");
+                    let t = Instant::now();
+                    let values = events::spindles(&recording);
+                    println!("detected spindles in {:.3}s", t.elapsed().as_secs_f64());
+                    Some(values)
+                }
+            }
+        } else {
+            let t = Instant::now();
+            let values = events::spindles(&recording);
+            println!("detected spindles in {:.3}s", t.elapsed().as_secs_f64());
+            Some(values)
+        }
     } else {
         None
     };
     if let (Some(p), Some(v)) = (&spindle_output_path, &spindle_values) {
-        write_json(p, v, "spindle results")?;
+        if !cli.skip_existing || !p.exists() {
+            write_json(p, v, "spindle results")?;
+        }
     }
     let nlg_report = if run("nlg") && (cli.nlg_out.is_some() || need_regional) {
-        let t = Instant::now();
-        let opts = cli.nlg.options()?;
-        match analyse_nidra::nlg::analyse_recording(
-            &edf_path,
-            Some(&recording.stages),
-            &cli.channels,
-            &cli.references,
-            &opts,
-        ) {
-            Ok(report) => {
-                for w in &report.warnings {
-                    println!("WARNING NeuroLoopGain {w}");
+        if cli.skip_existing && cli.nlg_out.as_ref().map_or(false, |p| p.exists()) {
+            let p = cli.nlg_out.as_ref().unwrap();
+            match std::fs::File::open(p)
+                .map_err(anyhow::Error::from)
+                .and_then(|f| serde_json::from_reader(std::io::BufReader::new(f)).map_err(anyhow::Error::from))
+            {
+                Ok(cached) => {
+                    println!("reusing existing NeuroLoopGain results from {}", p.display());
+                    Some(cached)
                 }
-                println!("computed NeuroLoopGain in {:.3}s", t.elapsed().as_secs_f64());
-                Some(report)
+                Err(e) => {
+                    println!("recomputing NeuroLoopGain (cache read failed: {e})...");
+                    let t = Instant::now();
+                    let opts = cli.nlg.options()?;
+                    match analyse_nidra::nlg::analyse_recording(
+                        &edf_path,
+                        Some(&recording.stages),
+                        &cli.channels,
+                        &cli.references,
+                        &opts,
+                    ) {
+                        Ok(report) => {
+                            for w in &report.warnings {
+                                println!("WARNING NeuroLoopGain {w}");
+                            }
+                            println!("computed NeuroLoopGain in {:.3}s", t.elapsed().as_secs_f64());
+                            Some(report)
+                        }
+                        Err(e) => {
+                            println!("WARNING NeuroLoopGain failed: {e}");
+                            None
+                        }
+                    }
+                }
             }
-            Err(e) => {
-                println!("WARNING NeuroLoopGain failed: {e}");
-                None
+        } else {
+            let t = Instant::now();
+            let opts = cli.nlg.options()?;
+            match analyse_nidra::nlg::analyse_recording(
+                &edf_path,
+                Some(&recording.stages),
+                &cli.channels,
+                &cli.references,
+                &opts,
+            ) {
+                Ok(report) => {
+                    for w in &report.warnings {
+                        println!("WARNING NeuroLoopGain {w}");
+                    }
+                    println!("computed NeuroLoopGain in {:.3}s", t.elapsed().as_secs_f64());
+                    Some(report)
+                }
+                Err(e) => {
+                    println!("WARNING NeuroLoopGain failed: {e}");
+                    None
+                }
             }
         }
     } else {
         None
     };
     if let (Some(p), Some(v)) = (&cli.nlg_out, &nlg_report) {
-        // Compact JSON: the 1-s gain traces make the pretty form ~4x larger.
-        serde_json::to_writer(
-            std::io::BufWriter::new(File::create(p).with_context(|| format!("creating {}", p.display()))?),
-            v,
-        )?;
-        println!("wrote NeuroLoopGain results to {}", p.display());
-        println!("OUTPUT_NLG {}", p.display());
+        if !cli.skip_existing || !p.exists() {
+            // Compact JSON: the 1-s gain traces make the pretty form ~4x larger.
+            serde_json::to_writer(
+                std::io::BufWriter::new(File::create(p).with_context(|| format!("creating {}", p.display()))?),
+                v,
+            )?;
+            println!("wrote NeuroLoopGain results to {}", p.display());
+            println!("OUTPUT_NLG {}", p.display());
+        }
     }
     if let Some(output_path) = &regional_output_path {
-        let regional_started = Instant::now();
-        let rows = regional::compile(
-            &recording,
-            core.as_ref(),
-            spindle_values.as_ref(),
-            slow_wave_values.as_ref(),
-            pac_values.as_ref(),
-            nlg_report.as_ref(),
-            cli.per_channel,
-            cli.region_map.as_ref(),
-        );
-        let recording_name = edf_path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .context("EDF filename is not valid UTF-8")?;
-        regional::write_csv(output_path, recording_name, &recording, &rows)?;
-        println!(
-            "wrote final regional CSV to {} in {:.3}s",
-            output_path.display(),
-            regional_started.elapsed().as_secs_f64()
-        );
+        if cli.skip_existing && output_path.exists() {
+            println!("regional output already exists at {}; skipping compilation", output_path.display());
+        } else {
+            let regional_started = Instant::now();
+            let rows = regional::compile(
+                &recording,
+                core.as_ref(),
+                spindle_values.as_ref(),
+                slow_wave_values.as_ref(),
+                pac_values.as_ref(),
+                nlg_report.as_ref(),
+                cli.per_channel,
+                cli.region_map.as_ref(),
+            );
+            let recording_name = edf_path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .context("EDF filename is not valid UTF-8")?;
+            regional::write_csv(output_path, recording_name, &recording, &rows)?;
+            println!(
+                "wrote final regional CSV to {} in {:.3}s",
+                output_path.display(),
+                regional_started.elapsed().as_secs_f64()
+            );
+        }
     }
     println!("total analysis time {:.1}s", started.elapsed().as_secs_f64());
     Ok(())
@@ -1327,6 +1479,16 @@ mod tests {
         assert_eq!(map.get("F3").map(String::as_str), Some("Frontal"));
         assert_eq!(map.get("F4").map(String::as_str), Some("Frontal"));
         assert_eq!(map.get("C3").map(String::as_str), Some("Central"));
+    }
+
+    #[test]
+    fn cli_accepts_skip_existing() {
+        let cli1 = parse_cli(["rec.edf", "sc.json", "--skip-existing"].map(OsString::from)).unwrap();
+        assert!(cli1.skip_existing);
+        let cli2 = parse_cli(["rec.edf", "sc.json", "--resume"].map(OsString::from)).unwrap();
+        assert!(cli2.skip_existing);
+        let cli3 = parse_cli(["rec.edf", "sc.json"].map(OsString::from)).unwrap();
+        assert!(!cli3.skip_existing);
     }
 }
 

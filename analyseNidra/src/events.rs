@@ -14,7 +14,7 @@ struct DetectionFilters {
     coupling_sigma: Vec<f64>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct SpindleEvent {
     pub start: f64,
@@ -35,7 +35,7 @@ pub struct SpindleEvent {
     pub idx_channel: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct SpindleSummary {
     pub channel: String,
@@ -52,13 +52,13 @@ pub struct SpindleSummary {
     pub symmetry: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SpindleResults {
     pub events: Vec<SpindleEvent>,
     pub summary: Vec<SpindleSummary>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct SlowWaveEvent {
     pub start: f64,
@@ -91,7 +91,7 @@ pub struct SlowWaveEvent {
     pub idx_channel: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct SlowWaveSummary {
     pub channel: String,
@@ -115,7 +115,7 @@ pub struct SlowWaveSummary {
     pub phase_consistency: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SlowWaveResults {
     pub events: Vec<SlowWaveEvent>,
     pub summary: Vec<SlowWaveSummary>,

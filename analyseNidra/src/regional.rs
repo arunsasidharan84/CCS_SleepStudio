@@ -199,9 +199,24 @@ pub fn compile(
         .copied()
         .zip(recording.edf.channels.iter().map(|channel| pac.and_then(|p| p.get(channel))))
         .collect::<BTreeMap<_, _>>();
-    let nrem_minutes =
-        recording.architecture.values["N2_duration"] + recording.architecture.values["N3_duration"];
-    let total_nrem_minutes = recording.architecture.values["NREM_duration"];
+    let nrem_minutes = recording
+        .architecture
+        .values
+        .get("N2_duration")
+        .copied()
+        .unwrap_or(0.0)
+        + recording
+            .architecture
+            .values
+            .get("N3_duration")
+            .copied()
+            .unwrap_or(0.0);
+    let total_nrem_minutes = recording
+        .architecture
+        .values
+        .get("NREM_duration")
+        .copied()
+        .unwrap_or(0.0);
 
     let mut channels = BTreeMap::<String, RegionalRow>::new();
     for channel in &recording.edf.channels {
@@ -519,7 +534,8 @@ pub fn write_csv(
     for (region, row) in rows {
         let mut values = Vec::with_capacity(columns.len());
         for column in ARCHITECTURE_COLUMNS {
-            values.push(recording.architecture.values[column].to_string());
+            let value = recording.architecture.values.get(column).copied().unwrap_or(f64::NAN);
+            values.push(if value.is_finite() { value.to_string() } else { String::new() });
         }
         values.push(csv_escape(recording_name));
         values.push(String::new());

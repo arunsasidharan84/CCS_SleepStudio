@@ -8,7 +8,7 @@ use crate::signal::{preprocess_mne_250hz, rereference, resample_channels_mne};
 use crate::spectral::{fooof_features, irasa_features};
 use anyhow::{Context, Result, bail};
 use rayon::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -20,7 +20,7 @@ pub struct LoadedRecording {
     pub architecture: SleepArchitecture,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CoreStageFeatures {
     pub channels: BTreeMap<String, BTreeMap<String, f64>>,
 }

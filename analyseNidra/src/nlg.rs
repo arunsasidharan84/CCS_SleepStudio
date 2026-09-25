@@ -17,7 +17,7 @@
 //! build on the bundled PSG recordings).
 
 use anyhow::{Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Trace indices, identical to the reference `OutputBufferOffsets` slots.
 pub const SU: usize = 1;
@@ -111,7 +111,7 @@ impl Default for NlgConfig {
 
 /// Named analysis bands. The presets are the ones of the reference GUI
 /// (slow waves, spindles, alpha).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NlgBand {
     pub name: String,
     pub f0: f64,
@@ -1255,7 +1255,7 @@ impl Default for NlgOptions {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NlgPeriod {
     pub label: String,
     pub start_s: f64,
@@ -1264,7 +1264,7 @@ pub struct NlgPeriod {
     pub nrem_seconds: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NlgBandResult {
     pub band: NlgBand,
     pub undersampler: i32,
@@ -1288,11 +1288,11 @@ pub struct NlgBandResult {
     pub cycles: Vec<NlgPeriod>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NlgReport {
-    pub analysis: &'static str,
-    pub method: &'static str,
-    pub reference: &'static str,
+    pub analysis: String,
+    pub method: String,
+    pub reference: String,
     pub references: Vec<String>,
     pub epoch_seconds: f64,
     /// channel -> band name -> result
@@ -1565,9 +1565,9 @@ pub fn analyse_recording(
         average.insert(band.name.clone(), avg);
     }
     Ok(NlgReport {
-        analysis: "neuroloopgain",
-        method: "NeuroLoopGain 2.x port (Kemp et al. 2000), 1-s gain traces; summaries over artifact-free seconds",
-        reference: "Kemp B, Zwinderman AH, Tuk B, Kamphuisen HAC, Oberyé JJL. Analysis of a sleep-dependent neuronal feedback loop: the slow-wave microcontinuity of the EEG. IEEE Trans Biomed Eng 2000;47(9):1185-1194.",
+        analysis: "neuroloopgain".to_string(),
+        method: "NeuroLoopGain 2.x port (Kemp et al. 2000), 1-s gain traces; summaries over artifact-free seconds".to_string(),
+        reference: "Kemp B, Zwinderman AH, Tuk B, Kamphuisen HAC, Oberyé JJL. Analysis of a sleep-dependent neuronal feedback loop: the slow-wave microcontinuity of the EEG. IEEE Trans Biomed Eng 2000;47(9):1185-1194.".to_string(),
         references: references.to_vec(),
         epoch_seconds,
         channels: out,

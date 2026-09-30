@@ -21,6 +21,11 @@ RUN dnf install -y epel-release && \
       dpkg && \
     dnf clean all
 
+# libmpv for the synchronised-video player (media_kit) — from RPM Fusion free.
+RUN dnf install -y --nogpgcheck https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-8.noarch.rpm && \
+    dnf install -y --setopt=install_weak_deps=False mpv-libs-devel && \
+    dnf clean all
+
 # Install stable Rust toolchain
 ENV RUSTUP_HOME="/root/.rustup" \
     CARGO_HOME="/root/.cargo" \

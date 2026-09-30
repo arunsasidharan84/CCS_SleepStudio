@@ -7,6 +7,7 @@ import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -33,8 +34,9 @@ import 'scoring_io.dart';
 import 'update_checker.dart';
 import 'signal_processing.dart' as sp;
 import 'synced_video_panel.dart';
+import 'nihon_kohden.dart';
+import 'batch_metadata.dart';
 import 'timeline_painter.dart';
-import 'package:video_player/video_player.dart';
 
 const double _plotLeftPadding = 90.0;
 const bool buildLite = bool.fromEnvironment('LITE_BUILD', defaultValue: false);
@@ -118,6 +120,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   // Batch AnalyseNidra State
   final List<Map<String, String>> _batchAnalysePairs = [];
+
+  /// Metadata table mapped to recordings by file name (Batch tab).
+  BatchMetadataTable? _batchMetadata;
   final List<Map<String, String>> _batchComparisonPairs = [];
   final TextEditingController _batchAnalyseEegController =
       TextEditingController(text: '');
@@ -175,14 +180,23 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   final TextEditingController _batchPreprocessOutDirController =
       TextEditingController();
 
-  // Video Sync State
-  String? _videoPath;
-  VideoPlayerController? _videoController;
+  // Video Sync State (multi-camera, see synced_video_panel.dart)
+  VideoSyncController? _videoSync;
   bool _videoPanelVisible = false;
   bool _waveformMaximized = false;
-  double _videoOffsetSeconds = 0.0;
-  bool _isVideoPlaying = false;
-  Timer? _videoSyncTimer;
+
+  /// Video time in seconds from the EEG start; drawn as a cursor on the
+  /// waveform. Null when no video is loaded. A notifier, so the cursor moves
+  /// during playback without rebuilding the whole screen.
+  final ValueNotifier<double?> _videoCursor = ValueNotifier<double?>(null);
+  double? get _videoCursorSec => _videoCursor.value;
+
+  /// Floating panel geometry inside the waveform area (null = default).
+  Rect? _videoPanelRect;
+
+  /// Set while the waveform is paged by the video, so paging does not seek
+  /// the video back to the epoch start.
+  bool _pagingFromVideo = false;
 
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -212,8 +226,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   @override
   void dispose() {
-    _videoSyncTimer?.cancel();
-    _videoController?.dispose();
+    _videoSync?.dispose();
+    _videoCursor.dispose();
     FocusManager.instance.removeListener(_handlePrimaryFocusChange);
     _tabController.removeListener(_handleTabChange);
     _tabController.dispose();
@@ -392,6 +406,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       activeConfig.bindLoadedChannels(
         rawEeg.channelLabels,
         sampleRateHz: rawEeg.sampleRateHz,
+        renamedLabels: rawEeg.channelLabelRenames,
       );
       // Always save after binding — persists channel index corrections
       await saveAutoConfig(path, activeConfig);
@@ -440,7 +455,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         _scheduleTimeFrequencyRefresh(++_navigationSerial);
       }
 
-      // Check for companion video file in the same directory
+      // Videos of the previous recording no longer apply.
+      if (_videoSync != null) setState(_detachVideo);
+      // Check for companion video file(s) in the same directory
       unawaited(_tryAutoDetectCompanionVideo(path));
     } on UnsupportedError catch (e) {
       _setStatus(e.message ?? e.toString());
@@ -451,103 +468,150 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   // ─── Video Playback & Sync ──────────────────────────────────────────────────
 
+  bool get _hasVideo => _videoSync != null;
+
+  /// Adds one or more video files as cameras (each starts at the EEG start;
+  /// use the per-camera offset to correct), or loads a Nihon Kohden .VF2
+  /// video index.
   Future<void> _openVideoFile() async {
     final result = await FilePicker.pickFiles(
-      dialogTitle: 'Select Synchronized Video File',
+      dialogTitle: 'Select video file(s) or a Nihon Kohden video index (.VF2)',
       type: FileType.custom,
+      allowMultiple: true,
       allowedExtensions: [
-        'mp4', 'mkv', 'avi', 'mov', 'webm', 'm2t', 'ts', 'mts', 'm2ts',
-        'MP4', 'MKV', 'AVI', 'MOV', 'WEBM', 'M2T', 'TS', 'MTS', 'M2TS',
+        'mp4', 'mkv', 'avi', 'mov', 'webm', 'm2t', 'ts', 'mts', 'm2ts', 'mpg', 'vf2',
+        'MP4', 'MKV', 'AVI', 'MOV', 'WEBM', 'M2T', 'TS', 'MTS', 'M2TS', 'MPG', 'VF2',
       ],
     );
-    final p = result?.files.single.path;
-    if (p != null) {
-      await _loadVideo(p);
-    }
-  }
+    final paths = result?.files.map((f) => f.path).whereType<String>().toList() ?? const <String>[];
+    if (paths.isEmpty) return;
 
-  Future<void> _loadVideo(String videoPath) async {
-    try {
-      _videoSyncTimer?.cancel();
-      await _videoController?.dispose();
-      _videoController = null;
-
-      final controller = VideoPlayerController.file(File(videoPath));
-      await controller.initialize();
-      controller.addListener(_handleVideoPlayerUpdate);
-
-      if (!mounted) {
-        await controller.dispose();
+    final index = paths.firstWhere(
+      (p) => p.toLowerCase().endsWith('.vf2'),
+      orElse: () => '',
+    );
+    if (index.isNotEmpty) {
+      // The index lists files relative to the recording folder; read it as if
+      // it were the recording itself.
+      final vi = readNkVideoIndex(index, _loadedEeg?.recordingStartTime);
+      if (vi == null) {
+        _setStatus('No cameras found in ${_basename(index)}');
         return;
       }
-
-      setState(() {
-        _videoPath = videoPath;
-        _videoController = controller;
-        _videoPanelVisible = true;
-        _isVideoPlaying = false;
-      });
-
-      final currentEpoch = _viewport?.currentEpoch ?? 0;
-      await _seekVideoToEpoch(currentEpoch);
-      _setStatus('Loaded synchronized video: ${_basename(videoPath)}');
-    } catch (e) {
-      _setStatus('Could not load video: $e');
+      await _loadVideoCameras(vi.cameras, label: _basename(index));
+      return;
     }
+
+    final cams = <VideoCamera>[
+      if (_videoSync != null) ..._videoSync!.cameras,
+      for (final p in paths)
+        VideoCamera(
+          name: _basename(p),
+          segments: [VideoSegment(fileName: _basename(p), path: p, startSec: 0)],
+        ),
+    ];
+    await _loadVideoCameras(cams, label: _videoSync?.sourceLabel ?? '');
   }
 
-  void _handleVideoPlayerUpdate() {
-    if (!mounted || _videoController == null) return;
-    final playing = _videoController!.value.isPlaying;
-    if (playing != _isVideoPlaying) {
-      setState(() => _isVideoPlaying = playing);
-      if (playing) {
-        _startVideoPlaybackSync();
-      } else {
-        _videoSyncTimer?.cancel();
-      }
-    }
-  }
+  Future<void> _loadVideoCameras(List<VideoCamera> cameras, {String label = ''}) async {
+    final v = _viewport;
+    if (cameras.isEmpty || v == null) return;
+    final keepTime = _videoCursorSec;
+    _detachVideo();
 
-  void _startVideoPlaybackSync() {
-    _videoSyncTimer?.cancel();
-    _videoSyncTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
-      if (!mounted || _videoController == null || !_videoController!.value.isPlaying) return;
-      final posSec = _videoController!.value.position.inMilliseconds / 1000.0;
-      final eegSec = posSec - _videoOffsetSeconds;
-      if (eegSec < 0) return;
-
-      final epochSec = _viewport?.epochSeconds ?? 30;
-      final targetEpoch = (eegSec / epochSec).floor() + 1;
-      final currentEpoch = _viewport?.currentEpoch ?? 0;
-      if (targetEpoch != currentEpoch + 1 &&
-          targetEpoch >= 1 &&
-          targetEpoch <= (_viewport?.epochCount ?? 1)) {
-        _jumpToEpoch(targetEpoch, false);
-      }
+    final sync = VideoSyncController(
+      cameras: cameras,
+      durationSec: v.totalDurationSeconds,
+      recordingStart: _loadedEeg?.recordingStartTime ?? v.recordingStartTime,
+      sourceLabel: label,
+      onTime: _handleVideoTime,
+    );
+    setState(() {
+      _videoSync = sync;
+      _videoPanelVisible = true;
     });
+    sync.seek(keepTime ?? v.currentEpoch * v.epochSeconds.toDouble());
+
+    final files = cameras.fold<int>(0, (n, c) => n + c.segments.length);
+    final present = cameras.fold<int>(0, (n, c) => n + c.availableCount);
+    _setStatus(
+      'Video: ${cameras.length} camera${cameras.length == 1 ? '' : 's'}, '
+      '$present of $files file${files == 1 ? '' : 's'} found'
+      '${label.isNotEmpty ? ' ($label)' : ''}',
+    );
   }
 
-  Future<void> _seekVideoToEpoch(int epoch) async {
-    final controller = _videoController;
-    if (controller == null || !controller.value.isInitialized) return;
-    final epochSec = _viewport?.epochSeconds ?? 30;
-    final eegSec = epoch * epochSec.toDouble();
-    final targetVideoSec = math.max(0.0, eegSec + _videoOffsetSeconds);
-    await controller.seekTo(Duration(milliseconds: (targetVideoSec * 1000).round()));
-  }
-
-  Future<void> _toggleVideoPlayPause() async {
-    final controller = _videoController;
-    if (controller == null || !controller.value.isInitialized) return;
-    if (controller.value.isPlaying) {
-      await controller.pause();
-    } else {
-      await controller.play();
+  /// Video clock → cursor on the waveform; while playing, page the waveform
+  /// so the cursor stays on screen.
+  void _handleVideoTime(double sec) {
+    if (!mounted) return;
+    final v = _viewport;
+    if (v == null) return;
+    _videoCursor.value = sec;
+    final epochSec = v.epochSeconds.toDouble();
+    final epochStart = v.currentEpoch * epochSec;
+    if (sec < epochStart || sec >= epochStart + epochSec) {
+      final target = (sec / epochSec).floor() + 1;
+      if (target >= 1 && target <= v.epochCount) {
+        _pagingFromVideo = true;
+        try {
+          _jumpToEpoch(target, false);
+        } finally {
+          _pagingFromVideo = false;
+        }
+      }
     }
   }
 
+  /// Dragging the waveform cursor scrubs the video.
+  void _handleVideoCursorDrag(double sec) {
+    final sync = _videoSync;
+    if (sync == null) return;
+    if (sync.playing) sync.pause();
+    sync.seek(sec);
+  }
+
+  /// Stops and releases all video players (disposed after the panel has
+  /// left the widget tree).
+  void _detachVideo() {
+    final old = _videoSync;
+    _videoSync = null;
+    _videoPanelVisible = false;
+    _videoCursor.value = null;
+    if (old == null) return;
+    old.onTime = null;
+    old.pause();
+    WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  void _closeVideo() {
+    setState(_detachVideo);
+  }
+
+  void _toggleVideoPanel() {
+    final sync = _videoSync;
+    if (sync == null) {
+      _openVideoFile();
+      return;
+    }
+    if (_videoPanelVisible) sync.pause();
+    setState(() => _videoPanelVisible = !_videoPanelVisible);
+  }
+
+  /// Finds the videos of a recording: a Nihon Kohden .VF2 index (all cameras,
+  /// all files, with their clock times), else a video with the same base name.
   Future<void> _tryAutoDetectCompanionVideo(String eegPath) async {
+    try {
+      final start = _loadedEeg?.recordingStartTime;
+      final index = readNkVideoIndex(eegPath, start);
+      if (index != null && index.cameras.any((c) => c.availableCount > 0)) {
+        await _loadVideoCameras(index.cameras, label: _basename(index.indexFile));
+        return;
+      }
+    } catch (e) {
+      debugPrint('[Video] index read failed: $e');
+    }
     final dotIdx = eegPath.lastIndexOf('.');
     final base = dotIdx >= 0 ? eegPath.substring(0, dotIdx) : eegPath;
     final exts = [
@@ -557,10 +621,52 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     for (final ext in exts) {
       final cand = '$base.$ext';
       if (File(cand).existsSync()) {
-        await _loadVideo(cand);
+        await _loadVideoCameras([
+          VideoCamera(
+            name: _basename(cand),
+            segments: [VideoSegment(fileName: _basename(cand), path: cand, startSec: 0)],
+          ),
+        ]);
         return;
       }
     }
+  }
+
+  Widget _buildVideoOverlay(EegViewport viewport, BoxConstraints area) {
+    final sync = _videoSync!;
+    const minW = 300.0, minH = 220.0;
+    final n = sync.cameraCount;
+    final defaultW = math.min(area.maxWidth * 0.55, n > 1 ? 720.0 : 440.0);
+    final defaultH = math.min(area.maxHeight * 0.7, n > 1 ? 330.0 : 330.0);
+    var r = _videoPanelRect ??
+        Rect.fromLTWH(area.maxWidth - defaultW - 16, area.maxHeight - defaultH - 16, defaultW, defaultH);
+    // Keep the panel inside the area when the window is resized.
+    final w = r.width.clamp(minW, math.max(minW, area.maxWidth)).toDouble();
+    final h = r.height.clamp(minH, math.max(minH, area.maxHeight)).toDouble();
+    final left = r.left.clamp(0.0, math.max(0.0, area.maxWidth - w)).toDouble();
+    final top = r.top.clamp(0.0, math.max(0.0, area.maxHeight - h)).toDouble();
+    r = Rect.fromLTWH(left, top, w, h);
+    return Positioned(
+      left: r.left,
+      top: r.top,
+      width: r.width,
+      height: r.height,
+      child: SyncedVideoPanel(
+        sync: sync,
+        epochStartSec: viewport.currentEpoch * viewport.epochSeconds.toDouble(),
+        onClose: _closeVideo,
+        onAddVideo: _openVideoFile,
+        onMove: (d) => setState(() => _videoPanelRect = r.shift(d)),
+        onResize: (d) => setState(
+          () => _videoPanelRect = Rect.fromLTWH(
+            r.left,
+            r.top,
+            math.max(minW, r.width + d.dx),
+            math.max(minH, r.height + d.dy),
+          ),
+        ),
+      ),
+    );
   }
 
   // ─── Markers & Annotations Dialog ──────────────────────────────────────────
@@ -721,12 +827,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   void _closeCurrentFile() {
     _tfRefreshTimer?.cancel();
     _tfRefreshTimer = null;
-    _videoSyncTimer?.cancel();
-    _videoSyncTimer = null;
-    _videoController?.dispose();
-    _videoController = null;
-    _videoPath = null;
-    _videoPanelVisible = false;
+    _detachVideo();
     setState(() {
       _activePath = null;
       _loadedEeg = null;
@@ -885,8 +986,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         _viewerFocusNode.requestFocus();
       }
     }
-    if (_videoController != null && !_isVideoPlaying) {
-      unawaited(_seekVideoToEpoch(epoch));
+    final sync = _videoSync;
+    if (sync != null && !_pagingFromVideo) {
+      // User navigation moves the video to the new epoch (unless the video
+      // cursor is already inside it).
+      final es = epoch * newViewport.epochSeconds.toDouble();
+      final cur = _videoCursorSec ?? -1;
+      if (cur < es || cur >= es + newViewport.epochSeconds) sync.seek(es);
     }
     if (eeg != null && _config.tfEnabled) {
       _scheduleTimeFrequencyRefresh(serial);
@@ -2571,7 +2677,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             final masterCsvPath = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
             unawaited(() async {
               try {
-                final compiled = await compileRegionalCsvFiles(existingRegionalFiles);
+                final compiled = await compileRegionalCsvFiles(
+                  existingRegionalFiles,
+                  metadata: _batchMetadata,
+                  recordingPaths: _regionalRecordingMap(),
+                );
                 await File(masterCsvPath).writeAsString(compiled);
                 if (mounted) {
                   _setStatus(
@@ -2603,6 +2713,151 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           ),
         ],
       ),
+    );
+  }
+
+  // ─── Batch metadata (CSV / XLSX mapped by file name) ──────────────────────
+
+  /// Regional CSV path → recording path, from the batch recording list.
+  Map<String, String> _regionalRecordingMap() => {
+        for (final p in _batchAnalysePairs)
+          if ((p['regionalPath'] ?? '').isNotEmpty && (p['eegPath'] ?? '').isNotEmpty)
+            p['regionalPath']!: p['eegPath']!,
+      };
+
+  List<String> get _batchRecordingPaths => [
+        for (final p in _batchAnalysePairs)
+          if ((p['eegPath'] ?? '').isNotEmpty) p['eegPath']!,
+      ];
+
+  int get _batchMetadataMatchCount {
+    final t = _batchMetadata;
+    if (t == null) return 0;
+    return _batchRecordingPaths.where((r) => t.lookup(r) != null).length;
+  }
+
+  Future<void> _loadBatchMetadata() async {
+    final result = await FilePicker.pickFiles(
+      dialogTitle: 'Select a metadata table (CSV, TSV or XLSX)',
+      type: FileType.custom,
+      allowedExtensions: ['csv', 'tsv', 'txt', 'xlsx', 'xlsm', 'CSV', 'TSV', 'TXT', 'XLSX', 'XLSM'],
+    );
+    final path = result?.files.single.path;
+    if (path == null) return;
+    try {
+      final table = await readBatchMetadataFile(path);
+      table.keyColumn = guessKeyColumn(table.headers, table.rows, _batchRecordingPaths);
+      if (!mounted) return;
+      setState(() => _batchMetadata = table);
+      _setStatus(
+        'Metadata: ${table.rows.length} row(s), ${table.headers.length} column(s) from ${_basename(path)}'
+        '${table.sheetName != null ? ' [${table.sheetName}]' : ''} — '
+        'matched $_batchMetadataMatchCount of ${_batchRecordingPaths.length} recording(s) on "${table.keyColumn}"',
+      );
+    } catch (e) {
+      _showTextDialog('Could not read metadata table', e.toString());
+    }
+  }
+
+  void _showBatchMetadataPreview() {
+    final t = _batchMetadata;
+    if (t == null) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final recs = _batchRecordingPaths;
+        return AlertDialog(
+          title: Text('Metadata matches — key column "${t.keyColumn}"'),
+          content: SizedBox(
+            width: 760,
+            height: 420,
+            child: recs.isEmpty
+                ? const Center(child: Text('Add recordings first.'))
+                : SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SingleChildScrollView(
+                      child: DataTable(
+                        headingRowHeight: 32,
+                        dataRowMinHeight: 26,
+                        dataRowMaxHeight: 30,
+                        columns: [
+                          const DataColumn(label: Text('Recording')),
+                          const DataColumn(label: Text('Matched by')),
+                          for (final h in t.headers) DataColumn(label: Text(h)),
+                        ],
+                        rows: [
+                          for (final r in recs)
+                            () {
+                              final m = t.matchRecording(r);
+                              return DataRow(cells: [
+                                DataCell(Text(_basename(r))),
+                                DataCell(Text(
+                                  m?.matchedBy ?? 'no match',
+                                  style: TextStyle(color: m == null ? Colors.deepOrange : null),
+                                )),
+                                for (final h in t.headers) DataCell(Text(m?.row[h] ?? '')),
+                              ]);
+                            }(),
+                        ],
+                      ),
+                    ),
+                  ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close')),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildBatchMetadataControls() {
+    final t = _batchMetadata;
+    final total = _batchRecordingPaths.length;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        OutlinedButton.icon(
+          onPressed: _loadBatchMetadata,
+          icon: const Icon(Icons.table_chart_outlined, size: 16),
+          label: Text(t == null ? 'Load metadata (CSV / XLSX)…' : 'Change metadata…'),
+        ),
+        if (t == null)
+          Text(
+            'Optional: a table with one row per recording (e.g. subject, group, age). '
+            'Rows are matched to recordings by file or folder name and added to the '
+            'compiled master sheet and the polygraphy summary.',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+          )
+        else ...[
+          Text(_basename(t.sourcePath), style: const TextStyle(fontWeight: FontWeight.w600)),
+          const Text('match on'),
+          DropdownButton<String>(
+            value: t.headers.contains(t.keyColumn) ? t.keyColumn : null,
+            isDense: true,
+            items: [
+              for (final h in t.headers) DropdownMenuItem(value: h, child: Text(h)),
+            ],
+            onChanged: (v) {
+              if (v != null) setState(() => t.keyColumn = v);
+            },
+          ),
+          Text(
+            'matched $_batchMetadataMatchCount of $total',
+            style: TextStyle(
+              color: _batchMetadataMatchCount < total ? Colors.deepOrange : Colors.green.shade700,
+            ),
+          ),
+          TextButton(onPressed: _showBatchMetadataPreview, child: const Text('Preview')),
+          IconButton(
+            tooltip: 'Remove metadata',
+            icon: const Icon(Icons.close, size: 16),
+            onPressed: () => setState(() => _batchMetadata = null),
+          ),
+        ],
+      ],
     );
   }
 
@@ -2645,7 +2900,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         ? output
         : '$output.csv';
     try {
-      final compiled = await compileRegionalCsvFiles(paths);
+      final compiled = await compileRegionalCsvFiles(
+        paths,
+        metadata: _batchMetadata,
+        recordingPaths: _regionalRecordingMap(),
+      );
       await File(outputPath).writeAsString(compiled);
       _setStatus(
         'Compiled ${paths.length} AnalyseNidra CSV files into ${_basename(outputPath)}',
@@ -5872,13 +6131,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           ),
           PlatformMenuItem(
             label: 'Toggle Synchronized Video [V]',
-            onSelected: () {
-              if (_videoController == null) {
-                _openVideoFile();
-              } else {
-                setState(() => _videoPanelVisible = !_videoPanelVisible);
-              }
-            },
+            onSelected: _toggleVideoPanel,
           ),
         ],
       ),
@@ -6592,6 +6845,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       rightLeg: opt(_batchPsgRightLegController),
       capEeg: opt(_batchPsgCapEegController),
       outputDir: opt(_batchPsgOutDirController),
+      metadata: _batchMetadata,
     );
     showDialog<void>(
       context: context,
@@ -6861,6 +7115,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     if (selected.contains('compile')) {
       finalize = (recs) async {
         final files = <String>[];
+        final recordingFor = _regionalRecordingMap();
         for (final r in recs) {
           var path = r.regional;
           if (path == null) {
@@ -6869,7 +7124,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             final dir = outDir ?? File(input).parent.path;
             path = '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
           }
-          if (File(path).existsSync()) files.add(path);
+          if (File(path).existsSync()) {
+            files.add(path);
+            recordingFor[path] = r.source;
+          }
         }
         if (files.isEmpty) return 'No regional CSV files to compile.';
         final empty = await regionalCsvFilesWithoutData(files);
@@ -6877,7 +7135,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         if (usable.isEmpty) return 'All regional CSV files are empty; re-run step 3.';
         final targetDir = outDir ?? File(recs.first.source).parent.path;
         final master = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
-        await File(master).writeAsString(await compileRegionalCsvFiles(usable));
+        await File(master).writeAsString(await compileRegionalCsvFiles(
+          usable,
+          metadata: _batchMetadata,
+          recordingPaths: recordingFor,
+        ));
         if (mounted) setState(() => _lastAnalyseRegionalFiles = usable);
         return 'Compiled ${usable.length} recording(s) into ${_basename(master)}'
             '${empty.isEmpty ? '' : ' (${empty.length} empty CSV(s) left out: ${empty.map(_basename).join(', ')})'}';
@@ -7682,6 +7944,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                               'cleaned ✓',
                                             if ((pair['regionalPath'] ?? '').isNotEmpty)
                                               'features ✓',
+                                            if (_batchMetadata != null)
+                                              _batchMetadata!.lookup(eeg) != null
+                                                  ? 'metadata: ${_batchMetadata!.lookup(eeg)![_batchMetadata!.keyColumn] ?? ''}'
+                                                  : 'no metadata match',
                                           ].join('  ·  '),
                                           style: scoring.isEmpty
                                               ? const TextStyle(color: Colors.deepOrange)
@@ -7817,6 +8083,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                 ),
                             ],
                           ),
+                          const SizedBox(height: 10),
+                          _buildBatchMetadataControls(),
                           const SizedBox(height: 16),
                           // EEG Channels
                           TextFormField(
@@ -8124,11 +8392,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             ),
             _ToggleVideoIntent: CallbackAction<_ToggleVideoIntent>(
               onInvoke: (_) {
-                if (_videoController == null) {
-                  _openVideoFile();
-                } else {
-                  setState(() => _videoPanelVisible = !_videoPanelVisible);
-                }
+                _toggleVideoPanel();
                 return null;
               },
             ),
@@ -8224,24 +8488,19 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                         onOpenMarkers: _openMarkersDialog,
                         onPreprocess: _openPreprocessDialog,
                         onFeatureConfig: _openFeatureSelectionAndConfigDialog,
-                        onToggleVideo: () {
-                          if (_videoController == null) {
-                            _openVideoFile();
-                          } else {
-                            setState(
-                              () => _videoPanelVisible = !_videoPanelVisible,
-                            );
-                          }
-                        },
-                        videoLoaded: _videoController != null,
+                        onToggleVideo: _toggleVideoPanel,
+                        videoLoaded: _hasVideo,
                         videoVisible: _videoPanelVisible,
                       ),
                       Expanded(
                         child: viewport == null
                             ? const Center(child: CircularProgressIndicator())
-                            : Stack(
+                            : LayoutBuilder(
+                                builder: (context, area) => Stack(
                                 children: [
                                   _ScoringHeroSurface(
+                                    videoCursor: _videoCursor,
+                                    onVideoCursorDrag: _handleVideoCursorDrag,
                                     viewport: viewport,
                                     onJump: _jumpToEpochCoalesced,
                                     swaSlider: _swaSlider,
@@ -8266,35 +8525,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                           !_waveformMaximized,
                                     ),
                                   ),
-                                  if (_videoPanelVisible &&
-                                      _videoController != null)
-                                    Positioned(
-                                      right: 16,
-                                      bottom: 16,
-                                      child: SyncedVideoPanel(
-                                        videoPath: _videoPath ?? '',
-                                        controller: _videoController!,
-                                        currentEegSeconds:
-                                            viewport.currentEpoch *
-                                            viewport.epochSeconds.toDouble(),
-                                        offsetSeconds: _videoOffsetSeconds,
-                                        onOffsetChanged: (newOffset) {
-                                          setState(
-                                            () =>
-                                                _videoOffsetSeconds = newOffset,
-                                          );
-                                          _seekVideoToEpoch(
-                                            viewport.currentEpoch,
-                                          );
-                                        },
-                                        onClose: () => setState(
-                                          () => _videoPanelVisible = false,
-                                        ),
-                                        onTogglePlayPause: _toggleVideoPlayPause,
-                                        isPlaying: _isVideoPlaying,
-                                      ),
-                                    ),
+                                  if (_videoPanelVisible && _videoSync != null)
+                                    _buildVideoOverlay(viewport, area),
                                 ],
+                              ),
                               ),
                       ),
                       _StatusBar(
@@ -8983,10 +9217,18 @@ class _ScoringHeroSurface extends StatefulWidget {
     this.onTimeUnitChanged,
     this.waveformMaximized = false,
     this.onToggleMaximize,
+    this.videoCursor,
+    this.onVideoCursorDrag,
   });
 
   final EegViewport viewport;
   final ValueChanged<int> onJump;
+
+  /// Synchronised-video time (s from EEG start) shown as a vertical cursor.
+  final ValueListenable<double?>? videoCursor;
+
+  /// Dragging the cursor scrubs the video to that time.
+  final ValueChanged<double>? onVideoCursorDrag;
   final int swaSlider;
   final ValueChanged<int> onSwaSlider;
   final void Function(
@@ -9036,6 +9278,99 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
   double _channelSidebarWidth = 100.0;
 
   double get _waveformPlotLeftPad => _channelSidebarWidth + 16.0;
+
+  double? _videoCursorDragX;
+
+  /// Vertical video cursor with a draggable grip at the top.
+  Widget _buildVideoCursorLayer(BoxConstraints constraints) {
+    final cursor = widget.videoCursor;
+    if (cursor == null) return const SizedBox.shrink();
+    return Positioned.fill(
+      child: ValueListenableBuilder<double?>(
+        valueListenable: cursor,
+        builder: (context, t, _) => Stack(
+          clipBehavior: Clip.none,
+          children: _buildVideoCursor(constraints, t),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _buildVideoCursor(BoxConstraints constraints, double? t) {
+    final v = widget.viewport;
+    if (t == null || v.visibleDurationSeconds <= 0) return const [];
+    final drawWidth = (constraints.maxWidth - _waveformPlotLeftPad).clamp(1.0, double.infinity);
+    final fx = (t - v.visibleStartSeconds) / v.visibleDurationSeconds;
+    if (fx < 0 || fx > 1) return const [];
+    final x = _waveformPlotLeftPad + fx * drawWidth;
+    double secAt(double px) =>
+        v.visibleStartSeconds +
+        ((px - _waveformPlotLeftPad) / drawWidth).clamp(0.0, 1.0) * v.visibleDurationSeconds;
+    const color = Color(0xFFE11D48);
+    String label() {
+      final start = v.recordingStartTime;
+      if (start != null) {
+        final c = start.add(Duration(milliseconds: (t * 1000).round()));
+        String two(int n) => n.toString().padLeft(2, '0');
+        return '${two(c.hour)}:${two(c.minute)}:${two(c.second)}';
+      }
+      return '${t.toStringAsFixed(1)} s';
+    }
+
+    return [
+      Positioned(
+        left: x - 0.75,
+        top: 0,
+        bottom: 0,
+        width: 1.5,
+        child: const IgnorePointer(child: ColoredBox(color: color)),
+      ),
+      // Grip: drag to scrub the video (the whole line is not draggable so
+      // waveform selection keeps working next to it).
+      Positioned(
+        left: x - 30,
+        top: 0,
+        width: 60,
+        height: 18,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.resizeColumn,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onHorizontalDragStart: (_) => _videoCursorDragX = x,
+            onHorizontalDragUpdate: (d) {
+              final nx = (_videoCursorDragX ?? x) + d.delta.dx;
+              _videoCursorDragX = nx;
+              widget.onVideoCursorDrag?.call(secAt(nx));
+            },
+            onHorizontalDragEnd: (_) => _videoCursorDragX = null,
+            child: Center(
+              child: Tooltip(
+                message: 'Video position — drag to scrub',
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.videocam, size: 10, color: Colors.white),
+                      const SizedBox(width: 2),
+                      Text(
+                        label(),
+                        style: const TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ];
+  }
 
   void _handlePanStart(DragStartDetails details, BoxConstraints constraints) {
     final n = widget.viewport.channelCount;
@@ -9432,6 +9767,7 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                         ),
                       ),
                     ),
+                    _buildVideoCursorLayer(constraints),
                     if (channelCount > 0 && channelHeight > 0) ...[
                       Positioned(
                         left: 0,
@@ -11241,6 +11577,7 @@ class _BatchPdfProgressDialogState extends State<_BatchPdfProgressDialog> {
         activeConfig.bindLoadedChannels(
           rawEeg.channelLabels,
           sampleRateHz: rawEeg.sampleRateHz,
+          renamedLabels: rawEeg.channelLabelRenames,
         );
 
         final eeg = await backend.computeNightProducts(rawEeg, activeConfig);
@@ -13611,7 +13948,10 @@ class _BatchPsgSettings {
     this.rightLeg,
     this.capEeg,
     this.outputDir,
+    this.metadata,
   });
+
+  final BatchMetadataTable? metadata;
 
   final bool respiratory;
   final bool plm;
@@ -13856,9 +14196,13 @@ class _BatchPsgDialogState extends State<_BatchPsgDialog> {
         return v.toString();
       }
 
+      final meta = widget.settings.metadata;
+      final metaRow = meta?.lookup(path);
       rows.add([
         path,
         scoring ?? '',
+        if (meta != null)
+          for (final h in meta.headers) metaRow?[h] ?? '',
         for (final c in _kBatchPsgColumns) cell(c.$1, c.$2, c.$3),
       ]);
       results.add(BatchFileResult(filePath: path, exitCode: failed ? 1 : 0, logs: fileLogs));
@@ -13877,6 +14221,7 @@ class _BatchPsgDialogState extends State<_BatchPsgDialog> {
       final header = [
         'recording',
         'scoring',
+        if (widget.settings.metadata != null) ...widget.settings.metadata!.headers,
         for (final c in _kBatchPsgColumns) '${c.$1}_${c.$3}',
       ];
       final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;

@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::ffi::{CString, CStr};
 use std::os::raw::c_char;
@@ -85,51 +85,36 @@ pub fn get_nk_channel_name(ch_idx: usize) -> String {
     }
 }
 
-fn is_template_electrode_name(idx: usize, name: &str) -> bool {
-    if idx >= 74 { return true; }
-    let name = name.trim();
-    if name.len() == 3 {
-        let bytes = name.as_bytes();
-        let first = bytes[0];
-        let d1 = bytes[1];
-        let d2 = bytes[2];
-        if (first >= b'C' && first <= b'P') && (d1 >= b'0' && d1 <= b'9') && (d2 >= b'0' && d2 <= b'9') {
-            return true;
-        }
-    }
-    if name.starts_with("RFU") || name.starts_with("COM") || name.starts_with("BP") {
-        return true;
-    }
-    false
-}
-
+/// Reads channel names from a Nihon Kohden `.21E` electrode file.
+///
+/// Every `index=name` entry in the `[ELECTRODE]` and `[REFERENCE]` sections is
+/// used, for all electrode codes (the same rule as MNE and as Nihon Kohden's own
+/// EDF export). Earlier versions ignored codes >= 74, so channels such as M2,
+/// O1, O2, LEOG/REOG, EMG and ECG on EEG-1200 systems fell back to generic
+/// names ("EEG103", "EEG321", ...) and the mark inputs showed as Mark1/Mark2.
 pub fn read_21e_channel_names(path: &Path) -> std::collections::HashMap<usize, String> {
     let mut names = std::collections::HashMap::new();
-    let Ok(file) = File::open(path) else { return names; };
-    let reader = BufReader::new(file);
-    let mut in_electrode_section = false;
+    let Ok(bytes) = std::fs::read(path) else { return names; };
+    // Latin-1 decoding never fails; channel names are ASCII in practice.
+    let text: String = bytes.iter().map(|&b| b as char).collect();
+    let mut in_section = false;
 
-    for line in reader.lines().flatten() {
+    for line in text.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if trimmed.eq_ignore_ascii_case("[ELECTRODE]") {
-            in_electrode_section = true;
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
             continue;
         }
         if trimmed.starts_with('[') {
-            in_electrode_section = false;
+            let upper = trimmed.to_ascii_uppercase();
+            in_section = upper == "[ELECTRODE]" || upper == "[REFERENCE]";
             continue;
         }
-        if in_electrode_section && trimmed.contains('=') {
-            let parts: Vec<&str> = trimmed.split('=').collect();
-            if parts.len() == 2 {
-                if let Ok(idx) = parts[0].trim().parse::<usize>() {
-                    let name = parts[1].trim();
-                    if !name.is_empty() && !is_template_electrode_name(idx, name) {
-                        names.insert(idx, name.to_string());
-                    }
+        if !in_section { continue; }
+        if let Some((k, v)) = trimmed.split_once('=') {
+            if let Ok(idx) = k.trim().parse::<usize>() {
+                let name = v.trim();
+                if !name.is_empty() {
+                    names.insert(idx, name.to_string());
                 }
             }
         }

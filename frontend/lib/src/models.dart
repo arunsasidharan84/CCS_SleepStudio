@@ -179,10 +179,15 @@ class LoadedEeg {
     this.spectrogramChannelIndex = 0,
     this.spectrogramImage,
     this.recordingStartTime,
+    this.channelLabelRenames = const {},
   });
 
   final double sampleRateHz;
   final List<String> channelLabels;
+
+  /// Old label → corrected label for channels whose naming changed in this
+  /// version (Nihon Kohden .21E fix). Used once to migrate saved configs.
+  final Map<String, String> channelLabelRenames;
   final List<List<double>> channelSamples;
   final String sourceDescription;
 

@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'models.dart';
+import 'nihon_kohden.dart';
 
 /// Loads markers and annotations across all compatible formats:
 /// - Embedded EDF+ TAL (Time-stamped Annotation Lists) from .edf files
@@ -57,11 +58,30 @@ Future<List<ScoredEvent>> tryLoadAllMarkers(
     }
   } catch (_) {}
 
-  // 4. Companion Nihon Kohden .LOG file
+  // 4. Companion Nihon Kohden .LOG (binary operator log) and .EVT (triggers).
+  //    An NK EDF export may already carry the same log entries as EDF+
+  //    annotations with slightly different sub-second times, so skip an entry
+  //    when the same label already exists within one second.
+  void addNkEvent(ScoredEvent ev) {
+    final label = ev.label.trim().toLowerCase();
+    final dup = allEvents.any((e) =>
+        e.label.trim().toLowerCase() == label &&
+        (e.startSec - ev.startSec).abs() < 1.0);
+    if (!dup) addEvent(ev);
+  }
+
   try {
-    final nkEvents = await _loadNihonKohdenLog(activePath, recordingStartTime);
+    var nkEvents = readNkLogEvents(activePath);
+    if (nkEvents.isEmpty) {
+      nkEvents = await _loadNihonKohdenLog(activePath, recordingStartTime);
+    }
     for (final ev in nkEvents) {
-      addEvent(ev);
+      addNkEvent(ev);
+    }
+  } catch (_) {}
+  try {
+    for (final ev in readNkEvtEvents(activePath)) {
+      addNkEvent(ev);
     }
   } catch (_) {}
 

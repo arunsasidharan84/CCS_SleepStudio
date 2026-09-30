@@ -57,7 +57,7 @@ Section: science
 Priority: optional
 Architecture: amd64
 Installed-Size: $installed_size
-Depends: libgtk-3-0, libblkid1, liblzma5
+Depends: libgtk-3-0, libblkid1, liblzma5, libmpv1 | libmpv2
 Conflicts: $conflicts
 Maintainer: CCS Sleep Studio Project <noreply@github.com>
 Homepage: https://github.com/arunsasidharan84/CCS-Sleep-Studio

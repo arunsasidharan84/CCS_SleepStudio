@@ -16,6 +16,7 @@ import 'mat_loader.dart';
 import 'r09_loader.dart' as r09;
 import 'orbit_loader.dart';
 import 'models.dart';
+import 'nihon_kohden.dart';
 import 'signal_processing.dart' as sp;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -883,7 +884,29 @@ class AppConfig {
   ) =>
       defaultChannelConfig(name, index, channelCount);
 
-  void bindLoadedChannels(List<String> loadedLabels, {double? sampleRateHz}) {
+  void bindLoadedChannels(
+    List<String> loadedLabels, {
+    double? sampleRateHz,
+    Map<String, String> renamedLabels = const {},
+  }) {
+    // Migrate channel names saved by older versions (e.g. Nihon Kohden
+    // "EEG103" → "M2"), so saved configs keep their settings.
+    if (renamedLabels.isNotEmpty) {
+      final loadedSet = loadedLabels.toSet();
+      String? migrate(String? old) {
+        if (old == null || loadedSet.contains(old)) return null;
+        return renamedLabels[old];
+      }
+
+      for (final ch in channels) {
+        final n = migrate(ch.name);
+        if (n != null) ch.name = n;
+        final s = migrate(ch.sourceChannel);
+        if (s != null) ch.sourceChannel = s;
+        final r = migrate(ch.reReference);
+        if (r != null) ch.reReference = r;
+      }
+    }
     if (channels.isEmpty) {
       channels = defaultsForChannels(
         loadedLabels,
@@ -1303,13 +1326,29 @@ class EegBackend {
           final durationSec = edf.durationSeconds;
           _freeEdf?.call(edfPtr);
 
+          // Channel names and start time from the NK header + .21E file
+          // (independent of the native library version).
+          final nkInfo = readNkHeader(path);
+          var labels = channelLabels;
+          final renames = <String, String>{};
+          if (nkInfo != null &&
+              nkInfo.channelLabels.length == channelLabels.length) {
+            labels = uniqueChannelLabels(nkInfo.channelLabels);
+            final legacy = legacyNkChannelLabels(path, nkInfo.channelCodes);
+            for (var i = 0; i < labels.length; i++) {
+              if (channelLabels[i] != labels[i]) renames[channelLabels[i]] = labels[i];
+              if (legacy[i] != labels[i]) renames[legacy[i]] = labels[i];
+            }
+          }
+
           return LoadedEeg(
             sampleRateHz: sampleRate,
-            channelLabels: channelLabels,
+            channelLabels: labels,
             channelSamples: channelSamples,
-            recordingStartTime: null,
+            recordingStartTime: nkInfo?.startTime,
+            channelLabelRenames: renames,
             sourceDescription:
-                '${channelLabels.length} channels, ${sampleRate.toStringAsFixed(1)} Hz, ${(durationSec / 60).toStringAsFixed(1)} min (Nihon Kohden)',
+                '${labels.length} channels, ${sampleRate.toStringAsFixed(1)} Hz, ${(durationSec / 60).toStringAsFixed(1)} min (Nihon Kohden)',
           );
         } else {
           throw FormatException('Native Nihon Kohden parser returned null for $path. File may be truncated or corrupted.');

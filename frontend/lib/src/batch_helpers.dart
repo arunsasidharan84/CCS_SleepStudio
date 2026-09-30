@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'nihon_kohden.dart';
 
 /// Helper utilities for batch file discovery, sub-selection, and logging.
 
@@ -372,6 +373,12 @@ Future<List<String>> extractRecordingChannels(String filePath) async {
     } finally {
       await raf?.close();
     }
+  }
+
+  // 1b. Nihon Kohden .EEG (channel codes + .21E names)
+  if (lower.endsWith('.eeg')) {
+    final nk = readNkHeader(filePath);
+    return nk == null ? [] : uniqueChannelLabels(nk.channelLabels);
   }
 
   // 2. BrainVision .vhdr text file

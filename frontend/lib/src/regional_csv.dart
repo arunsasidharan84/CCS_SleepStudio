@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'batch_metadata.dart';
 import 'edf_loader.dart';
 
 List<String> parseCsvLine(String line) {
@@ -60,17 +61,34 @@ Future<List<String>> regionalCsvFilesWithoutData(List<String> paths) async {
   return empty;
 }
 
-Future<String> compileRegionalCsvFiles(List<String> paths) async {
+/// Compiles regional CSVs into one master sheet.
+///
+/// With [metadata], each row gets the matching metadata columns (matched on
+/// the recording in [recordingPaths] when known, else on the CSV's name).
+Future<String> compileRegionalCsvFiles(
+  List<String> paths, {
+  BatchMetadataTable? metadata,
+  Map<String, String> recordingPaths = const {},
+}) async {
   if (paths.isEmpty) {
     throw ArgumentError('Select at least one AnalyseNidra regional CSV file.');
   }
-  final headers = <String>[
+  const fixed = [
     'source_file',
     'source_path',
     'Subject Identifier',
     'Subject Details',
     'Recording Date',
   ];
+  final headers = <String>[...fixed];
+  final metaHeader = <String, String>{};
+  if (metadata != null) {
+    for (final h in metadata.headers) {
+      final out = fixed.contains(h) ? 'Metadata: $h' : h;
+      metaHeader[h] = out;
+      headers.add(out);
+    }
+  }
   final rows = <Map<String, String>>[];
 
   for (final path in paths) {
@@ -96,6 +114,21 @@ Future<String> compileRegionalCsvFiles(List<String> paths) async {
       }
     }
 
+    final md = metadata;
+    final meta = md?.lookup(recordingPaths[path] ?? path);
+    var subjectId = '';
+    if (md != null && meta != null) {
+      final idPattern = RegExp(
+        r'^(subject|participant|patient)?[ _]?(id|identifier|code)$|^subject$',
+        caseSensitive: false,
+      );
+      final idCol = md.headers.firstWhere(
+        (h) => idPattern.hasMatch(h.trim()),
+        orElse: () => md.keyColumn,
+      );
+      subjectId = meta[idCol] ?? '';
+    }
+
     for (final row in parsed) {
       for (final key in row.keys) {
         if (!headers.contains(key)) headers.add(key);
@@ -103,9 +136,11 @@ Future<String> compileRegionalCsvFiles(List<String> paths) async {
       rows.add({
         'source_file': file.uri.pathSegments.last,
         'source_path': file.absolute.path,
-        'Subject Identifier': '',
+        'Subject Identifier': subjectId,
         'Subject Details': '',
         'Recording Date': recordingDate,
+        if (meta != null)
+          for (final e in meta.entries) metaHeader[e.key] ?? e.key: e.value,
         ...row,
       });
     }

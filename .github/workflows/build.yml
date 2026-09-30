@@ -313,6 +313,9 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/dist:/packages:ro" \
             almalinux:8 bash -lc '
+              dnf install -y epel-release &&
+              dnf config-manager --set-enabled powertools &&
+              dnf install -y --nogpgcheck https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-8.noarch.rpm &&
               dnf install -y /packages/CCSSleepStudio-lite-linux-x86_64.rpm &&
               test -x /usr/bin/ccs-sleep-studio &&
               test -f /usr/share/applications/ccs-sleep-studio.desktop &&
@@ -322,6 +325,9 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/dist:/packages:ro" \
             almalinux:8 bash -lc '
+              dnf install -y epel-release &&
+              dnf config-manager --set-enabled powertools &&
+              dnf install -y --nogpgcheck https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-8.noarch.rpm &&
               dnf install -y /packages/CCSSleepStudio-linux-x86_64.rpm &&
               test -x /usr/bin/ccs-sleep-studio &&
               test -x /usr/lib/ccs-sleep-studio/analyse-nidra &&
@@ -339,6 +345,9 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/dist:/packages:ro" \
             almalinux:9 bash -lc '
+              dnf install -y epel-release dnf-plugins-core &&
+              dnf config-manager --set-enabled crb &&
+              dnf install -y --nogpgcheck https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm &&
               dnf install -y /packages/CCSSleepStudio-linux-x86_64.rpm &&
               test -x /usr/bin/ccs-sleep-studio &&
               test -x /usr/lib/ccs-sleep-studio/analyse-nidra &&

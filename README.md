@@ -10,7 +10,7 @@
   <b>National Institute of Mental Health and Neurosciences (NIMHANS)</b>, Bangalore, India.
 </p>
 
-**Version:** 1.23.0
+**Version:** 1.24.0
 
 Welcome to **CCS Sleep Studio**, a high-performance, cross-platform desktop application designed to assist researchers and clinicians in sleep EEG visualization, event annotation, sleep scoring, automated staging, and advanced EEG analysis.
 
@@ -18,6 +18,13 @@ CCS Sleep Studio is comprised of the following key modules:
 *   **ScoringNidra**: Interactive sleep scoring and event annotation module supporting EDF, Brain Products (.vhdr / .vmrk), Nihon Kohden (.EEG / .LOG), EMBLA (.ebm), Orbit (.orb), and R09 (.r09).
 *   **AutoscoreNidra**: Automated sleep scoring module with both interactive and batch modes.
 *   **AnalyseNidra**: Automated sleep EEG analysis and reporting module operating in both interactive and batch modes.
+
+### 🌟 New in Version 1.24.0
+*   **Synchronised Video via media_kit / libmpv:** Full playback support for Nihon Kohden MPEG transport streams (`.m2t` with H.264 video and MP2 audio) and multi-hour recordings across all platforms. Reads `.VF2` video index files to seamlessly synchronise multi-camera hourly segments across the entire night with millisecond precision.
+*   **Waveform Scrub Cursor & Floating Video Window:** Real-time red scrub cursor on the EEG waveform tracks video playback; drag to scrub across the recording. Resizable floating video window with independent camera controls (per-camera time offset, mute, toggle, and double-click to solo). Includes a full-night slider, playback rate control, and a dedicated Stop button that unloads media.
+*   **Batch Metadata Integration:** New "Load metadata (CSV / XLSX)…" tool in the Batch Recordings panel. Automatically matches recording rows by file name, parent folder name, or fuzzy partial match with column auto-detection and an interactive preview modal. Merges clinical and demographic metadata directly into the AnalyseNidra master sheet and polygraphy summary CSVs.
+*   **Nihon Kohden Binary .LOG & .EVT Triggers:** Native parser for Nihon Kohden binary `.LOG` event files (REC START, electrical stimulation ON/OFF with sub-second timestamps) and `.EVT` trigger files.
+*   **Enhanced Nihon Kohden Channel Mapping & Clock Time:** Accurate `.21E` channel name resolution for higher channel codes (e.g. M2, O1, O2, LEOG, REOG, EMG1–3, ECG), automatic migration for previously saved montage settings, and true recording start time extraction for accurate clock time display on `.EEG` files.
 
 ### 🌟 New in Version 1.23.0
 *   **Batch tab redesigned as a linked pipeline.** The Batch tab has three sections: *EEG analysis pipeline*, *Polygraphy (OSA & PLM)* and *Scoring comparison*. The EEG pipeline shares one list of recordings and EEG/reference channels. Its steps are collapsible cards, run in order: **1 Autoscore** (optional, only for recordings without a scoring) → **2 Preprocess** (stimulation-artefact removal on the continuous signal, then 30-s epoch cleaning) → **3 Extract features** (AnalyseNidra analyses and CAP, run on the cleaned EEG and mapped to sleep stages with the step-1 scoring) → **4 Compile** (master sheet). Each step passes its output on to the next. You can run all ticked steps in one go or run one step on its own. A run window shows a recording × step status table, and *Resume* reuses outputs that already exist.

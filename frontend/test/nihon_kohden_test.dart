@@ -133,7 +133,7 @@ void main() {
     expect(cam1.segmentIndexAt(3602), -1, reason: 'gap between files');
     expect(cam1.segmentIndexAt(3700), 1);
     final cam2 = index.cameras[1];
-    expect(cam2.segments[1].path, endsWith('FA0001.VO2/0001Q601.m2t'));
+    expect(cam2.segments[1].path?.replaceAll(r'\', '/'), endsWith('FA0001.VO2/0001Q601.m2t'));
     cam2.offsetSec = -10;
     expect(cam2.segmentIndexAt(10), -1);
   });

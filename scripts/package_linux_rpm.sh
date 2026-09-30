@@ -89,6 +89,22 @@ install -m 0644 %{_sourcedir}/ccs-sleep-studio.desktop \
 install -m 0644 %{_sourcedir}/ccs-sleep-studio.png \
   %{buildroot}/usr/share/icons/hicolor/256x256/apps/ccs-sleep-studio.png
 
+%post
+for dir in /usr/lib64 /usr/lib; do
+  if [ ! -e "$dir/libmpv.so.1" ] && [ -e "$dir/libmpv.so.2" ]; then
+    ln -sf libmpv.so.2 "$dir/libmpv.so.1" || true
+  fi
+done
+
+%postun
+if [ "$1" -eq 0 ]; then
+  for dir in /usr/lib64 /usr/lib; do
+    if [ -L "$dir/libmpv.so.1" ] && [ "$(readlink "$dir/libmpv.so.1")" = "libmpv.so.2" ]; then
+      rm -f "$dir/libmpv.so.1" || true
+    fi
+  done
+fi
+
 %files
 /usr/bin/ccs-sleep-studio
 /usr/lib/ccs-sleep-studio

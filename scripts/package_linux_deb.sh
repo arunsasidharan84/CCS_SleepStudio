@@ -79,6 +79,30 @@ StartupNotify=true
 StartupWMClass=CCSSleepStudio
 EOF
 
+cat > "$package_root/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+for dir in /usr/lib/x86_64-linux-gnu /usr/lib; do
+  if [ ! -e "$dir/libmpv.so.1" ] && [ -e "$dir/libmpv.so.2" ]; then
+    ln -sf libmpv.so.2 "$dir/libmpv.so.1" || true
+  fi
+done
+EOF
+chmod 0755 "$package_root/DEBIAN/postinst"
+
+cat > "$package_root/DEBIAN/postrm" <<'EOF'
+#!/bin/sh
+set -e
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+  for dir in /usr/lib/x86_64-linux-gnu /usr/lib; do
+    if [ -L "$dir/libmpv.so.1" ] && [ "$(readlink "$dir/libmpv.so.1")" = "libmpv.so.2" ]; then
+      rm -f "$dir/libmpv.so.1" || true
+    fi
+  done
+fi
+EOF
+chmod 0755 "$package_root/DEBIAN/postrm"
+
 mkdir -p "$(dirname "$output_deb")"
 dpkg-deb --build --root-owner-group "$package_root" "$output_deb"
 dpkg-deb --info "$output_deb"

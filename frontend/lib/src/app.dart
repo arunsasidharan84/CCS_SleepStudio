@@ -486,10 +486,37 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final paths = result?.files.map((f) => f.path).whereType<String>().toList() ?? const <String>[];
     if (paths.isEmpty) return;
 
-    final index = paths.firstWhere(
-      (p) => p.toLowerCase().endsWith('.vf2'),
+    var index = paths.firstWhere(
+      (p) => p.toLowerCase().endsWith('.vf2') || p.toLowerCase().endsWith('.vft'),
       orElse: () => '',
     );
+    if (index.isEmpty && paths.isNotEmpty) {
+      for (final p in paths) {
+        var d = File(p).parent;
+        for (var i = 0; i < 3; i++) {
+          try {
+            final candidates = d.listSync().whereType<File>().where(
+              (f) => f.path.toLowerCase().endsWith('.vf2') || f.path.toLowerCase().endsWith('.vft'),
+            );
+            if (candidates.isNotEmpty) {
+              index = candidates.first.path;
+              break;
+            }
+          } catch (_) {}
+          final parent = d.parent;
+          if (parent.path == d.path) break;
+          d = parent;
+        }
+        if (index.isNotEmpty) break;
+      }
+    }
+    if (index.isEmpty && _activePath != null) {
+      final comp = nkCompanionFile(_activePath!, 'VF2') ?? nkCompanionFile(_activePath!, 'VFT');
+      if (comp != null) {
+        index = comp.path;
+      }
+    }
+
     if (index.isNotEmpty) {
       // The index lists files relative to the recording folder; read it as if
       // it were the recording itself.
@@ -592,6 +619,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   void _toggleVideoPanel() {
     final sync = _videoSync;
     if (sync == null) {
+      if (_activePath != null) {
+        _tryAutoDetectCompanionVideo(_activePath!).then((_) {
+          if (_videoSync == null) {
+            _openVideoFile();
+          }
+        });
+        return;
+      }
       _openVideoFile();
       return;
     }
@@ -5842,8 +5877,18 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             onSelected: () => _openRecording(kind: 'r09'),
           ),
           PlatformMenuItem(
-            label: 'Open Synchronized Video…',
+            label: 'Open Synchronized Video or Index (.VF2)…',
             onSelected: _openVideoFile,
+          ),
+          PlatformMenuItem(
+            label: 'Reload Companion Video Series',
+            onSelected: () {
+              if (_activePath != null) {
+                _tryAutoDetectCompanionVideo(_activePath!);
+              } else {
+                _openVideoFile();
+              }
+            },
           ),
           PlatformMenuItem(
             label: 'Close Current File',
@@ -6202,7 +6247,17 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               ),
               MenuItemButton(
                 onPressed: _openVideoFile,
-                child: const Text('Open Synchronized Video…'),
+                child: const Text('Open Synchronized Video or Index (.VF2)…'),
+              ),
+              MenuItemButton(
+                onPressed: () {
+                  if (_activePath != null) {
+                    _tryAutoDetectCompanionVideo(_activePath!);
+                  } else {
+                    _openVideoFile();
+                  }
+                },
+                child: const Text('Reload Companion Video Series'),
               ),
               const Divider(height: 1),
               MenuItemButton(

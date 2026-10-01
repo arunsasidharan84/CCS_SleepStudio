@@ -1,6 +1,7 @@
-// Linked batch pipeline: runs the selected EEG analysis steps (autoscore →
-// preprocess → extract features → compile) for a set of recordings, feeding
-// the output of each step into the next one.
+// Linked batch pipeline: runs the selected steps (autoscore → preprocess →
+// extract features → compile) for a set of recordings, feeding the output of
+// each step into the next one. Autoscore also runs on its own, or ahead of
+// the polygraphy and scoring-comparison batches.
 
 import 'dart:async';
 import 'dart:convert';
@@ -21,6 +22,9 @@ class PipelineRecording {
 
   /// Scoring (hypnogram) used by the feature step.
   String scoring;
+
+  /// Scoring written (or reused) by the autoscore step.
+  String? autoscored;
 
   /// Cleaned EDF written by the preprocessing step (or found from an earlier run).
   String? cleaned;
@@ -85,6 +89,7 @@ class PipelineRunDialog extends StatefulWidget {
     required this.logFolder,
     this.finalize,
     this.onFinished,
+    this.continueLabel,
   });
 
   final String title;
@@ -97,6 +102,11 @@ class PipelineRunDialog extends StatefulWidget {
   /// message for the log.
   final Future<String?> Function(List<PipelineRecording> recordings)? finalize;
   final void Function(List<PipelineRecording> recordings, int failed)? onFinished;
+
+  /// When set, the run is the first part of a sequence: the dialog closes by
+  /// itself when the run ends (unless cancelled) and returns `true`, so the
+  /// caller starts the next analysis ([continueLabel] names it).
+  final String? continueLabel;
 
   @override
   State<PipelineRunDialog> createState() => _PipelineRunDialogState();
@@ -276,6 +286,11 @@ class _PipelineRunDialogState extends State<PipelineRunDialog> {
           : 'Finished with $failed failed step(s) — see the log';
     });
     widget.onFinished?.call(widget.recordings, failed);
+    if (widget.continueLabel != null && !_cancelled) {
+      _addLog('Continuing with ${widget.continueLabel}…');
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      if (mounted) Navigator.of(context).pop(true);
+    }
   }
 
   Widget _statusIcon(PipelineRecording r, PipelineStep s) {
@@ -395,7 +410,7 @@ class _PipelineRunDialogState extends State<PipelineRunDialog> {
             child: const Text('Cancel'),
           ),
         ElevatedButton(
-          onPressed: _finished ? () => Navigator.of(context).pop() : null,
+          onPressed: _finished ? () => Navigator.of(context).pop(false) : null,
           child: const Text('Close'),
         ),
       ],

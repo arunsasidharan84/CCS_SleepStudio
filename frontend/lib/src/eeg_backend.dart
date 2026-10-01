@@ -986,6 +986,16 @@ class AppConfig {
           !availableNames.contains(channel.reReference)) {
         channel.reReference = 'None';
       }
+      // Pick the display mode once (older configs have none): polygraphic
+      // channels get auto / absolute scaling and their old manual gain,
+      // which was usually maxed out to make them visible, is reset.
+      if (channel.displayMode.isEmpty) {
+        final mode = defaultDisplayModeForLabel(
+          channel.sourceChannel ?? channel.name,
+        );
+        if (mode != kChannelDisplayFixed) channel.scalingFactor = 100.0;
+        channel.displayMode = mode;
+      }
       channel.filterHpOrder = channel.filterHpOrder.clamp(1, 10);
       channel.filterLpOrder = channel.filterLpOrder.clamp(1, 10);
       channel.filterNotchOrder = channel.filterNotchOrder.clamp(1, 10);
@@ -1219,6 +1229,36 @@ class EegBackend {
   final _tfImageCache = <String, ui.Image>{};
   final _tfImageCacheOrder = <String>[];
   final _tfScaleCache = <String, ({double min, double max})>{};
+
+  /// Night-level amplitude statistics per channel (keyed by the sample list),
+  /// used to auto-scale polygraphic channels.
+  final _channelLevelStats = Expando<ChannelLevelStats>('channelLevelStats');
+
+  ChannelLevelStats _levelStatsFor(List<double> samples) {
+    final cached = _channelLevelStats[samples];
+    if (cached != null) return cached;
+    final stats = ChannelLevelStats.of(samples);
+    _channelLevelStats[samples] = stats;
+    return stats;
+  }
+
+  /// "auto" / "70–100 %" note shown under a polygraphic channel's name.
+  String _channelScaleNote(List<double> samples, ChannelConfig channelCfg) {
+    final mode = channelCfg.effectiveDisplayMode;
+    if (mode == kChannelDisplayAuto) return 'auto';
+    if (mode != kChannelDisplayLevel) return '';
+    final kind = levelSignalKind(channelCfg.sourceChannel ?? channelCfg.name) ??
+        LevelSignalKind.other;
+    final range = levelDisplayRange(kind, _levelStatsFor(samples));
+    String fmt(double v) =>
+        v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+    final unit = switch (kind) {
+      LevelSignalKind.spo2 => ' %',
+      LevelSignalKind.pulse => ' bpm',
+      _ => '',
+    };
+    return '${fmt(range.lo)}–${fmt(range.hi)}$unit';
+  }
 
   /// Clears the waveform display point cache. Call this when filter or
   /// channel display settings change to ensure stale cached waveforms
@@ -1840,6 +1880,7 @@ class EegBackend {
       visibleChannelSourceIndices: visibleChannels.indices,
       visibleChannelColors: visibleChannels.colors,
       visibleChannelScales: visibleChannels.scales,
+      visibleChannelScaleNotes: visibleChannels.notes,
       tfDisplayMode: cfg.tfDisplayMode,
       tfPowerMin: tfLimits.min,
       tfPowerMax: tfLimits.max,
@@ -1978,6 +2019,7 @@ class EegBackend {
       visibleChannelSourceIndices: visibleChannels.indices,
       visibleChannelColors: visibleChannels.colors,
       visibleChannelScales: visibleChannels.scales,
+      visibleChannelScaleNotes: visibleChannels.notes,
       clearSelection: true, // clear any selection when moving epoch
       clearEventSelections: old.currentEpoch != safeEpoch,
       tfDisplayMode: cfg.tfDisplayMode,
@@ -2124,6 +2166,7 @@ class EegBackend {
       visibleChannelSourceIndices: visibleChannels.indices,
       visibleChannelColors: visibleChannels.colors,
       visibleChannelScales: visibleChannels.scales,
+      visibleChannelScaleNotes: visibleChannels.notes,
       clearSelection: true,
       clearEventSelections: old.currentEpoch != safeEpoch,
       tfDisplayMode: cfg.tfDisplayMode,
@@ -2647,7 +2690,9 @@ class EegBackend {
         safeEnd,
         channelCfg,
         cfg,
-        applyFilters: true,
+        // Level signals (SpO2, pulse…) are drawn on an absolute range, which
+        // a high-pass or notch filter would shift.
+        applyFilters: channelCfg.effectiveDisplayMode != kChannelDisplayLevel,
       );
       if (segment.isEmpty) {
         waves.add(Float32List(0));
@@ -2673,6 +2718,42 @@ class EegBackend {
           ? 0.5
           : channelHeight * (displayIndex + 0.5);
       final scale = channelCfg.scalingFactor / 100.0;
+
+      // Polygraphic channels: flow / effort / snore are fitted to their row
+      // from night-level amplitude; SpO2, pulse, position… are drawn on an
+      // absolute range. Both are kept inside their own row.
+      final displayMode = channelCfg.effectiveDisplayMode;
+      if (displayMode != kChannelDisplayFixed && !cfg.stackChannels) {
+        final stats = _levelStatsFor(sourceSamples);
+        final rowLimit = channelHeight * 0.49;
+        final yValues = Float32List(displayData.length);
+        if (displayMode == kChannelDisplayLevel) {
+          final kind =
+              levelSignalKind(channelCfg.sourceChannel ?? channelCfg.name) ??
+              LevelSignalKind.other;
+          final range = levelDisplayRange(kind, stats);
+          var center = (range.lo + range.hi) / 2;
+          final half = math.max((range.hi - range.lo) / 2, 1e-9) / scale;
+          if ((channelCfg.scalingFactor - 100).abs() > 0.5) {
+            // Zoomed in or out: centre on this window's median.
+            final sorted = List<double>.of(displayData)..sort();
+            center = sorted[sorted.length ~/ 2];
+          }
+          for (var i = 0; i < displayData.length; i++) {
+            final off = ((displayData[i] - center) / half) * channelHeight * 0.45;
+            yValues[i] = baseline - off.clamp(-rowLimit, rowLimit);
+          }
+        } else {
+          final half = math.max((stats.p99 - stats.p1) / 2, 1e-9);
+          for (var i = 0; i < displayData.length; i++) {
+            final off =
+                ((displayData[i] - mean) / half) * scale * channelHeight * 0.42;
+            yValues[i] = baseline - off.clamp(-rowLimit, rowLimit);
+          }
+        }
+        waves.add(yValues);
+        continue;
+      }
       final shift = channelCfg.verticalShift;
       final robustStats = cfg.robustZStandardize
           ? _robustStats(displayData, 0, displayData.length)
@@ -2811,6 +2892,7 @@ class EegBackend {
     List<String> labels,
     List<String> colors,
     List<double> scales,
+    List<String> notes,
     List<ChannelConfig> configs,
   })
   _visibleChannelProjection(LoadedEeg eeg, AppConfig cfg) {
@@ -2818,6 +2900,7 @@ class EegBackend {
     final labels = <String>[];
     final colors = <String>[];
     final scales = <double>[];
+    final notes = <String>[];
     final configs = <ChannelConfig>[];
     final channelConfigs = cfg.channels.isEmpty
         ? [
@@ -2852,6 +2935,7 @@ class EegBackend {
             : _defaultChannelColorName(eeg.channelLabels[sourceIdx]),
       );
       scales.add(channelCfg.scalingFactor);
+      notes.add(_channelScaleNote(eeg.channelSamples[sourceIdx], channelCfg));
       configs.add(channelCfg);
     }
     if (indices.isEmpty && eeg.channelSamples.isNotEmpty) {
@@ -2868,6 +2952,7 @@ class EegBackend {
       );
       colors.add(fallback.color);
       scales.add(fallback.scalingFactor);
+      notes.add(_channelScaleNote(eeg.channelSamples.first, fallback));
       configs.add(fallback);
     }
     return (
@@ -2875,6 +2960,7 @@ class EegBackend {
       labels: labels,
       colors: colors,
       scales: scales,
+      notes: notes,
       configs: configs,
     );
   }
@@ -2958,6 +3044,7 @@ class EegBackend {
       c.filterNotchEnabled,
       c.filterNotchCutoff.toStringAsFixed(2),
       c.filterNotchOrder,
+      c.effectiveDisplayMode,
     ].join(',');
   }
 

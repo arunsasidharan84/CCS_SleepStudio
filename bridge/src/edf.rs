@@ -46,6 +46,41 @@ fn is_display_signal(label: &str) -> bool {
         && !normalized.contains("marker")
 }
 
+/// Samples per record shared by most channels (ties: the higher rate), so
+/// EEG keeps its native rate and only the other channels are resampled.
+pub fn common_samples_per_record(rates: &[usize]) -> usize {
+    let mut best = 0usize;
+    let mut best_count = 0usize;
+    for &r in rates {
+        let count = rates.iter().filter(|&&x| x == r).count();
+        if count > best_count || (count == best_count && r > best) {
+            best = r;
+            best_count = count;
+        }
+    }
+    best
+}
+
+/// Linear-interpolation resampling of a channel from `from_spr` to `to_spr`
+/// samples per data record (same time axis, sample `i` at `i / rate`).
+pub fn resample_linear(src: &[f32], from_spr: usize, to_spr: usize, records: usize) -> Vec<f32> {
+    let n_out = records * to_spr;
+    if src.is_empty() || from_spr == 0 || to_spr == 0 {
+        return vec![0.0; n_out];
+    }
+    let ratio = from_spr as f64 / to_spr as f64;
+    let last = src.len() - 1;
+    (0..n_out)
+        .map(|i| {
+            let pos = i as f64 * ratio;
+            let i0 = (pos.floor() as usize).min(last);
+            let i1 = (i0 + 1).min(last);
+            let frac = (pos - i0 as f64).clamp(0.0, 1.0) as f32;
+            src[i0] + (src[i1] - src[i0]) * frac
+        })
+        .collect()
+}
+
 pub fn load_edf_impl(path: &Path, scale_volts: bool) -> Result<EdfFile, String> {
     let mut file = File::open(path).map_err(|e| e.to_string())?;
 
@@ -199,15 +234,30 @@ pub fn load_edf_impl(path: &Path, scale_volts: bool) -> Result<EdfFile, String> 
         }
     }
 
+    // Channels may be recorded at different rates (e.g. EEG 200 Hz, flow and
+    // effort 100 Hz, snore 500 Hz, SpO2 1 Hz). The viewer indexes every
+    // channel with one sample rate, so bring all channels to the common rate.
+    let record_seconds = f64::max(data_record_seconds, 1e-9);
+    let rates: Vec<usize> = kept_signal_indexes.iter().map(|&i| samples_per_record[i]).collect();
+    let target_spr = common_samples_per_record(&rates);
+    for (display_idx, &orig_idx) in kept_signal_indexes.iter().enumerate() {
+        let spr = samples_per_record[orig_idx];
+        if spr != target_spr {
+            let src = std::mem::take(&mut channel_samples[display_idx]);
+            channel_samples[display_idx] = resample_linear(&src, spr, target_spr, records);
+        }
+    }
+
     // Pack into FFI-compatible structs
     let mut signals = Vec::with_capacity(kept_signal_indexes.len());
     for (display_idx, &orig_idx) in kept_signal_indexes.iter().enumerate() {
         let label_c = CString::new(labels[orig_idx].clone()).unwrap_or_else(|_| CString::new("").unwrap());
         let label_ptr = label_c.into_raw();
 
-        let mut samples_vec = std::mem::take(&mut channel_samples[display_idx]);
-        let sample_count = samples_vec.len() as i32;
-        let samples_ptr = samples_vec.leak().as_mut_ptr();
+        // Boxed slice: capacity == length, as sleep_eeg_free_edf expects.
+        let samples_box = std::mem::take(&mut channel_samples[display_idx]).into_boxed_slice();
+        let sample_count = samples_box.len() as i32;
+        let samples_ptr = Box::leak(samples_box).as_mut_ptr();
 
         signals.push(EdfSignal {
             label: label_ptr,
@@ -216,9 +266,9 @@ pub fn load_edf_impl(path: &Path, scale_volts: bool) -> Result<EdfFile, String> 
         });
     }
 
-    let sample_rate = samples_per_record[kept_signal_indexes[0]] as f32 / f32::max(data_record_seconds as f32, 1e-9_f32);
+    let sample_rate = (target_spr as f64 / record_seconds) as f32;
     let signal_count_out = signals.len() as i32;
-    let signals_ptr = signals.leak().as_mut_ptr();
+    let signals_ptr = Box::leak(signals.into_boxed_slice()).as_mut_ptr();
 
     Ok(EdfFile {
         sample_rate_hz: sample_rate,
@@ -270,5 +320,32 @@ pub extern "C" fn sleep_eeg_free_edf(edf: *mut EdfFile) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn common_rate_is_the_majority_rate() {
+        assert_eq!(common_samples_per_record(&[200, 200, 200, 500, 100, 100, 1]), 200);
+        assert_eq!(common_samples_per_record(&[100, 256]), 256);
+    }
+
+    #[test]
+    fn resampling_keeps_the_time_axis() {
+        // 1 Hz ramp over 4 records -> 4 Hz
+        let up = resample_linear(&[0.0, 1.0, 2.0, 3.0], 1, 4, 4);
+        assert_eq!(up.len(), 16);
+        assert!((up[4] - 1.0).abs() < 1e-6);
+        assert!((up[6] - 1.5).abs() < 1e-6);
+        assert!((up[15] - 3.0).abs() < 1e-6);
+        // 5 Hz -> 2 Hz: sample i lands at time i / 2
+        let src: Vec<f32> = (0..10).map(|i| i as f32).collect();
+        let down = resample_linear(&src, 5, 2, 2);
+        assert_eq!(down.len(), 4);
+        assert!((down[1] - 2.5).abs() < 1e-6);
+        assert!((down[3] - 7.5).abs() < 1e-6);
     }
 }

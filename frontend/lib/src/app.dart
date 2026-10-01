@@ -97,12 +97,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   // Batch pipeline (EEG analysis) state
   int _batchSection = 0;
-  bool _pipeStepAutoscore = false;
+  bool _pipeStepAutoscore = true;
   bool _pipeStepPreprocess = true;
   bool _pipeStepFeatures = true;
   bool _pipeStepCompile = true;
   bool _pipelineUseCleaned = true;
   bool _pipelineAutoscoreMissingOnly = true;
+  bool _psgAutoscoreFirst = true;
+  bool _compareAutoscoreFirst = true;
 
   // Batch Staging State
   String _batchStagingAlgorithm = kDefaultAutoscoreAlgorithm;
@@ -143,20 +145,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       TextEditingController(text: '*.edf');
 
   // Batch PSG (OSA / PLM) and pipeline CAP state
-  final List<Map<String, String>> _batchPsgPairs = [];
-  bool _batchPsgRecursive = true;
-  bool _batchPsgUseWildcard = false;
-  bool _batchPsgAutoLoadScorings = true;
   bool _batchPsgRespiratory = true;
   bool _batchPsgPlm = true;
   bool _batchPsgCap = true;
   int _batchPsgHypopneaRule = 3;
   String _batchPsgPlmStandard = 'aasm';
   String _batchPsgCapSensitivity = 'standard';
-  final TextEditingController _batchPsgWildcardController =
-      TextEditingController(text: '*.edf');
-  final TextEditingController _batchPsgPostfixController =
-      TextEditingController(text: '_scoring');
   final TextEditingController _batchPsgPressureController = TextEditingController();
   final TextEditingController _batchPsgThermalController = TextEditingController();
   final TextEditingController _batchPsgSpo2Controller = TextEditingController();
@@ -243,8 +237,6 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     _batchScoringPostfixController.dispose();
     _batchAnalyseWildcardController.dispose();
     for (final c in [
-      _batchPsgWildcardController,
-      _batchPsgPostfixController,
       _batchPsgPressureController,
       _batchPsgThermalController,
       _batchPsgSpo2Controller,
@@ -2319,9 +2311,6 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   // ─── Shared batch file-selection helpers ──────────────────────────────────
 
-  static const List<String> _batchAutoscoreExtensions = [
-    'edf', 'eeg', 'vhdr', 'orb', 'signal', 'ebm', 'mat', 'r09',
-  ];
   static const List<String> _batchAnalyseExtensions = ['edf', 'orb', 'signal'];
 
   void _batchSnack(String message) {
@@ -2425,6 +2414,18 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     return '';
   }
 
+  /// Scoring file the batch autoscore writes for [recording] with the
+  /// current Autoscore settings.
+  String _batchAutoscorePathFor(String recording) {
+    final dir = _batchStagingOutDirController.text.trim();
+    return nativeStageOutputPath(
+      recording,
+      canonicalAutoscoreAlgorithm(_batchStagingAlgorithm),
+      sequenceCorrection: _batchStagingCorrection,
+      outDir: dir.isEmpty ? null : dir,
+    );
+  }
+
   void _addBatchAnalyseRecordings(List<String> files) {
     if (files.isEmpty) return;
     final postfix = _batchScoringPostfixController.text.trim();
@@ -2433,7 +2434,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       final lower = files.map((f) => f.toLowerCase()).toSet();
       for (final f in files) {
         if (_batchAnalysePairs.any((p) => p['eegPath'] == f)) continue;
-        // A cleaned copy next to its original is an output of step 2, not a
+        // A cleaned copy next to its original is an output of preprocessing, not a
         // separate recording.
         final fl = f.toLowerCase();
         if (fl.endsWith(cleanedSuffix) &&
@@ -2441,12 +2442,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           continue;
         }
         final cleaned = _pipelineCleanedPathFor(f);
+        final auto = _batchAutoscorePathFor(f);
         _batchAnalysePairs.add({
           'eegPath': f,
           'scoringPath': _batchAnalyseAutoLoadScorings
               ? _findScoringForRecording(f, postfix)
               : '',
           if (File(cleaned).existsSync()) 'cleanedPath': cleaned,
+          if (File(auto).existsSync()) 'autoScoringPath': auto,
         });
       }
     });
@@ -3284,6 +3287,46 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       currentStages: v.stages,
       epochSeconds: v.epochSeconds,
     );
+  }
+
+  /// Pairs each recording's scoring (reference) with its autoscore.
+  void _pairComparisonFromRecordings() {
+    var added = 0;
+    var missing = 0;
+    setState(() {
+      for (final p in _batchAnalysePairs) {
+        final ref = p['scoringPath'] ?? '';
+        var auto = p['autoScoringPath'] ?? '';
+        if (auto.isEmpty) {
+          final guess = _batchAutoscorePathFor(p['eegPath'] ?? '');
+          if (File(guess).existsSync()) auto = guess;
+        }
+        if (ref.isEmpty || auto.isEmpty || ref == auto) {
+          missing++;
+          continue;
+        }
+        if (_batchComparisonPairs.any((c) => c['fileA'] == ref && c['fileB'] == auto)) continue;
+        _batchComparisonPairs.add({'fileA': ref, 'fileB': auto});
+        added++;
+      }
+    });
+    _setStatus(
+      'Added $added comparison pair(s)'
+      '${missing == 0 ? '' : '; $missing recording(s) lack a separate reference scoring or an autoscore'}',
+    );
+  }
+
+  void _startComparisonFromRecordings() {
+    if (_compareAutoscoreFirst && !buildLite) {
+      _runEegPipeline(
+        {'autoscore'},
+        autoscoreMissingOnly: false,
+        continueLabel: 'scoring comparison',
+        then: _pairComparisonFromRecordings,
+      );
+    } else {
+      _pairComparisonFromRecordings();
+    }
   }
 
   Future<void> _addComparisonPairManually() async {
@@ -5767,7 +5810,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final chIdx = _config.channels.indexWhere((c) => c.name == label);
     if (chIdx >= 0) {
       final ch = _config.channels[chIdx];
-      final newScale = (ch.scalingFactor * multiplier).clamp(10.0, 1000.0);
+      final newScale = (ch.scalingFactor * multiplier).clamp(5.0, 5000.0);
       ch.scalingFactor = newScale;
       _previewDisplayConfig(_config);
       _setStatus('${ch.name} scale: ${newScale.toStringAsFixed(0)}%');
@@ -5796,7 +5839,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final chIdx = _config.channels.indexWhere((c) => c.name == label);
     if (chIdx >= 0) {
       final ch = _config.channels[chIdx];
-      ch.scalingFactor = newScale.clamp(10.0, 1000.0);
+      ch.scalingFactor = newScale.clamp(5.0, 5000.0);
       _previewDisplayConfig(_config);
       _setStatus('${ch.name} scale: ${ch.scalingFactor.toStringAsFixed(0)}%');
     }
@@ -5816,7 +5859,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       ];
     }
     for (final ch in _config.channels) {
-      ch.scalingFactor = newScale.clamp(10.0, 1000.0);
+      ch.scalingFactor = newScale.clamp(5.0, 5000.0);
     }
     _previewDisplayConfig(_config);
     _setStatus('All channels scale set to ${newScale.toStringAsFixed(0)}%');
@@ -6555,7 +6598,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   }
 
   Widget _batchPsgField(TextEditingController c, String label, String title) {
-    final first = _batchPsgPairs.isEmpty ? null : _batchPsgPairs.first['eegPath'];
+    final first = _pipelineFirstRecording;
     return SizedBox(
       width: 250,
       child: TextField(
@@ -6571,19 +6614,6 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
-  void _addBatchPsgRecordings(List<String> files) {
-    if (files.isEmpty) return;
-    final postfix = _batchPsgPostfixController.text.trim();
-    setState(() {
-      for (final f in files) {
-        if (_batchPsgPairs.any((p) => p['eegPath'] == f)) continue;
-        _batchPsgPairs.add({
-          'eegPath': f,
-          'scoringPath': _batchPsgAutoLoadScorings ? _findScoringForRecording(f, postfix) : '',
-        });
-      }
-    });
-  }
 
 
 
@@ -6614,152 +6644,15 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               ],
             ),
             const Divider(height: 24),
-            Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'Recordings and their scoring files (a hypnogram is needed for AHI/PLMS indices):',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: _batchAnalysePairs.isEmpty
-                      ? null
-                      : () => setState(() {
-                          for (final p in _batchAnalysePairs) {
-                            final eeg = p['eegPath'] ?? '';
-                            if (eeg.isEmpty || _batchPsgPairs.any((q) => q['eegPath'] == eeg)) continue;
-                            _batchPsgPairs.add({'eegPath': eeg, 'scoringPath': p['scoringPath'] ?? ''});
-                          }
-                        }),
-                  icon: const Icon(Icons.playlist_add, size: 16),
-                  label: const Text('Use EEG pipeline recordings'),
-                ),
-              ],
+            Text(
+              _batchAnalysePairs.isEmpty
+                  ? 'Add recordings under Recordings above.'
+                  : 'Runs on the ${_batchAnalysePairs.length} recording(s) under Recordings above. '
+                        'A scoring is needed for AHI / PLMS indices per hour of sleep; '
+                        '${_batchUnscoredCount == 0 ? 'all recordings have one.' : '$_batchUnscoredCount recording(s) have none and will use monitoring time.'}',
+              style: const TextStyle(fontSize: 12.5, color: Colors.black87),
             ),
-            const SizedBox(height: 8),
-            Container(
-              height: 140,
-              decoration: BoxDecoration(
-                border: Border.all(color: const Color(0xFFD0D0D0)),
-                borderRadius: BorderRadius.circular(4),
-                color: const Color(0xFFF9F9F9),
-              ),
-              child: _batchPsgPairs.isEmpty
-                  ? const Center(child: Text('No recordings selected'))
-                  : ListView.builder(
-                      itemCount: _batchPsgPairs.length,
-                      itemBuilder: (context, index) {
-                        final pair = _batchPsgPairs[index];
-                        final scoring = pair['scoringPath'] ?? '';
-                        return ListTile(
-                          dense: true,
-                          title: Text(_basename(pair['eegPath'] ?? '')),
-                          subtitle: Text(
-                            scoring.isEmpty
-                                ? 'Scoring: not found — click the pencil to choose'
-                                : 'Scoring: ${_basename(scoring)}',
-                            style: scoring.isEmpty ? const TextStyle(color: Colors.deepOrange) : null,
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.edit, size: 16, color: Colors.grey),
-                                tooltip: 'Select scoring file',
-                                onPressed: () async {
-                                  final result = await FilePicker.pickFiles(
-                                    dialogTitle: 'Select scoring JSON file',
-                                    type: FileType.custom,
-                                    allowedExtensions: ['json'],
-                                  );
-                                  final picked = result?.files.single.path;
-                                  if (picked != null) {
-                                    setState(() => pair['scoringPath'] = picked);
-                                  }
-                                },
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.delete, size: 16, color: Colors.red),
-                                onPressed: () => setState(() => _batchPsgPairs.removeAt(index)),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-            ),
-            const SizedBox(height: 8),
-            _batchSourceControls(
-              onAddFiles: () async {
-                final files = await _collectBatchRecordings(
-                  fromFolder: false,
-                  extensions: _batchAutoscoreExtensions,
-                  recursive: _batchPsgRecursive,
-                  useWildcard: _batchPsgUseWildcard,
-                  pattern: _batchPsgWildcardController.text,
-                  title: 'Select PSG recordings',
-                );
-                if (mounted) _addBatchPsgRecordings(files);
-              },
-              onAddFolder: () async {
-                final files = await _collectBatchRecordings(
-                  fromFolder: true,
-                  extensions: _batchAutoscoreExtensions,
-                  recursive: _batchPsgRecursive,
-                  useWildcard: _batchPsgUseWildcard,
-                  pattern: _batchPsgWildcardController.text,
-                  title: 'Select a folder of PSG recordings',
-                );
-                if (mounted) _addBatchPsgRecordings(files);
-              },
-              hasItems: _batchPsgPairs.isNotEmpty,
-              onSelectDeselect: () async {
-                final selected = await showBatchFileSubSelectionDialog(
-                  context: context,
-                  title: 'PSG Batch File Selection',
-                  files: [for (final p in _batchPsgPairs) p['eegPath'] ?? ''],
-                );
-                if (selected != null && mounted) {
-                  final keep = selected.toSet();
-                  setState(() => _batchPsgPairs.removeWhere((p) => !keep.contains(p['eegPath'])));
-                }
-              },
-              onClear: () => setState(_batchPsgPairs.clear),
-              recursive: _batchPsgRecursive,
-              onRecursive: (v) => setState(() => _batchPsgRecursive = v),
-              useWildcard: _batchPsgUseWildcard,
-              onWildcard: (v) => setState(() => _batchPsgUseWildcard = v),
-              wildcardController: _batchPsgWildcardController,
-              extraOptions: [
-                _batchOptionCheckbox('Auto-load scorings', _batchPsgAutoLoadScorings, (v) {
-                  setState(() => _batchPsgAutoLoadScorings = v);
-                  if (v) {
-                    final postfix = _batchPsgPostfixController.text.trim();
-                    setState(() {
-                      for (final pair in _batchPsgPairs) {
-                        if ((pair['scoringPath'] ?? '').isEmpty) {
-                          pair['scoringPath'] = _findScoringForRecording(pair['eegPath'] ?? '', postfix);
-                        }
-                      }
-                    });
-                  }
-                }),
-                if (_batchPsgAutoLoadScorings)
-                  SizedBox(
-                    width: 170,
-                    child: TextField(
-                      controller: _batchPsgPostfixController,
-                      decoration: const InputDecoration(
-                        labelText: 'Scoring postfix',
-                        hintText: 'e.g. _scoring',
-                        isDense: true,
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
+            _autoscoreFirstOption(_psgAutoscoreFirst, (v) => setState(() => _psgAutoscoreFirst = v)),
             const SizedBox(height: 12),
             const Text('Analyses', style: TextStyle(fontWeight: FontWeight.bold)),
             Wrap(
@@ -6811,9 +6704,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             ),
             const SizedBox(height: 12),
             Text(
-              _batchPsgPairs.isEmpty
+              _pipelineFirstRecording == null
                   ? 'Channels (optional — detected automatically in each recording)'
-                  : 'Channels (optional — lists come from the first recording: ${_basename(_batchPsgPairs.first['eegPath'] ?? '')})',
+                  : 'Channels (optional — lists come from the first recording: ${_basename(_pipelineFirstRecording!)})',
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
@@ -6867,14 +6760,34 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   backgroundColor: Colors.teal,
                   foregroundColor: Colors.white,
                 ),
-                onPressed: _batchPsgPairs.isEmpty || !anyAnalysis ? null : _runBatchPsg,
-                child: const Text('Run PSG Batch Analysis', style: TextStyle(fontWeight: FontWeight.bold)),
+                onPressed: _batchAnalysePairs.isEmpty || !anyAnalysis ? null : _startBatchPsg,
+                child: Text(
+                  _psgAutoscoreFirst && !buildLite && _batchUnscoredCount > 0
+                      ? 'Autoscore $_batchUnscoredCount recording(s), then run polygraphy'
+                      : 'Run polygraphy for ${_batchAnalysePairs.length} recording(s)',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
               ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  /// Polygraphy batch, autoscoring the recordings without a scoring first
+  /// when chosen.
+  void _startBatchPsg() {
+    if (_psgAutoscoreFirst && !buildLite && _batchUnscoredCount > 0) {
+      _runEegPipeline(
+        {'autoscore'},
+        autoscoreMissingOnly: true,
+        continueLabel: 'polygraphy',
+        then: _runBatchPsg,
+      );
+    } else {
+      _runBatchPsg();
+    }
   }
 
   void _runBatchPsg() {
@@ -6906,7 +6819,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       context: context,
       barrierDismissible: false,
       builder: (_) => _BatchPsgDialog(
-        jobs: [for (final p in _batchPsgPairs) Map<String, String>.from(p)],
+        jobs: [
+          for (final p in _batchAnalysePairs)
+            if ((p['eegPath'] ?? '').isNotEmpty)
+              {'eegPath': p['eegPath']!, 'scoringPath': p['scoringPath'] ?? ''},
+        ],
         settings: settings,
       ),
     );
@@ -6955,9 +6872,15 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     if (_batchPreprocessInterpolate) 'interpolate',
   ];
 
-  /// Runs the selected EEG pipeline steps, in order, for every recording in
-  /// the shared list; each step's output feeds the next one.
-  void _runEegPipeline(Set<String> selected) {
+  /// Runs the selected pipeline steps, in order, for every recording in the
+  /// shared list; each step's output feeds the next one. With [then], the run
+  /// is the first part of a sequence and [then] starts the next analysis.
+  Future<void> _runEegPipeline(
+    Set<String> selected, {
+    bool? autoscoreMissingOnly,
+    String? continueLabel,
+    VoidCallback? then,
+  }) async {
     if (!isAnalyseNidraAvailable()) {
       _showTextDialog('Engine not found', 'The native analyse-nidra engine was not found beside the application.');
       return;
@@ -6972,22 +6895,22 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final outDir = _pipelineOutDir();
     final problems = <String>[];
     if (selected.contains('preprocess') && _pipelinePreprocessSteps().isEmpty) {
-      problems.add('Choose at least one preprocessing step (step 2).');
+      problems.add('Choose at least one preprocessing step (Preprocess).');
     }
     if (selected.contains('features')) {
       if (chans.isEmpty && _batchAnalyseOptions.analyses.isNotEmpty) {
         problems.add('Choose the EEG channels to analyse (Recordings & EEG channels).');
       }
       if (_batchAnalyseOptions.analyses.isEmpty && !_batchPsgCap) {
-        problems.add('Choose at least one feature to extract (step 3).');
+        problems.add('Choose at least one feature to extract (Extract features).');
       }
       final missing = pairs.where((p) => (p['scoringPath'] ?? '').isEmpty).length;
       if (missing == pairs.length && !selected.contains('autoscore')) {
         problems.add(
-          'None of the recordings has a scoring. Choose their scoring files, or include step 1 (Autoscore) in the run.',
+          'None of the recordings has a scoring. Run 1 Autoscore, choose their scoring files, or tick "Autoscore recordings without a scoring first".',
         );
       } else if (missing > 0 && !selected.contains('autoscore')) {
-        _setStatus('$missing recording(s) without a scoring will be skipped in step 3.');
+        _setStatus('$missing recording(s) without a scoring will be skipped in feature extraction.');
       }
     }
     if (problems.isNotEmpty) {
@@ -7014,9 +6937,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       steps.add(
         PipelineStep(
           key: 'autoscore',
-          title: '1 Autoscore',
+          title: 'Autoscore',
           build: (r) {
-            if (_pipelineAutoscoreMissingOnly && r.scoring.isNotEmpty && File(r.scoring).existsSync()) {
+            if ((autoscoreMissingOnly ?? _pipelineAutoscoreMissingOnly) &&
+                r.scoring.isNotEmpty &&
+                File(r.scoring).existsSync()) {
               throw PipelineSkip('already scored (${_basename(r.scoring)})', reused: true);
             }
             if (!analyseNidraReadsNatively(r.source)) {
@@ -7030,6 +6955,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             );
             if (resume && File(expected).existsSync()) {
               r.scoring = expected;
+              r.autoscored = expected;
               throw PipelineSkip('scoring exists (${_basename(expected)})', reused: true);
             }
             return buildNativeStageArgs(
@@ -7047,7 +6973,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           },
           onSuccess: (r, log) {
             final out = pipelineOutputFromLog(log, 'SCORING');
-            if (out != null && out.isNotEmpty) r.scoring = out;
+            if (out != null && out.isNotEmpty) {
+              r.scoring = out;
+              r.autoscored = out;
+            }
           },
         ),
       );
@@ -7060,7 +6989,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       steps.add(
         PipelineStep(
           key: 'preprocess',
-          title: '2 Preprocess',
+          title: 'Preprocess',
           build: (r) {
             if (!r.source.toLowerCase().endsWith('.edf')) {
               throw PipelineSkip('preprocessing needs an EDF recording');
@@ -7105,7 +7034,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         steps.add(
           PipelineStep(
             key: 'features',
-            title: '3 Features',
+            title: 'Features',
             build: (r) {
               if (r.scoring.isEmpty || !File(r.scoring).existsSync()) {
                 throw PipelineSkip('no scoring file');
@@ -7139,7 +7068,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         steps.add(
           PipelineStep(
             key: 'cap',
-            title: '3 CAP',
+            title: 'CAP',
             build: (r) {
               if (r.scoring.isEmpty || !File(r.scoring).existsSync()) {
                 throw PipelineSkip('no scoring file');
@@ -7187,7 +7116,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         if (files.isEmpty) return 'No regional CSV files to compile.';
         final empty = await regionalCsvFilesWithoutData(files);
         final usable = files.where((f) => !empty.contains(f)).toList();
-        if (usable.isEmpty) return 'All regional CSV files are empty; re-run step 3.';
+        if (usable.isEmpty) return 'All regional CSV files are empty; re-run feature extraction.';
         final targetDir = outDir ?? File(recs.first.source).parent.path;
         final master = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
         await File(master).writeAsString(await compileRegionalCsvFiles(
@@ -7205,13 +7134,22 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       _setStatus('Nothing to run: select at least one step.');
       return;
     }
-    final logFolder = outDir ?? File(recordings.first.source).parent.path;
-    showDialog<void>(
+    final logFolder = outDir ??
+        (selected.length == 1 && selected.contains('autoscore')
+            ? (_batchStagingOutDirController.text.trim().isEmpty
+                  ? File(recordings.first.source).parent.path
+                  : _batchStagingOutDirController.text.trim())
+            : File(recordings.first.source).parent.path);
+    final title = selected.length == 1 && selected.contains('autoscore')
+        ? 'Autoscore — ${recordings.length} recording(s)'
+        : 'EEG analysis pipeline — ${recordings.length} recording(s)';
+    final proceed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (_) => PipelineRunDialog(
-        title: 'EEG analysis pipeline — ${recordings.length} recording(s)',
+        title: title,
         executable: detectAnalyseNidraExecutable(),
+        continueLabel: then == null ? null : continueLabel,
         recordings: recordings,
         steps: steps,
         logFolder: logFolder,
@@ -7225,7 +7163,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 orElse: () => <String, String>{},
               );
               if (pair.isEmpty) continue;
-              if (r.scoring.isNotEmpty) pair['scoringPath'] = r.scoring;
+              // Autoscores never replace an existing (e.g. manual) scoring in
+              // the list; they are kept alongside for scoring comparison.
+              final auto = r.autoscored;
+              if (auto != null) {
+                pair['autoScoringPath'] = auto;
+                if ((pair['scoringPath'] ?? '').isEmpty) pair['scoringPath'] = auto;
+              }
               if (r.cleaned != null) pair['cleanedPath'] = r.cleaned!;
               if (r.regional != null) pair['regionalPath'] = r.regional!;
             }
@@ -7243,14 +7187,17 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         },
       ),
     );
+    if (proceed == true && then != null && mounted) then();
   }
 
   Widget _buildBatchProcessingTab() {
     const sections = [
-      (Icons.account_tree_outlined, 'EEG analysis pipeline'),
-      (Icons.monitor_heart_outlined, 'Polygraphy: OSA & PLM'),
-      (Icons.compare_arrows, 'Scoring comparison'),
+      (Icons.auto_awesome_outlined, '1  Autoscore'),
+      (Icons.account_tree_outlined, '2  EEG analysis'),
+      (Icons.monitor_heart_outlined, '3  Polygraphy: OSA & PLM'),
+      (Icons.compare_arrows, '4  Scoring comparison'),
     ];
+    final scored = _batchAnalysePairs.where((p) => (p['scoringPath'] ?? '').isNotEmpty).length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -7264,13 +7211,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 SegmentedButton<int>(
                   segments: [
                     for (var i = 0; i < sections.length; i++)
-                      ButtonSegment<int>(
-                        value: i,
-                        icon: Icon(sections[i].$1, size: 18),
-                        label: Text(sections[i].$2),
-                      ),
+                      if (i != 0 || !buildLite)
+                        ButtonSegment<int>(
+                          value: i,
+                          icon: Icon(sections[i].$1, size: 18),
+                          label: Text(sections[i].$2),
+                        ),
                   ],
-                  selected: {_batchSection},
+                  selected: {buildLite && _batchSection == 0 ? 1 : _batchSection},
                   showSelectedIcon: false,
                   onSelectionChanged: (s) => setState(() => _batchSection = s.first),
                 ),
@@ -7285,11 +7233,30 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 1240),
-                child: switch (_batchSection) {
-                  0 => _buildEegPipelineSection(),
-                  1 => _buildBatchPsgCard(),
-                  _ => _buildBatchComparisonCard(),
-                },
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _pipelineStepCard(
+                      number: 0,
+                      title: 'Recordings',
+                      subtitle: _batchAnalysePairs.isEmpty
+                          ? 'Shared by all batch analyses — add recordings; their scorings are found automatically'
+                          : '${_batchAnalysePairs.length} recording(s) · $scored with a scoring · '
+                                '${_batchAnalysePairs.where((p) => (p['autoScoringPath'] ?? '').isNotEmpty).length} autoscored',
+                      initiallyExpanded: _batchAnalysePairs.isEmpty,
+                      body: _buildPipelineRecordingsPanel(),
+                    ),
+                    KeyedSubtree(
+                      key: ValueKey('batch-section-$_batchSection'),
+                      child: switch (buildLite && _batchSection == 0 ? 1 : _batchSection) {
+                        0 => _buildAutoscoreSection(),
+                        1 => _buildEegPipelineSection(),
+                        2 => _buildBatchPsgCard(),
+                        _ => _buildBatchComparisonCard(),
+                      },
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -7298,15 +7265,112 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
+  /// Recordings in the shared list that still have no scoring.
+  int get _batchUnscoredCount =>
+      _batchAnalysePairs.where((p) => (p['scoringPath'] ?? '').isEmpty).length;
+
+  /// Checkbox used by the analyses that need a scoring to chain autoscoring
+  /// in front of them.
+  Widget _autoscoreFirstOption(bool value, ValueChanged<bool> onChanged) {
+    if (buildLite) return const SizedBox.shrink();
+    final missing = _batchUnscoredCount;
+    return Tooltip(
+      message: 'Runs 1 Autoscore (with its settings) for the recordings without a scoring, '
+          'then continues with this analysis.',
+      child: _batchOptionCheckbox(
+        'Autoscore recordings without a scoring first'
+            '${missing == 0 ? '' : ' ($missing)'}',
+        value,
+        onChanged,
+      ),
+    );
+  }
+
+  Widget _buildAutoscoreSection() {
+    final n = _batchAnalysePairs.length;
+    final missing = _batchUnscoredCount;
+    final targets = _pipelineAutoscoreMissingOnly ? missing : n;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _pipelineCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Sleep staging for the recordings above. A scoring is needed by every other batch analysis: '
+                'EEG analysis (features are mapped to sleep stages), polygraphy (AHI and PLMS indices per hour of sleep) '
+                'and scoring comparison (autoscore against the manual scoring). '
+                'Existing scorings are never replaced: each autoscore is saved as its own file and linked to the recording.',
+                style: TextStyle(fontSize: 12.5, color: Colors.black87),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 12,
+                runSpacing: 6,
+                children: [
+                  _batchOptionCheckbox(
+                    'Resume (reuse existing autoscores)',
+                    _batchAnalyseSkipExisting,
+                    (v) => setState(() => _batchAnalyseSkipExisting = v),
+                  ),
+                  Text(
+                    '$n recording(s) · $missing without a scoring',
+                    style: const TextStyle(fontSize: 12, color: Colors.black54),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 42,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.purple,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: targets == 0 ? null : () => _runEegPipeline({'autoscore'}),
+                  icon: const Icon(Icons.play_arrow),
+                  label: Text(
+                    n == 0
+                        ? 'Add recordings first'
+                        : targets == 0
+                        ? 'All recordings already have a scoring'
+                        : 'Autoscore $targets recording(s)',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _pipelineStepCard(
+          number: 1,
+          title: 'Autoscore settings',
+          leadingIcon: Icons.settings_outlined,
+          subtitle: 'Sleep staging with ${autoscoreAlgorithmLabel(_batchStagingAlgorithm)}'
+              '${_batchStagingCorrection == 'sleepgpt' ? ' + SleepGPT' : ''}'
+              '${_pipelineAutoscoreMissingOnly ? ', only for recordings without a scoring' : ', for all recordings'}',
+          initiallyExpanded: true,
+          body: _buildPipelineAutoscoreSettings(),
+        ),
+      ],
+    );
+  }
+
   Widget _buildEegPipelineSection() {
     final includes = <(String, String, bool, ValueChanged<bool>)>[
-      if (!buildLite)
-        ('autoscore', '1  Autoscore', _pipeStepAutoscore, (v) => setState(() => _pipeStepAutoscore = v)),
-      ('preprocess', '2  Preprocess', _pipeStepPreprocess, (v) => setState(() => _pipeStepPreprocess = v)),
-      ('features', '3  Extract features', _pipeStepFeatures, (v) => setState(() => _pipeStepFeatures = v)),
-      ('compile', '4  Compile', _pipeStepCompile, (v) => setState(() => _pipeStepCompile = v)),
+      ('preprocess', '1  Preprocess', _pipeStepPreprocess, (v) => setState(() => _pipeStepPreprocess = v)),
+      ('features', '2  Extract features', _pipeStepFeatures, (v) => setState(() => _pipeStepFeatures = v)),
+      ('compile', '3  Compile', _pipeStepCompile, (v) => setState(() => _pipeStepCompile = v)),
     ];
-    final selected = {for (final i in includes) if (i.$3) i.$1};
+    final selected = {
+      if (_pipeStepAutoscore && !buildLite && _batchUnscoredCount > 0) 'autoscore',
+      for (final i in includes)
+        if (i.$3) i.$1,
+    };
+    final analysisSteps = selected.where((k) => k != 'autoscore').length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -7316,7 +7380,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             children: [
               const Text(
                 'Run the steps in order for every recording. Each step uses the output of the one before it: '
-                'the scoring from step 1 maps features to sleep stages, and the cleaned EEG from step 2 is analysed in step 3.',
+                'the cleaned EEG from step 1 is analysed in step 2, where features are mapped to sleep stages '
+                'using the recording\'s scoring, and step 3 combines them across recordings.',
                 style: TextStyle(fontSize: 12.5, color: Colors.black87),
               ),
               const SizedBox(height: 10),
@@ -7339,6 +7404,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                     _batchAnalyseSkipExisting,
                     (v) => setState(() => _batchAnalyseSkipExisting = v),
                   ),
+                  _autoscoreFirstOption(_pipeStepAutoscore, (v) => setState(() => _pipeStepAutoscore = v)),
                 ],
               ),
               const SizedBox(height: 10),
@@ -7349,12 +7415,15 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                     backgroundColor: Colors.indigo,
                     foregroundColor: Colors.white,
                   ),
-                  onPressed: _batchAnalysePairs.isEmpty || selected.isEmpty ? null : () => _runEegPipeline(selected),
+                  onPressed: _batchAnalysePairs.isEmpty || analysisSteps == 0
+                      ? null
+                      : () => _runEegPipeline(selected, autoscoreMissingOnly: true),
                   icon: const Icon(Icons.play_arrow),
                   label: Text(
-                    selected.isEmpty
+                    analysisSteps == 0
                         ? 'Select the steps to run'
-                        : 'Run ${selected.length == 1 ? 'the selected step' : 'the ${selected.length} selected steps in sequence'} '
+                        : '${selected.contains('autoscore') ? 'Autoscore, then run' : 'Run'} '
+                              '${analysisSteps == 1 ? 'the selected step' : 'the $analysisSteps selected steps in sequence'} '
                               'for ${_batchAnalysePairs.length} recording(s)',
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
@@ -7366,30 +7435,16 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         const SizedBox(height: 12),
         _pipelineStepCard(
           number: 0,
-          title: 'Recordings & EEG channels',
-          subtitle: _batchAnalysePairs.isEmpty
-              ? 'Add the recordings; their scorings are found automatically'
-              : '${_batchAnalysePairs.length} recording(s) · '
-                    '${_batchAnalysePairs.where((p) => (p['scoringPath'] ?? '').isNotEmpty).length} scored · '
-                    'EEG ${_batchAnalyseEegController.text.trim().isEmpty ? 'not chosen' : _batchAnalyseEegController.text.trim()}',
-          initiallyExpanded: true,
-          body: _buildPipelineRecordingsPanel(),
+          title: 'EEG channels & output folder',
+          leadingIcon: Icons.tune,
+          subtitle: 'EEG ${_batchAnalyseEegController.text.trim().isEmpty ? 'not chosen' : _batchAnalyseEegController.text.trim()}'
+              ' · reference ${_batchAnalyseRefController.text.trim().isEmpty ? 'as recorded' : _batchAnalyseRefController.text.trim()}'
+              ' · output ${_batchAnalyseOutDirController.text.trim().isEmpty ? 'beside each recording' : _basename(_batchAnalyseOutDirController.text.trim())}',
+          initiallyExpanded: _batchAnalyseEegController.text.trim().isEmpty,
+          body: _buildPipelineChannelsPanel(),
         ),
-        if (!buildLite)
         _pipelineStepCard(
           number: 1,
-          title: 'Autoscore',
-          subtitle: 'Sleep staging with ${autoscoreAlgorithmLabel(_batchStagingAlgorithm)}'
-              '${_batchStagingCorrection == 'sleepgpt' ? ' + SleepGPT' : ''}'
-              '${_pipelineAutoscoreMissingOnly ? ', only for recordings without a scoring' : ''}',
-          stepKey: 'autoscore',
-          included: _pipeStepAutoscore,
-          onIncluded: (v) => setState(() => _pipeStepAutoscore = v),
-          initiallyExpanded: true,
-          body: _buildPipelineAutoscoreSettings(),
-        ),
-        _pipelineStepCard(
-          number: 2,
           title: 'Preprocess',
           subtitle: 'Stimulation artefact removal on the continuous signal, then 30-s epoch cleaning '
               '(${_pipelinePreprocessSteps().isEmpty ? 'no steps chosen' : _pipelinePreprocessSteps().join(', ')})',
@@ -7399,7 +7454,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           body: _buildPipelinePreprocessSettings(),
         ),
         _pipelineStepCard(
-          number: 3,
+          number: 2,
           title: 'Extract features',
           subtitle: '${_batchAnalyseOptions.summary}${_batchPsgCap ? ', CAP' : ''} — '
               '${_pipelineUseCleaned ? 'on the cleaned EEG when available' : 'on the original recordings'}, mapped to sleep stages',
@@ -7409,7 +7464,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           body: _buildPipelineFeatureSettings(),
         ),
         _pipelineStepCard(
-          number: 4,
+          number: 3,
           title: 'Compile features',
           subtitle: 'One master sheet across recordings (AnalyseNidra_master_sheet.csv) and batch PDF reports',
           stepKey: 'compile',
@@ -7441,6 +7496,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     bool included = true,
     ValueChanged<bool>? onIncluded,
     bool initiallyExpanded = false,
+    IconData leadingIcon = Icons.folder_copy_outlined,
   }) {
     final key = stepKey;
     return Padding(
@@ -7462,7 +7518,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             radius: 14,
             backgroundColor: key == null ? Colors.blueGrey : (included ? Colors.indigo : Colors.grey.shade400),
             child: key == null
-                ? const Icon(Icons.folder_copy_outlined, size: 16, color: Colors.white)
+                ? Icon(leadingIcon, size: 16, color: Colors.white)
                 : Text('$number', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ),
           title: Row(
@@ -7487,7 +7543,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 child: OutlinedButton.icon(
                   onPressed: _batchAnalysePairs.isEmpty ? null : () => _runEegPipeline({key}),
                   icon: const Icon(Icons.play_arrow, size: 18),
-                  label: Text('Run step $number only'),
+                  label: const Text('Run this step only'),
                 ),
               ),
             ],
@@ -7502,7 +7558,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _batchOptionCheckbox(
-          'Only recordings without a scoring (keep existing manual or earlier scorings)',
+          'Only recordings without a scoring (untick to autoscore every recording, e.g. to compare with the manual scoring)',
           _pipelineAutoscoreMissingOnly,
           (v) => setState(() => _pipelineAutoscoreMissingOnly = v),
         ),
@@ -7789,7 +7845,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
         const SizedBox(height: 8),
         _batchOptionCheckbox(
-          'Use the cleaned recordings in step 3 (feature extraction and CAP)',
+          'Use the cleaned recordings for feature extraction and CAP',
           _pipelineUseCleaned,
           (v) => setState(() => _pipelineUseCleaned = v),
         ),
@@ -7959,6 +8015,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
+  /// The recordings shared by every batch analysis, with their scorings.
   Widget _buildPipelineRecordingsPanel() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -7979,7 +8036,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                             ),
                             child: _batchAnalysePairs.isEmpty
                                 ? const Center(
-                                    child: Text('No file pairs mapped'),
+                                    child: Text('No recordings added'),
                                   )
                                 : ListView.builder(
                                     itemCount: _batchAnalysePairs.length,
@@ -7993,10 +8050,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                         subtitle: Text(
                                           [
                                             scoring.isEmpty
-                                                ? 'Scoring: not found — autoscore (step 1) or click the pencil'
+                                                ? 'Scoring: not found — run 1 Autoscore or click the pencil'
                                                 : 'Scoring: ${_basename(scoring)}',
                                             if (File(pair['cleanedPath'] ?? _pipelineCleanedPathFor(eeg)).existsSync())
                                               'cleaned ✓',
+                                            if ((pair['autoScoringPath'] ?? '').isNotEmpty &&
+                                                pair['autoScoringPath'] != scoring)
+                                              'autoscore: ${_basename(pair['autoScoringPath']!)}',
                                             if ((pair['regionalPath'] ?? '').isNotEmpty)
                                               'features ✓',
                                             if (_batchMetadata != null)
@@ -8140,7 +8200,16 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                           ),
                           const SizedBox(height: 10),
                           _buildBatchMetadataControls(),
-                          const SizedBox(height: 16),
+      ],
+    );
+  }
+
+  /// EEG and reference channels, and the output folder, for preprocessing
+  /// and feature extraction.
+  Widget _buildPipelineChannelsPanel() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
                           // EEG Channels
                           TextFormField(
                             controller: _batchAnalyseEegController,
@@ -8315,6 +8384,39 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                       ],
                     ),
                     const Divider(height: 24),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade50.withOpacity(0.5),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.orange.shade100),
+                      ),
+                      child: Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 12,
+                        runSpacing: 6,
+                        children: [
+                          const Text(
+                            'From the recordings above: their scoring (reference) vs. the autoscore',
+                            style: TextStyle(fontSize: 12.5),
+                          ),
+                          if (!buildLite)
+                            _batchOptionCheckbox(
+                              'Autoscore first (Autoscore settings)',
+                              _compareAutoscoreFirst,
+                              (v) => setState(() => _compareAutoscoreFirst = v),
+                            ),
+                          OutlinedButton.icon(
+                            onPressed: _batchAnalysePairs.isEmpty ? null : _startComparisonFromRecordings,
+                            icon: const Icon(Icons.playlist_add, size: 16),
+                            label: Text(
+                              _compareAutoscoreFirst && !buildLite ? 'Autoscore, then add pairs' : 'Add pairs from recordings',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     const Text(
                       'Paired Scoring Files (Reference vs Comparison):',
                       style: TextStyle(fontWeight: FontWeight.bold),
@@ -10646,6 +10748,7 @@ class _ElectrodeScaleColumn extends StatelessWidget {
   Widget build(BuildContext context) {
     final labels = viewport.signalChannelLabels;
     final scales = viewport.signalChannelScales;
+    final notes = viewport.visibleChannelScaleNotes;
     final count = labels.length;
     if (count == 0 || channelHeight <= 0) return const SizedBox.shrink();
 
@@ -10658,6 +10761,7 @@ class _ElectrodeScaleColumn extends StatelessWidget {
               channelIndex: i,
               channelName: labels[i],
               scalePercent: scales[i],
+              scaleNote: i < notes.length ? notes[i] : '',
               channelHeight: channelHeight,
               onAdjustScale: onAdjustScale,
               onSetScale: onSetScale,
@@ -10674,6 +10778,7 @@ class _ChannelScaleTile extends StatefulWidget {
     required this.channelIndex,
     required this.channelName,
     required this.scalePercent,
+    this.scaleNote = '',
     required this.channelHeight,
     required this.onAdjustScale,
     required this.onSetScale,
@@ -10683,6 +10788,9 @@ class _ChannelScaleTile extends StatefulWidget {
   final int channelIndex;
   final String channelName;
   final double scalePercent;
+
+  /// "auto" or the absolute range (e.g. "70–100 %") of polygraphic channels.
+  final String scaleNote;
   final double channelHeight;
   final void Function(int channelIndex, double multiplier)? onAdjustScale;
   final void Function(int channelIndex, double newScale)? onSetScale;
@@ -10725,7 +10833,7 @@ class _ChannelScaleTileState extends State<_ChannelScaleTile> {
               Expanded(
                 child: PopupMenuButton<double>(
                   tooltip:
-                      '${widget.channelName} (Scale: $scaleStr) — Click for presets, scroll to zoom',
+                      '${widget.channelName} (Scale: $scaleStr${widget.scaleNote.isEmpty ? '' : ', ${widget.scaleNote}'}) — Click for presets, scroll to zoom',
                   padding: EdgeInsets.zero,
                   onSelected: (val) {
                     if (val == -1.0) {
@@ -10779,9 +10887,14 @@ class _ChannelScaleTileState extends State<_ChannelScaleTile> {
                                 color: Colors.black87,
                               ),
                             ),
-                            if (widget.scalePercent != 100.0)
+                            if (widget.scalePercent != 100.0 ||
+                                widget.scaleNote.isNotEmpty)
                               Text(
-                                '${widget.scalePercent.round()}%',
+                                [
+                                  if (widget.scaleNote.isNotEmpty) widget.scaleNote,
+                                  if (widget.scalePercent != 100.0)
+                                    '${widget.scalePercent.round()}%',
+                                ].join(' · '),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(

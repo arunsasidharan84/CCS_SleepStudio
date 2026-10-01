@@ -10,7 +10,7 @@
   <b>National Institute of Mental Health and Neurosciences (NIMHANS)</b>, Bangalore, India.
 </p>
 
-**Version:** 1.24.0
+**Version:** 1.24.1
 
 Welcome to **CCS Sleep Studio**, a high-performance, cross-platform desktop application designed to assist researchers and clinicians in sleep EEG visualization, event annotation, sleep scoring, automated staging, and advanced EEG analysis.
 
@@ -18,6 +18,15 @@ CCS Sleep Studio is comprised of the following key modules:
 *   **ScoringNidra**: Interactive sleep scoring and event annotation module supporting EDF, Brain Products (.vhdr / .vmrk), Nihon Kohden (.EEG / .LOG), EMBLA (.ebm), Orbit (.orb), and R09 (.r09).
 *   **AutoscoreNidra**: Automated sleep scoring module with both interactive and batch modes.
 *   **AnalyseNidra**: Automated sleep EEG analysis and reporting module operating in both interactive and batch modes.
+
+### 🌟 New in Version 1.24.1
+*   **Polygraphic channels recorded at their own sampling rates are now shown at the right time.** EDF channels with a different rate from the EEG (e.g. flow and effort at 100 Hz, snore at 500 Hz, SpO2 at 1 Hz) are resampled to the common rate when loaded. Before, they were drawn against the EEG's clock: flow and effort ran at twice the speed and were out of step with the scored events, and 1 Hz SpO2 was not drawn at all.
+*   **Display scaling suited to each kind of channel** (new *Scaling* column in the channel settings):
+    *   **Auto:** flow, pressure, effort belts and snore are fitted to their row from the whole night's amplitude, so their relative changes (hypopnoeas) stay comparable across the night.
+    *   **Level:** SpO2, pulse, body position and CO2 are drawn on an absolute range, e.g. SpO2 70–100 %, shown under the channel name.
+    *   **Fixed µV:** EEG, EOG, EMG and ECG keep the µV scale.
+    *   Polygraphic traces are kept inside their own row. The per-channel zoom range is widened to 5–5000 %.
+    *   Polygraphic channels in saved settings switch to the new modes automatically, and their old manual gain is reset to 100 %.
 
 ### 🌟 New in Version 1.24.0
 *   **Synchronised Video via media_kit / libmpv:** Full playback support for Nihon Kohden MPEG transport streams (`.m2t` with H.264 video and MP2 audio) and multi-hour recordings across all platforms. Reads `.VF2` video index files to seamlessly synchronise multi-camera hourly segments across the entire night with millisecond precision.
@@ -27,7 +36,10 @@ CCS Sleep Studio is comprised of the following key modules:
 *   **Enhanced Nihon Kohden Channel Mapping & Clock Time:** Accurate `.21E` channel name resolution for higher channel codes (e.g. M2, O1, O2, LEOG, REOG, EMG1–3, ECG), automatic migration for previously saved montage settings, and true recording start time extraction for accurate clock time display on `.EEG` files.
 
 ### 🌟 New in Version 1.23.0
-*   **Batch tab redesigned as a linked pipeline.** The Batch tab has three sections: *EEG analysis pipeline*, *Polygraphy (OSA & PLM)* and *Scoring comparison*. The EEG pipeline shares one list of recordings and EEG/reference channels. Its steps are collapsible cards, run in order: **1 Autoscore** (optional, only for recordings without a scoring) → **2 Preprocess** (stimulation-artefact removal on the continuous signal, then 30-s epoch cleaning) → **3 Extract features** (AnalyseNidra analyses and CAP, run on the cleaned EEG and mapped to sleep stages with the step-1 scoring) → **4 Compile** (master sheet). Each step passes its output on to the next. You can run all ticked steps in one go or run one step on its own. A run window shows a recording × step status table, and *Resume* reuses outputs that already exist.
+*   **Batch tab redesigned around the order you work in.** One shared list of **Recordings**, found with their scorings automatically, is used by four sections: **1 Autoscore**, **2 EEG analysis**, **3 Polygraphy (OSA & PLM)** and **4 Scoring comparison**.
+    *   **Autoscore** is a step of its own because every other analysis needs a scoring. It never replaces an existing (e.g. manual) scoring: each autoscore is saved as its own file and linked to the recording. The other sections can also *autoscore first*, then continue automatically.
+    *   **EEG analysis** is a linked pipeline of collapsible steps: **Preprocess** (stimulation-artefact removal on the continuous signal, then 30-s epoch cleaning) → **Extract features** (AnalyseNidra analyses and CAP on the cleaned EEG, mapped to sleep stages) → **Compile** (master sheet). Each step passes its output on to the next. You can run all ticked steps in one go or run one step on its own. A run window shows a recording × step status table, and *Resume* reuses outputs that already exist.
+    *   **Scoring comparison** can pair each recording's scoring with its autoscore.
 *   **Master-sheet compilation fixed.** Regional CSVs left with only a header (from an interrupted or crashed run) are now detected: *Resume* rebuilds them from the cached per-analysis results instead of skipping them. Empty CSVs are also left out of the master sheet and listed. Cached results containing NaN values can now be read back, and results are written atomically. A recording without N2/N3 no longer aborts: its NREM-only analyses are skipped with a warning. The new *Compile all CSVs in a folder…* option builds a master sheet from a whole folder.
 *   NeuroLoopGain now uses the average of all chosen references when more than one is given, which matches the rest of AnalyseNidra.
 

@@ -115,9 +115,24 @@ class EdfLoader {
       }
     }
 
-    final sampleRate =
-        samplesPerRecord[keptSignalIndexes.first] /
-        math.max(dataRecordSeconds, 1e-9);
+    // Channels can have different rates (EEG 200 Hz, flow/effort 100 Hz,
+    // SpO2 1 Hz…); the viewer uses one rate for every channel, so resample
+    // the others to the rate most channels share.
+    final targetSpr = edfCommonSamplesPerRecord([
+      for (final index in keptSignalIndexes) samplesPerRecord[index],
+    ]);
+    for (var i = 0; i < keptSignalIndexes.length; i++) {
+      final spr = samplesPerRecord[keptSignalIndexes[i]];
+      if (spr != targetSpr) {
+        channelSamples[i] = edfResampleLinear(
+          channelSamples[i],
+          spr,
+          targetSpr,
+          records,
+        );
+      }
+    }
+    final sampleRate = targetSpr / math.max(dataRecordSeconds, 1e-9);
     final displayLabels = [
       for (final index in keptSignalIndexes) labels[index],
     ];
@@ -263,4 +278,41 @@ class _AsciiHeader {
   String _textAt(int offset, int width) {
     return ascii.decode(bytes.sublist(offset, offset + width)).trim();
   }
+}
+
+/// Samples per record shared by most channels (ties: the higher rate).
+int edfCommonSamplesPerRecord(List<int> rates) {
+  var best = 0;
+  var bestCount = 0;
+  for (final r in rates) {
+    final count = rates.where((x) => x == r).length;
+    if (count > bestCount || (count == bestCount && r > best)) {
+      best = r;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+/// Linear-interpolation resampling from [fromSpr] to [toSpr] samples per
+/// data record, keeping the time axis (sample i at i / rate).
+List<double> edfResampleLinear(
+  List<double> src,
+  int fromSpr,
+  int toSpr,
+  int records,
+) {
+  final nOut = records * toSpr;
+  if (src.isEmpty || fromSpr <= 0 || toSpr <= 0) {
+    return List<double>.filled(nOut, 0);
+  }
+  final ratio = fromSpr / toSpr;
+  final last = src.length - 1;
+  return List<double>.generate(nOut, (i) {
+    final pos = i * ratio;
+    final i0 = math.min(pos.floor(), last);
+    final i1 = math.min(i0 + 1, last);
+    final frac = (pos - i0).clamp(0.0, 1.0).toDouble();
+    return src[i0] + (src[i1] - src[i0]) * frac;
+  }, growable: false);
 }

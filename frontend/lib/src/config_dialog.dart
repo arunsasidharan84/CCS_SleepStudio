@@ -1302,6 +1302,16 @@ class _ChannelHeaderRow extends StatelessWidget {
           SizedBox(width: 48),
           Expanded(flex: 2, child: Text('Channel', style: style)),
           SizedBox(width: 72, child: Text('Scale', style: style)),
+          SizedBox(
+            width: 96,
+            child: Tooltip(
+              message:
+                  'Fixed µV: EEG style, same µV scale for all channels.\n'
+                  'Auto: fitted to the row from the whole night\'s amplitude (flow, effort, snore).\n'
+                  'Level: absolute values on a fixed range (SpO2, pulse, position).',
+              child: Text('Scaling', style: style),
+            ),
+          ),
           SizedBox(width: 72, child: Text('Shift', style: style)),
           SizedBox(width: 110, child: Text('Color', style: style)),
           Expanded(child: Text('Re-reference', style: style)),
@@ -1456,6 +1466,52 @@ class _ChannelConfigTile extends StatelessWidget {
                       onApplyAll((channel) => channel.scalingFactor = value);
                     } else {
                       config.scalingFactor = value;
+                      onChanged();
+                    }
+                  },
+                ),
+              ),
+            ),
+          ),
+          // Column 4b: Scaling mode
+          SizedBox(
+            width: 96,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 8.0),
+              child: SizedBox(
+                height: 28,
+                child: DropdownButtonFormField<String>(
+                  value: config.effectiveDisplayMode,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 6,
+                    ),
+                  ),
+                  style: const TextStyle(fontSize: 12, color: Colors.black87),
+                  items: const [
+                    DropdownMenuItem(
+                      value: kChannelDisplayFixed,
+                      child: Text('Fixed µV', style: TextStyle(fontSize: 12)),
+                    ),
+                    DropdownMenuItem(
+                      value: kChannelDisplayAuto,
+                      child: Text('Auto', style: TextStyle(fontSize: 12)),
+                    ),
+                    DropdownMenuItem(
+                      value: kChannelDisplayLevel,
+                      child: Text('Level', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    if (v == null) return;
+                    if (applyAllChannels) {
+                      onApplyAll((channel) => channel.displayMode = v);
+                    } else {
+                      config.displayMode = v;
                       onChanged();
                     }
                   },

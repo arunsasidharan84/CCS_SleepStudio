@@ -1,5 +1,6 @@
 // lib/src/models.dart
 
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -270,6 +271,7 @@ class EegViewport {
     this.visibleChannelSourceIndices = const [],
     this.visibleChannelColors = const [],
     this.visibleChannelScales = const [],
+    this.visibleChannelScaleNotes = const [],
     this.tfDisplayMode = 'dB (median baseline)',
     this.tfPowerMin = 0.0,
     this.tfPowerMax = 20.0,
@@ -381,6 +383,10 @@ class EegViewport {
   final List<String> visibleChannelColors;
   final List<double> visibleChannelScales;
 
+  /// Short note under each channel name about how it is scaled
+  /// (e.g. "auto" or "70–100" for SpO2); empty for EEG-style channels.
+  final List<String> visibleChannelScaleNotes;
+
   int get epochCount => stages.length;
   List<String> get signalChannelLabels =>
       visibleChannelLabels.isNotEmpty ? visibleChannelLabels : channelLabels;
@@ -429,6 +435,7 @@ class EegViewport {
     List<int>? visibleChannelSourceIndices,
     List<String>? visibleChannelColors,
     List<double>? visibleChannelScales,
+    List<String>? visibleChannelScaleNotes,
     bool clearSelection = false,
     bool clearEventSelections = false,
     String? tfDisplayMode,
@@ -537,6 +544,8 @@ class EegViewport {
           visibleChannelSourceIndices ?? this.visibleChannelSourceIndices,
       visibleChannelColors: visibleChannelColors ?? this.visibleChannelColors,
       visibleChannelScales: visibleChannelScales ?? this.visibleChannelScales,
+      visibleChannelScaleNotes:
+          visibleChannelScaleNotes ?? this.visibleChannelScaleNotes,
       tfDisplayMode: tfDisplayMode ?? this.tfDisplayMode,
       tfPowerMin: tfPowerMin ?? this.tfPowerMin,
       tfPowerMax: tfPowerMax ?? this.tfPowerMax,
@@ -571,6 +580,140 @@ class EegViewport {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+const String kChannelDisplayFixed = 'Fixed';
+const String kChannelDisplayAuto = 'Auto';
+const String kChannelDisplayLevel = 'Level';
+const List<String> kChannelDisplayModes = [
+  kChannelDisplayFixed,
+  kChannelDisplayAuto,
+  kChannelDisplayLevel,
+];
+
+/// Kind of slowly varying "level" signal, which is shown on an absolute
+/// scale instead of around its mean.
+enum LevelSignalKind { spo2, pulse, position, co2, other }
+
+final RegExp _eegLikeLabel = RegExp(
+  r'\b(EEG|EOG|EMG|ECG|EKG|LOC|ROC|E1|E2|CHIN|LEG|LAT|RAT|TIB)\b|^(F|C|O|P|T|FP|AF|FC|CP|PO|FT|TP)\d',
+);
+final RegExp _levelLabel = RegExp(
+  r'SPO2|SPO₂|SAO2|SAT\b|OXI|OXYG|\bHR\b|\bPR\b|PULSE|HEART ?RATE|POSITION|\bPOS\b|BODY|CO2|LIGHT|\bLUX\b',
+);
+final RegExp _respiratoryLabel = RegExp(
+  r'FLOW|PRESS|PTAF|CANNULA|NASAL|ORAL|THERM|EFFORT|\bTHO|THOR|CHEST|\bABD|ABDO|\bRIP\b|\bSUM\b|SNOR|RESP|PLETH|BREATH',
+);
+
+/// Level-signal kind for a channel label, or null for an ordinary trace.
+LevelSignalKind? levelSignalKind(String label) {
+  final u = label.toUpperCase();
+  if (_eegLikeLabel.hasMatch(u)) return null;
+  if (u.contains('PLETH') || u.contains('WAVE')) return null;
+  if (!_levelLabel.hasMatch(u)) return null;
+  if (RegExp(r'SPO2|SPO₂|SAO2|SAT\b|OXI|OXYG').hasMatch(u)) {
+    return LevelSignalKind.spo2;
+  }
+  if (RegExp(r'\bHR\b|\bPR\b|PULSE|HEART ?RATE').hasMatch(u)) {
+    return LevelSignalKind.pulse;
+  }
+  if (RegExp(r'POSITION|\bPOS\b|BODY').hasMatch(u)) {
+    return LevelSignalKind.position;
+  }
+  if (u.contains('CO2')) return LevelSignalKind.co2;
+  return LevelSignalKind.other;
+}
+
+/// Default display mode for a channel label: SpO2, pulse, position and CO2
+/// on an absolute scale; flow, pressure, effort and snore auto-scaled; EEG,
+/// EOG, EMG and ECG in µV.
+String defaultDisplayModeForLabel(String label) {
+  if (levelSignalKind(label) != null) return kChannelDisplayLevel;
+  final u = label.toUpperCase();
+  if (!_eegLikeLabel.hasMatch(u) && _respiratoryLabel.hasMatch(u)) {
+    return kChannelDisplayAuto;
+  }
+  return kChannelDisplayFixed;
+}
+
+/// Night-level amplitude statistics of a channel (from up to ~200 000
+/// evenly spaced samples).
+class ChannelLevelStats {
+  const ChannelLevelStats({
+    required this.min,
+    required this.p1,
+    required this.p50,
+    required this.p99,
+    required this.max,
+  });
+
+  final double min;
+  final double p1;
+  final double p50;
+  final double p99;
+  final double max;
+
+  static ChannelLevelStats of(List<double> samples) {
+    if (samples.isEmpty) {
+      return const ChannelLevelStats(min: 0, p1: -1, p50: 0, p99: 1, max: 0);
+    }
+    final step = (samples.length / 200000).ceil().clamp(1, 1 << 30);
+    final picked = <double>[
+      for (var i = 0; i < samples.length; i += step)
+        if (samples[i].isFinite) samples[i],
+    ]..sort();
+    if (picked.isEmpty) {
+      return const ChannelLevelStats(min: 0, p1: -1, p50: 0, p99: 1, max: 0);
+    }
+    double at(double q) => picked[((picked.length - 1) * q).round()];
+    return ChannelLevelStats(
+      min: picked.first,
+      p1: at(0.01),
+      p50: at(0.5),
+      p99: at(0.99),
+      max: picked.last,
+    );
+  }
+}
+
+/// Absolute range shown for a level signal at 100 % scale.
+({double lo, double hi}) levelDisplayRange(
+  LevelSignalKind kind,
+  ChannelLevelStats stats,
+) {
+  double floorTo(double v, double step) => (v / step).floorToDouble() * step;
+  double ceilTo(double v, double step) => (v / step).ceilToDouble() * step;
+  switch (kind) {
+    case LevelSignalKind.spo2:
+      if (stats.p99 <= 1.5) {
+        // Saturation stored as a fraction (0–1).
+        return (lo: (floorTo(stats.p1 * 100, 10).clamp(50.0, 90.0)) / 100, hi: 1.0);
+      }
+      // 100 % at the top; the bottom follows the night's lowest values
+      // (ignoring probe-off zeros) so desaturations stay readable.
+      return (lo: floorTo(stats.p1, 10).clamp(50.0, 90.0).toDouble(), hi: 100.0);
+    case LevelSignalKind.pulse:
+      var lo = floorTo(stats.p1, 10);
+      var hi = ceilTo(stats.p99, 10);
+      if (hi - lo < 40) {
+        final mid = (lo + hi) / 2;
+        lo = floorTo(mid - 20, 10);
+        hi = lo + 40;
+      }
+      return (lo: math.max(0.0, lo), hi: hi);
+    case LevelSignalKind.position:
+      final lo = stats.min.floorToDouble();
+      final hi = stats.max.ceilToDouble();
+      return (lo: lo, hi: hi > lo ? hi : lo + 1);
+    case LevelSignalKind.co2:
+      final lo = floorTo(stats.p1, 5);
+      final hi = ceilTo(stats.p99, 5);
+      return (lo: lo, hi: hi - lo < 10 ? lo + 10 : hi);
+    case LevelSignalKind.other:
+      final span = stats.p99 - stats.p1;
+      final pad = span > 0 ? span * 0.05 : 1.0;
+      return (lo: stats.p1 - pad, hi: stats.p99 + pad);
+  }
+}
+
 class ChannelConfig {
   ChannelConfig({
     required this.name,
@@ -592,6 +735,7 @@ class ChannelConfig {
     this.filterNotchEnabled = false,
     this.filterNotchCutoff = 50.0,
     this.filterNotchOrder = 4,
+    this.displayMode = '',
   });
 
   String name;
@@ -613,6 +757,12 @@ class ChannelConfig {
   bool filterNotchEnabled;
   double filterNotchCutoff;
   int filterNotchOrder;
+
+  /// How the trace is scaled: [kChannelDisplayFixed] (µV, EEG style),
+  /// [kChannelDisplayAuto] (night-level amplitude fitted to the row, for
+  /// flow / effort / snore) or [kChannelDisplayLevel] (absolute values on a
+  /// fixed range, for SpO2, pulse, position…). Empty = chosen from the label.
+  String displayMode;
 
   Map<String, dynamic> toJson() {
     return {
@@ -636,6 +786,7 @@ class ChannelConfig {
       'Filter_notch_enabled': filterNotchEnabled,
       'Filter_notch_cutoff': filterNotchCutoff,
       'Filter_notch_order': filterNotchOrder,
+      if (displayMode.isNotEmpty) 'Display_mode': displayMode,
     };
   }
 
@@ -663,6 +814,7 @@ class ChannelConfig {
       filterNotchCutoff:
           (json['Filter_notch_cutoff'] as num?)?.toDouble() ?? 50.0,
       filterNotchOrder: (json['Filter_notch_order'] as num?)?.toInt() ?? 4,
+      displayMode: json['Display_mode'] as String? ?? '',
     );
   }
 
@@ -687,8 +839,15 @@ class ChannelConfig {
       filterNotchEnabled: filterNotchEnabled,
       filterNotchCutoff: filterNotchCutoff,
       filterNotchOrder: filterNotchOrder,
+      displayMode: displayMode,
     );
   }
+
+  /// Display mode actually used (the stored one, or the default for the
+  /// channel's label).
+  String get effectiveDisplayMode => displayMode.isNotEmpty
+      ? displayMode
+      : defaultDisplayModeForLabel(sourceChannel ?? name);
 
   static bool _boolValue(Object? value) {
     if (value is bool) return value;

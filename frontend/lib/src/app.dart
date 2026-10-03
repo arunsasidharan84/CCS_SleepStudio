@@ -17,6 +17,7 @@ import 'analyse_options.dart';
 import 'autoscore_command.dart';
 import 'batch_helpers.dart';
 import 'batch_pipeline.dart';
+import 'overnight_timeline.dart';
 import 'config_dialog.dart';
 import 'feature_config_dialog.dart';
 import 'detection_dialogs.dart';
@@ -871,6 +872,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   void _scoreCurrentEpoch(SleepStage stage) {
     final viewport = _viewport;
     if (viewport == null) return;
+    if (!_canScoreInWindow) {
+      setState(() {
+        _status = 'Stages are assigned in the 30-s scoring window — '
+            'switch the window back to 30 s (toolbar) to score epoch '
+            '${viewport.currentEpoch + 1}';
+      });
+      return;
+    }
 
     final newStages = [
       for (var i = 0; i < viewport.epochCount; i++)
@@ -899,6 +908,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   void _toggleUncertainty() {
     final v = _viewport;
     if (v == null) return;
+    if (!_canScoreInWindow) {
+      setState(() => _status = 'Switch the window back to 30 s to change the scoring of an epoch');
+      return;
+    }
     final epoch = v.currentEpoch;
     final newUncertain = List<bool>.from(v.stagesUncertain);
     newUncertain[epoch] = !newUncertain[epoch];
@@ -962,7 +975,73 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   void _jumpRelative(int delta) {
     final v = _viewport;
     if (v == null) return;
-    _jumpToEpoch(v.currentEpoch + 1 + delta);
+    // Wider review windows page by their own length.
+    final step = _viewWindowSeconds > 30
+        ? math.max(1, (_viewWindowSeconds / v.epochSeconds).round())
+        : 1;
+    _jumpToEpoch(v.currentEpoch + 1 + delta * step);
+  }
+
+  /// Waveform window: 30 s (scoring) or 60 / 120 / 300 s for reviewing
+  /// respiratory and CAP events. Stages can only be assigned in the 30-s
+  /// window; the current epoch stays the centre of the wider windows, so
+  /// returning to 30 s lands on it.
+  double _viewWindowSeconds = 30;
+
+  bool get _canScoreInWindow => _viewWindowSeconds <= 30;
+
+  List<double?>? _spo2TrendCache;
+  LoadedEeg? _spo2TrendFor;
+
+  /// Opens the expanded overnight timeline (hypnogram, one row per event
+  /// type, SpO2 trend); clicking moves the viewer to that epoch.
+  Future<void> _openOvernightTimeline() async {
+    final v = _viewport;
+    if (v == null) return;
+    final eeg = _loadedEeg;
+    if (eeg != null && !identical(eeg, _spo2TrendFor)) {
+      _spo2TrendCache = spo2Trend(eeg);
+      _spo2TrendFor = eeg;
+    }
+    final rows = overnightTimelineRows(
+      v.scoredEvents,
+      hiddenLabels: v.disabledMarkerLabels,
+    );
+    await showDialog<void>(
+      context: context,
+      builder: (_) => OvernightTimelineDialog(
+        title: 'Overnight timeline — ${_activePath == null ? '' : _basename(_activePath!)}',
+        stages: v.stages,
+        epochSeconds: v.epochSeconds,
+        rows: rows,
+        currentEpoch: v.currentEpoch,
+        spo2: eeg == null ? null : _spo2TrendCache,
+        recordingStart: v.recordingStartTime,
+        onJump: (epoch) => _jumpToEpoch(epoch + 1, false),
+      ),
+    );
+    if (mounted) _viewerFocusNode.requestFocus();
+  }
+
+  void _setViewWindow(double seconds) {
+    final v = _viewport;
+    final eeg = _loadedEeg;
+    if (seconds == _viewWindowSeconds) return;
+    _backend.displayWindowSeconds = seconds;
+    setState(() {
+      _viewWindowSeconds = seconds;
+      if (v != null && eeg != null) {
+        _viewport = _backend
+            .rebuildViewportForEpochSync(v, eeg, v.currentEpoch, config: _config)
+            .copyWith(stages: v.stages, stagesUncertain: v.stagesUncertain);
+      }
+      _status = seconds <= 30
+          ? 'Scoring window (30 s) — epoch ${(v?.currentEpoch ?? 0) + 1}'
+          : '${seconds >= 60 ? '${(seconds / 60).toStringAsFixed(seconds % 60 == 0 ? 0 : 1)} min' : '${seconds.round()} s'} '
+                'review window centred on epoch ${(v?.currentEpoch ?? 0) + 1} — '
+                'switch back to 30 s to assign stages';
+    });
+    if (mounted) _viewerFocusNode.requestFocus();
   }
 
   int? _pendingJumpEpoch;
@@ -4116,7 +4195,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       final events = respiratoryEventsFromReport(report);
       final ahi = (report['summary'] as Map?)?['AHI'];
       _replacePsgEvents(
-        isRespiratoryEventDigit,
+        (d) => isRespiratoryEventDigit(d) || isArousalDigit(d),
         events,
         'Respiratory analysis: AHI ${ahi is num ? ahi.toStringAsFixed(1) : '—'}/h, '
         '${events.length} markers added',
@@ -4371,6 +4450,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     };
     final available = {
       if (resp != null) ...[PsgMarkerGroup.respiratory, PsgMarkerGroup.desaturations],
+      if (resp != null &&
+          ((resp['arousals'] as List?)?.any((a) => a is Map && a['source'] != 'manual') ?? false))
+        PsgMarkerGroup.arousals,
       if (plm != null) PsgMarkerGroup.limbMovements,
       if (cap != null) ...[PsgMarkerGroup.capAPhases, PsgMarkerGroup.capSequences],
     };
@@ -4389,7 +4471,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       replace.add(g);
       if (!want) continue;
       final List<ScoredEvent> source = switch (g) {
-        PsgMarkerGroup.respiratory || PsgMarkerGroup.desaturations =>
+        PsgMarkerGroup.respiratory || PsgMarkerGroup.desaturations || PsgMarkerGroup.arousals =>
           resp == null ? const <ScoredEvent>[] : respiratoryEventsFromReport(resp),
         PsgMarkerGroup.limbMovements =>
           plm == null ? const <ScoredEvent>[] : plmEventsFromReport(plm),
@@ -8628,6 +8710,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                             setState(() => _textInputFocused = focused),
                         onPrevious: _previousEpoch,
                         onNext: _nextEpoch,
+                        viewWindowSeconds: _viewWindowSeconds,
+                        onViewWindowChanged: _setViewWindow,
+                        onOpenTimeline: _openOvernightTimeline,
                         onUnscored: _jumpNextUnscored,
                         onUncertain: _jumpNextUncertain,
                         onTransition: _jumpNextTransition,
@@ -8887,9 +8972,15 @@ class _Toolbar extends StatefulWidget {
     this.onTimeUnitChanged,
     this.videoLoaded = false,
     this.videoVisible = false,
+    this.viewWindowSeconds = 30,
+    this.onViewWindowChanged,
+    this.onOpenTimeline,
   });
 
   final EegViewport? viewport;
+  final double viewWindowSeconds;
+  final ValueChanged<double>? onViewWindowChanged;
+  final VoidCallback? onOpenTimeline;
   final VoidCallback? onPreprocess;
   final VoidCallback? onFeatureConfig;
   final void Function(int, [bool]) onJump;
@@ -9172,6 +9263,37 @@ class _ToolbarState extends State<_Toolbar> {
                 enabled: enabled,
                 onPressed: widget.onNext,
               ),
+              const SizedBox(width: 6),
+              Tooltip(
+                message:
+                    'Waveform window. 30 s = scoring epoch (stages can be assigned).\n'
+                    '60 s / 2 min / 5 min = review windows for respiratory and CAP events, '
+                    'centred on the current epoch; ◀ ▶ page by the window.',
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<double>(
+                    value: widget.viewWindowSeconds,
+                    isDense: true,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: widget.viewWindowSeconds > 30
+                          ? Colors.indigo.shade700
+                          : Colors.black87,
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 30.0, child: Text('30 s (score)')),
+                      DropdownMenuItem(value: 60.0, child: Text('60 s')),
+                      DropdownMenuItem(value: 120.0, child: Text('2 min')),
+                      DropdownMenuItem(value: 300.0, child: Text('5 min')),
+                    ],
+                    onChanged: enabled && widget.onViewWindowChanged != null
+                        ? (v) {
+                            if (v != null) widget.onViewWindowChanged!(v);
+                          }
+                        : null,
+                  ),
+                ),
+              ),
               const SizedBox(width: 8),
               const _Divider(),
               _ToolButton(
@@ -9317,6 +9439,12 @@ class _ToolbarState extends State<_Toolbar> {
               ),
               const SizedBox(width: 8),
               const _Divider(),
+              _ToolButton(
+                label: 'night timeline',
+                tooltip: 'Expanded overnight timeline: hypnogram, every event type and SpO2 — click to go to a segment',
+                enabled: enabled && widget.onOpenTimeline != null,
+                onPressed: widget.onOpenTimeline ?? () {},
+              ),
               _ToolButton(
                 label: 'markers (${widget.viewport?.scoredEvents.length ?? 0})',
                 tooltip: 'Open Markers & Annotations Manager [M]',

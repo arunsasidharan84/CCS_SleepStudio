@@ -39,13 +39,27 @@ List<int> buildPublicationSleepReport({
       : regionalRows.first;
   final regions = regionalRows.isEmpty ? <Map<String, String>>[] : regionalRows;
 
+  // Pages are only added for analyses that produced data, so a report of
+  // e.g. a respiratory-only study has no empty EEG pages.
+  bool hasSummary(Map<String, dynamic>? r) =>
+      r != null && ((r['summary'] as Map?)?.isNotEmpty ?? false);
+  final hasResp = hasSummary(respiratoryReport);
+  final hasPlm = hasSummary(plmReport);
+  final hasCap = hasSummary(capReport);
+  includePages = [
+    includePages[0],
+    includePages[1] && _hasMicrostructure(regions),
+    includePages[2] && _hasAperiodic(regions),
+    includePages[3] && _hasComplexity(regions),
+    includePages[4],
+  ];
   final hasCycles =
       includePages[0] && _number(architecture, 'SleepCycle_number') != null;
   final totalPages = includePages.where((b) => b).length +
       (hasCycles ? 1 : 0) +
-      (respiratoryReport != null ? 1 : 0) +
-      (plmReport != null ? 1 : 0) +
-      (capReport != null ? 1 : 0) +
+      (hasResp ? 1 : 0) +
+      (hasPlm ? 1 : 0) +
+      (hasCap ? 1 : 0) +
       (hasNlg ? 1 : 0);
   var pageNum = 1;
 
@@ -66,16 +80,16 @@ List<int> buildPublicationSleepReport({
       _buildSleepCyclePage(viewport, architecture, pageNum++, totalPages),
     );
   }
-  if (respiratoryReport != null) {
+  if (hasResp) {
     report.addPage(
-      _buildRespiratoryPage(viewport, respiratoryReport, pageNum++, totalPages),
+      _buildRespiratoryPage(viewport, respiratoryReport!, pageNum++, totalPages),
     );
   }
-  if (plmReport != null) {
-    report.addPage(_buildPlmPage(viewport, plmReport, pageNum++, totalPages));
+  if (hasPlm) {
+    report.addPage(_buildPlmPage(viewport, plmReport!, pageNum++, totalPages));
   }
-  if (capReport != null) {
-    report.addPage(_buildCapPage(viewport, capReport, pageNum++, totalPages));
+  if (hasCap) {
+    report.addPage(_buildCapPage(viewport, capReport!, pageNum++, totalPages));
   }
   if (hasNlg) {
     report.addPage(_buildNlgPage(viewport, nlgReport, pageNum++, totalPages));
@@ -1602,6 +1616,7 @@ _PdfColor _eventColor(int digit) {
     _PdfColor(1.00, 0.60, 0.00), // 22 CAP A2
     _PdfColor(0.91, 0.12, 0.39), // 23 CAP A3
     _PdfColor(0.47, 0.33, 0.28), // 24 CAP sequence
+    _PdfColor(1.00, 0.70, 0.00), // 25 arousal
   ];
   return colors[digit.clamp(0, colors.length - 1)];
 }
@@ -1931,6 +1946,17 @@ String _buildRespiratoryPage(
       ('Hyp', _eventColor(kDigitHypopnea), _spans(events, (e) => counted(e) && kind(e).contains('hypopnea'))),
       ('RERA', _eventColor(kDigitRera), _spans(events, (e) => counted(e) && kind(e).contains('rera'))),
       ('Desat', _eventColor(kDigitDesaturation), _spans((report['desaturations'] as List?) ?? const [], (e) => e['in_sleep'] != false)),
+      (
+        'Arousal',
+        _eventColor(kDigitArousal),
+        [
+          // automatic (from the analysis) and scored arousal markers
+          ..._spans((report['arousals'] as List?) ?? const [], (e) => e['source'] != 'manual'),
+          for (final e in viewport.scoredEvents)
+            if (e.digit != kDigitArousal && e.label.toLowerCase().contains('arousal'))
+              (e.startSec, math.max(e.endSec, e.startSec + 3)),
+        ],
+      ),
     ],
   );
 
@@ -1949,8 +1975,9 @@ String _buildRespiratoryPage(
   p.rect(x, sy, width, sh, fill: _offWhite, stroke: _lightGray);
   p.line(x, py(90), x + width, py(90), color: _red, width: 0.3);
   p.text('90%', x + width + 3, py(90) - 2, size: 6, color: _red);
-  p.text('SpO2', x - 31, sy + sh - 8, size: 6.5);
-  p.text('${hi.toStringAsFixed(0)}%', x - 31, sy + sh - 17, size: 5.8, color: _slate);
+  p.text('SpO2', x - 31, sy + sh + 3, size: 6.5);
+  p.text('(epoch min)', x - 31, sy + sh - 14, size: 4.8, color: _slate);
+  p.text('${hi.toStringAsFixed(0)}%', x - 31, sy + sh - 6, size: 5.8, color: _slate);
   p.text('${lo.toStringAsFixed(0)}%', x - 31, sy, size: 5.8, color: _slate);
   if (spo2.isNotEmpty) {
     final epochSec = 30.0;

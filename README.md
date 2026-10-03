@@ -10,7 +10,7 @@
   <b>National Institute of Mental Health and Neurosciences (NIMHANS)</b>, Bangalore, India.
 </p>
 
-**Version:** 1.24.1
+**Version:** 1.25.0
 
 Welcome to **CCS Sleep Studio**, a high-performance, cross-platform desktop application designed to assist researchers and clinicians in sleep EEG visualization, event annotation, sleep scoring, automated staging, and advanced EEG analysis.
 
@@ -18,6 +18,22 @@ CCS Sleep Studio is comprised of the following key modules:
 *   **ScoringNidra**: Interactive sleep scoring and event annotation module supporting EDF, Brain Products (.vhdr / .vmrk), Nihon Kohden (.EEG / .LOG), EMBLA (.ebm), Orbit (.orb), and R09 (.r09).
 *   **AutoscoreNidra**: Automated sleep scoring module with both interactive and batch modes.
 *   **AnalyseNidra**: Automated sleep EEG analysis and reporting module operating in both interactive and batch modes.
+
+### 🌟 New in Version 1.25.0
+*   **Restored Sigma band (10–16 Hz) power extraction:** Fixed an issue where the AnalyseNidra feature engine omitted the Sigma band (`*_Sigma_PSD`, `*_Sigma_FOOOF`, `*_Sigma_Irasa`), leaving Sigma columns blank across all sleep stages (N1, N2, N3, REM) in the regional CSV and master compilation sheet.
+*   **Review windows of 60 s, 2 min and 5 min** (toolbar, next to ◀ ▶) for respiratory and CAP events. The window is centred on the current epoch, epoch boundaries are marked and the current epoch is outlined, and ◀ ▶ page by the window. Stages are assigned only in the 30-s scoring window, and switching back to 30 s lands on the epoch that was at the centre.
+*   **Night timeline** (toolbar): an expanded overnight view with the hypnogram (one lane per stage), one row per event type (OA, CA, MA, hypopnea, RERA, desaturation, arousal, LM/PLM, CAP, plus scored annotation labels) and the SpO2 trend. Hovering shows the epoch, time, stage and events; clicking goes to that epoch, and double-clicking goes there and closes the view.
+*   **Respiratory scoring refinements** (checked against the EDF-annotated apneas of four GoaSleep OSA nights):
+    *   Apneas separated by recovery breaths are now scored as separate events, timed by the apnea itself, instead of one long event spanning the whole run of reduced breathing. Median apnea durations now match the annotations (15–25 s, previously 23–38 s).
+    *   The slow decay of AC-coupled pressure sensors after the last breath no longer hides an apnea.
+    *   A flow sensor that fails for a large part of the night is now recognised, and events there are scored on RIPsum/effort as the AASM allows.
+*   **PLM scoring (AASM mode):**
+    *   Leg EMG bursts shorter than 0.5 s are no longer treated as LMs.
+    *   Bilateral LMs are judged by each leg's duration (0.5–10 s), not by their combined span.
+    *   Movements longer than 10 s no longer break a PLM series; under WASM 2016 they still do.
+    *   On the GoaSleep PLM recording, the total number of PLMs now matches the clinical report (494 vs 510; previously 362).
+*   **Automatically detected arousals** are shown as *Arousal (auto)* markers on the waveforms and hypnogram, can be shown or hidden in *Show / Remove … Markers*, and have their own row in the PDF respiratory timeline (with scored arousals).
+*   **PDF report:** pages for analyses without data (spindle/slow-wave, aperiodic, complexity, respiratory, PLM, CAP) are left out instead of being printed empty. The SpO2 axis labels on the respiratory page are fixed.
 
 ### 🌟 New in Version 1.24.1
 *   **Polygraphic channels recorded at their own sampling rates are now shown at the right time.** EDF channels with a different rate from the EEG (e.g. flow and effort at 100 Hz, snore at 500 Hz, SpO2 at 1 Hz) are resampled to the common rate when loaded. Before, they were drawn against the EEG's clock: flow and effort ran at twice the speed and were out of step with the scored events, and 1 Hz SpO2 was not drawn at all.
@@ -130,17 +146,41 @@ We compile two distinct variants of **CCS Sleep Studio** automatically via GitHu
 
 All binaries and installer packages are published directly under the [GitHub Releases Page](https://github.com/arunsasidharan84/CCS-Sleep-Studio/releases).
 
-On Debian, Ubuntu, Linux Mint, and compatible distributions, open the downloaded `.deb` in the software installer or run:
-```sh
-sudo apt install ./CCSSleepStudio-linux-amd64.deb
-```
-The installer registers CCS Sleep Studio in the desktop application menu and adds the `ccs-sleep-studio` command.
+### 🐧 Quick Install for Linux Servers & Multi-User Workstations
 
-On Red Hat Enterprise Linux 9, AlmaLinux 9, Rocky Linux 9, and compatible systems, install the RPM with:
+To install the latest release automatically for all users on enterprise Linux servers (AlmaLinux, RHEL, Rocky, Fedora, Ubuntu, Debian), run this one-line command:
+
 ```sh
+curl -fsSL https://raw.githubusercontent.com/arunsasidharan84/CCS_SleepStudio/main/scripts/install_linux.sh | sudo bash
+```
+
+Or from a local clone:
+```sh
+sudo bash scripts/install_linux.sh
+```
+
+The installer automatically:
+1. Enables EPEL and supplementary multimedia repositories (`mpv-libs`, `gtk3`).
+2. Downloads and installs the latest verified release package (`.rpm` or `.deb`).
+3. Installs an executable desktop launcher into `/etc/skel/Desktop/` so all new users receive it upon account creation.
+4. Propagates the launcher (`ccs-sleep-studio.desktop`) with `755` executable permissions and proper ownership across all existing user desktops (`/home/*/Desktop`, `/serverdata/ccshome/*/Desktop`).
+5. Updates system desktop and icon databases so CCS Sleep Studio immediately appears in the Applications menu under **Science / Medical** for all VNC and desktop sessions.
+
+#### Manual Installation (RPM - AlmaLinux / RHEL / Rocky / Fedora)
+```sh
+# Enable EPEL (required for mpv multimedia libraries)
+sudo dnf install -y epel-release
+sudo dnf config-manager --set-enabled crb   # On AlmaLinux / Rocky / RHEL 9
+
+# Install package
 sudo dnf install ./CCSSleepStudio-linux-x86_64.rpm
 ```
-Each release is smoke-tested inside AlmaLinux 9 before publication.
+
+#### Manual Installation (DEB - Debian / Ubuntu / Mint)
+```sh
+sudo apt update
+sudo apt install ./CCSSleepStudio-linux-amd64.deb
+```
 
 ### For macOS Users
 Because the application is signed ad-hoc, you must clear the macOS Gatekeeper quarantine flag after extracting:

@@ -978,6 +978,7 @@ List<String> buildCapArgs({
 enum PsgMarkerGroup {
   respiratory('Respiratory events (apneas, hypopneas, RERAs)'),
   desaturations('Oxygen desaturations'),
+  arousals('Arousals detected automatically (respiratory analysis)'),
   limbMovements('Leg movements / PLMs'),
   capAPhases('CAP A-phases (A1 / A2 / A3)'),
   capSequences('CAP sequences');
@@ -989,6 +990,7 @@ enum PsgMarkerGroup {
     PsgMarkerGroup.respiratory =>
       isRespiratoryEventDigit(digit) && digit != kDigitDesaturation,
     PsgMarkerGroup.desaturations => digit == kDigitDesaturation,
+    PsgMarkerGroup.arousals => isArousalDigit(digit),
     PsgMarkerGroup.limbMovements => isLimbMovementDigit(digit),
     PsgMarkerGroup.capAPhases => isCapAPhaseDigit(digit),
     PsgMarkerGroup.capSequences => isCapSequenceDigit(digit),

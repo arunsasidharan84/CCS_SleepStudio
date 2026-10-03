@@ -749,4 +749,19 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_sigma_band_presence_in_spectral_features() {
+        let sfreq = 250.0;
+        let signal: Vec<f64> = (0..3750)
+            .map(|index| (2.0 * std::f64::consts::PI * 13.0 * index as f64 / sfreq).sin())
+            .collect();
+        let fooof = fooof_features(&signal, sfreq);
+        assert!(fooof.contains_key("Sigma_FOOOF"), "fooof must contain Sigma_FOOOF");
+        assert!(fooof["Sigma_FOOOF"].is_finite());
+
+        let irasa = irasa_features(&signal, sfreq);
+        assert!(irasa.contains_key("Sigma_Irasa"), "irasa must contain Sigma_Irasa");
+        assert!(irasa["Sigma_Irasa"].is_finite());
+    }
 }

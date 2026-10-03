@@ -21,6 +21,11 @@ const int kDigitCapA2 = 22;
 const int kDigitCapA3 = 23;
 const int kDigitCapSequence = 24;
 
+/// Arousals found by the automatic EEG arousal detector of the respiratory
+/// analysis (manually scored arousals keep their own markers).
+const int kDigitArousal = 25;
+bool isArousalDigit(int digit) => digit == kDigitArousal;
+
 bool isRespiratoryEventDigit(int digit) =>
     digit >= kDigitObstructiveApnea && digit <= kDigitDesaturation;
 bool isLimbMovementDigit(int digit) =>
@@ -44,6 +49,7 @@ const Map<int, String> kPsgEventNames = {
   kDigitCapA2: 'CAP A2',
   kDigitCapA3: 'CAP A3',
   kDigitCapSequence: 'CAP Sequence',
+  kDigitArousal: 'Arousal (auto)',
 };
 
 String psgSidecarBase(String recordingPath) {
@@ -80,6 +86,7 @@ double _num(dynamic v, [double fallback = double.nan]) =>
 List<ScoredEvent> respiratoryEventsFromReport(
   Map<String, dynamic> report, {
   bool includeDesaturations = true,
+  bool includeArousals = true,
 }) {
   final out = <ScoredEvent>[];
   for (final e in (report['events'] as List? ?? const [])) {
@@ -106,6 +113,23 @@ List<ScoredEvent> respiratoryEventsFromReport(
         endSec: _num(e['end'], 0),
       ),
     );
+  }
+  if (includeArousals) {
+    // Only automatically detected arousals are listed in the report;
+    // manually scored ones are already markers of the recording.
+    for (final a in (report['arousals'] as List? ?? const [])) {
+      if (a is! Map || a['source'] == 'manual') continue;
+      out.add(
+        ScoredEvent(
+          digit: kDigitArousal,
+          key: 'F$kDigitArousal',
+          label: kPsgEventNames[kDigitArousal]!,
+          type: 'Arousal',
+          startSec: _num(a['start'], 0),
+          endSec: _num(a['end'], 0),
+        ),
+      );
+    }
   }
   if (includeDesaturations) {
     for (final d in (report['desaturations'] as List? ?? const [])) {

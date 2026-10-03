@@ -30,6 +30,7 @@ Color _eventColor(int digit) {
     Color(0xFFFF9800), // 22 CAP A2
     Color(0xFFE91E63), // 23 CAP A3
     Color(0xFF795548), // 24 CAP sequence
+    Color(0xFFFFB300), // 25 Arousal (auto)
   ];
   return colors[digit.clamp(0, colors.length - 1)];
 }

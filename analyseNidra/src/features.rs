@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 pub const BANDS: [(f64, f64, &str); 7] = [
     (1.0, 4.0, "Delta"),
     (4.0, 8.0, "Theta"),
-    (6.0, 10.0, "ThetaAlpha"),
+    (10.0, 16.0, "Sigma"),
     (8.0, 12.0, "Alpha"),
     (12.0, 18.0, "Beta1"),
     (18.0, 30.0, "Beta2"),
@@ -164,5 +164,17 @@ mod tests {
             .collect();
         let powers = bandpowers(&signal, sfreq);
         assert!(powers["Alpha_PSD"] > powers["Delta_PSD"]);
+    }
+
+    #[test]
+    fn sine_power_peaks_in_sigma() {
+        let sfreq = 250.0;
+        let signal: Vec<f64> = (0..3750)
+            .map(|index| (2.0 * std::f64::consts::PI * 13.0 * index as f64 / sfreq).sin())
+            .collect();
+        let powers = bandpowers(&signal, sfreq);
+        assert!(powers.contains_key("Sigma_PSD"), "powers must contain Sigma_PSD");
+        assert!(powers["Sigma_PSD"] > powers["Delta_PSD"]);
+        assert!(powers["Sigma_PSD"] > powers["Beta2_PSD"]);
     }
 }

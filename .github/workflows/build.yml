@@ -41,6 +41,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -49,18 +51,31 @@ jobs:
             bridge
             analyseNidra
 
-      - name: Build Rust backend (macOS dylib)
-        run: cargo build --release
+      - name: Build Rust backend (Universal macOS dylib)
+        run: |
+          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+          mkdir -p target/release
+          lipo -create -output target/release/librust_sleep_eeg.dylib \
+            target/x86_64-apple-darwin/release/librust_sleep_eeg.dylib \
+            target/aarch64-apple-darwin/release/librust_sleep_eeg.dylib
         working-directory: bridge
 
-      - name: Build AnalyseNidra CLI (macOS)
-        run: cargo build --release
+      - name: Build AnalyseNidra CLI (Universal macOS)
+        run: |
+          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+          mkdir -p target/release
+          lipo -create -output target/release/analyse-nidra \
+            target/x86_64-apple-darwin/release/analyse-nidra \
+            target/aarch64-apple-darwin/release/analyse-nidra
         working-directory: analyseNidra
 
       - name: Copy dylib into macOS runner bundle
         run: |
           mkdir -p frontend/macos/Runner
           cp bridge/target/release/librust_sleep_eeg.dylib frontend/macos/Runner/
+          codesign -s - -f frontend/macos/Runner/librust_sleep_eeg.dylib
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2

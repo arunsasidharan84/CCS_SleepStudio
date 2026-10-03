@@ -1222,6 +1222,27 @@ class EegBackend {
     }
   }
 
+  /// Length of the waveform window. 30 = the scoring epoch with 5 s of
+  /// context on each side; 60 / 120 / 300 = a wider window centred on the
+  /// current epoch, for reviewing respiratory and CAP events (scoring stays
+  /// tied to the 30-s epoch).
+  double displayWindowSeconds = 30;
+
+  ({double start, double duration}) _displayWindow(
+    double epochStart,
+    double totalSeconds,
+  ) {
+    final w = displayWindowSeconds;
+    if (w <= 30) return (start: epochStart - 5.0, duration: 40.0);
+    var start = epochStart + 15.0 - w / 2;
+    if (totalSeconds > w) {
+      start = start.clamp(0.0, totalSeconds - w).toDouble();
+    } else {
+      start = 0.0;
+    }
+    return (start: start, duration: w);
+  }
+
   final _displayPointCache = <String, List<Float32List>>{};
   final _displayPointCacheOrder = <String>[];
   final _tfCache = <String, List<List<double>>>{};
@@ -1762,9 +1783,10 @@ class EegBackend {
     final safeEpoch = currentEpoch.clamp(0, epochCount - 1);
     final startSeconds = safeEpoch * epochSeconds.toDouble();
 
-    // 5s contextual shading on both sides (40s total)
-    final displayStartSec = startSeconds - 5.0;
-    const displayDurationSec = 40.0;
+    // 30-s window: the epoch with 5 s of context on both sides (40 s total)
+    final win = _displayWindow(startSeconds, eeg.durationSeconds);
+    final displayStartSec = win.start;
+    final displayDurationSec = win.duration;
     final visibleChannels = _visibleChannelProjection(eeg, cfg);
 
     // EEG display points (normalised 0..1 across the 40s window)
@@ -1923,8 +1945,9 @@ class EegBackend {
     final safeEpoch = epoch.clamp(0, old.epochCount - 1);
     final startSeconds = safeEpoch * epochSeconds.toDouble();
 
-    final displayStartSec = startSeconds - 5.0;
-    const displayDurationSec = 40.0;
+    final win = _displayWindow(startSeconds, eeg.durationSeconds);
+    final displayStartSec = win.start;
+    final displayDurationSec = win.duration;
     final visibleChannels = _visibleChannelProjection(eeg, cfg);
 
     final points = _displayPointsForEpoch(
@@ -2062,8 +2085,9 @@ class EegBackend {
     final safeEpoch = epoch.clamp(0, old.epochCount - 1);
     final startSeconds = safeEpoch * epochSeconds.toDouble();
 
-    final displayStartSec = startSeconds - 5.0;
-    const displayDurationSec = 40.0;
+    final win = _displayWindow(startSeconds, eeg.durationSeconds);
+    final displayStartSec = win.start;
+    final displayDurationSec = win.duration;
     final visibleChannels = _visibleChannelProjection(eeg, cfg);
 
     final points = _displayPointsForEpoch(

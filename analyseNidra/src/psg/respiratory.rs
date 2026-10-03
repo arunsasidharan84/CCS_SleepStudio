@@ -134,10 +134,12 @@ fn breath_cycles(x: &[f64], fs: f64, hyst: f64) -> Vec<Cycle> {
     let quiet_min = (2.0 * fs) as usize;
     let amp = |a: usize, b: usize| {
         let seg = &x[a..b];
-        // Long no-breath segments: robust excursion (2nd-98th percentile) so
-        // filter transients at the edges do not mask an apnea.
+        // Long no-breath segments: median excursion of 4-s windows after
+        // removing each window's linear trend, so the slow decay of an
+        // AC-coupled sensor (or of the band-pass) after the last breath does
+        // not count as breathing and mask an apnea.
         if (b - a) as f64 > 5.0 * fs {
-            return percentile(seg, 98.0) - percentile(seg, 2.0);
+            return detrended_window_excursion(seg, fs);
         }
         let mx = seg.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let mn = seg.iter().copied().fold(f64::INFINITY, f64::min);
@@ -147,6 +149,7 @@ fn breath_cycles(x: &[f64], fs: f64, hyst: f64) -> Vec<Cycle> {
     for (a, b) in bounds {
         let last = (a..b).rev().find(|&i| x[i].abs() >= h(i)).map(|i| i + 1 - a).unwrap_or(0);
         if last > 0 && b - (a + last) >= quiet_min {
+            // trailing pause after the last breath
             let mut cut = a + last;
             let sign = x[cut - 1].signum();
             while cut < b - quiet_min && x[cut].signum() == sign {
@@ -154,11 +157,42 @@ fn breath_cycles(x: &[f64], fs: f64, hyst: f64) -> Vec<Cycle> {
             }
             out.push(Cycle { a, b: cut, amp: amp(a, cut) });
             out.push(Cycle { a: cut, b, amp: amp(cut, b) });
-        } else {
-            out.push(Cycle { a, b, amp: amp(a, b) });
+            continue;
         }
+        out.push(Cycle { a, b, amp: amp(a, b) });
     }
     out
+}
+
+/// Median peak-to-peak excursion of 4-s windows (1-s step) after removing
+/// each window's least-squares linear trend.
+fn detrended_window_excursion(seg: &[f64], fs: f64) -> f64 {
+    let w = ((4.0 * fs) as usize).max(4);
+    if seg.len() < w {
+        let mx = seg.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let mn = seg.iter().copied().fold(f64::INFINITY, f64::min);
+        return mx - mn;
+    }
+    let step = (fs as usize).max(1);
+    let n = w as f64;
+    let tm = (n - 1.0) / 2.0;
+    let stt: f64 = (0..w).map(|i| (i as f64 - tm).powi(2)).sum();
+    let mut ranges = Vec::new();
+    let mut s0 = 0;
+    while s0 + w <= seg.len() {
+        let x = &seg[s0..s0 + w];
+        let xm = x.iter().sum::<f64>() / n;
+        let slope = x.iter().enumerate().map(|(i, v)| (i as f64 - tm) * (v - xm)).sum::<f64>() / stt;
+        let (mut mx, mut mn) = (f64::NEG_INFINITY, f64::INFINITY);
+        for (i, v) in x.iter().enumerate() {
+            let r = v - xm - slope * (i as f64 - tm);
+            mx = mx.max(r);
+            mn = mn.min(r);
+        }
+        ranges.push(mx - mn);
+        s0 += step;
+    }
+    median(&ranges)
 }
 
 /// Pre-event baseline for each cycle: 75th percentile of breath amplitudes
@@ -272,7 +306,11 @@ fn analyse_flow(signal: &[f64], fs: f64) -> FlowAnalysis {
                 percentile(&abs, 90.0)
             })
             .collect();
-        let ref_amp = percentile(&amps, 75.0);
+        // Reference = the night's well-breathing minutes (90th percentile),
+        // so a sensor that failed for a large part of the night is still
+        // recognised (with the 75th percentile the failed minutes became
+        // the reference).
+        let ref_amp = percentile(&amps, 90.0);
         if ref_amp.is_finite() && ref_amp > 0.0 {
             // Require two consecutive low windows so that a single long
             // central apnea is never mistaken for sensor failure.
@@ -304,6 +342,8 @@ struct Reduction {
     apnea_run: f64,
     apnea_start: f64,
     apnea_end: f64,
+    /// every apnea-level run of >= 10 s (start, end) — each is its own apnea
+    apnea_runs: Vec<(f64, f64)>,
 }
 
 /// Runs of consecutive breaths below `thr` lasting >= 10 s; within each the
@@ -327,6 +367,7 @@ fn reductions(fa: &FlowAnalysis, thr: f64, apnea_thr: f64) -> Vec<Reduction> {
             if end - start >= 10.0 {
                 let mut best = 0.0;
                 let (mut bs, mut be) = (start, start);
+                let mut runs = Vec::new();
                 let mut k = i;
                 while k <= j {
                     if r[k] <= apnea_thr {
@@ -345,6 +386,9 @@ fn reductions(fa: &FlowAnalysis, thr: f64, apnea_thr: f64) -> Vec<Reduction> {
                             }
                         }
                         let d = sec(c[m].b) - sec(c[k].a);
+                        if d >= 10.0 {
+                            runs.push((sec(c[k].a), sec(c[m].b)));
+                        }
                         if d > best {
                             best = d;
                             bs = sec(c[k].a);
@@ -363,6 +407,7 @@ fn reductions(fa: &FlowAnalysis, thr: f64, apnea_thr: f64) -> Vec<Reduction> {
                     apnea_run: best,
                     apnea_start: bs,
                     apnea_end: be,
+                    apnea_runs: runs,
                 });
             }
             i = j + 1;
@@ -958,7 +1003,25 @@ pub fn analyse(edf: &Path, opts: &RespOptions) -> Result<RespReport> {
 
     let mut events: Vec<RespEvent> = Vec::new();
     // Apneas
-    let apnea_cands = build_cands(&fa_apnea, &red_apnea, fa_h, &red_hyp, true);
+    // AASM: the apnea is the period of >= 90 % drop. A run of reduced breaths
+    // can hold several apneas separated by recovery breaths; each is scored
+    // as its own event, timed from the end of the last breath before it to
+    // the first breath after it.
+    let apnea_cands: Vec<(Reduction, usize)> = build_cands(&fa_apnea, &red_apnea, fa_h, &red_hyp, true)
+        .into_iter()
+        .flat_map(|(r, k)| {
+            let runs = if r.apnea_runs.is_empty() { vec![(r.apnea_start, r.apnea_end)] } else { r.apnea_runs.clone() };
+            runs.into_iter().map(move |(a, b)| {
+                let mut one = r.clone();
+                one.start = a;
+                one.end = b;
+                one.apnea_start = a;
+                one.apnea_end = b;
+                one.apnea_run = b - a;
+                (one, k)
+            })
+        })
+        .collect();
     for (r, k) in apnea_cands.iter() {
         let k = *k;
         let src_fa: &FlowAnalysis = match k { 0 => &fa_apnea, 1 => fa_h, _ => effort_alt.unwrap_or(&fa_apnea) };
@@ -1573,6 +1636,49 @@ mod tests {
         assert_eq!(apneas.len(), 2, "{red:?}");
         assert!((apneas[0].start - 300.0).abs() < 5.0);
         assert!((apneas[1].end - 625.0).abs() < 5.0);
+    }
+
+    #[test]
+    fn apneas_split_by_a_recovery_breath_are_separate_runs() {
+        let fs = 25.0;
+        // 16-s apnea, one 4-s breath at half amplitude, 16-s apnea
+        let x: Vec<f64> = (0..(600.0 * fs) as usize)
+            .map(|i| {
+                let t = i as f64 / fs;
+                let amp = if (300.0..316.0).contains(&t) || (320.0..336.0).contains(&t) {
+                    0.02
+                } else if (316.0..320.0).contains(&t) {
+                    0.5
+                } else {
+                    1.0
+                };
+                amp * (2.0 * std::f64::consts::PI * 0.25 * t).sin()
+            })
+            .collect();
+        let fa = analyse_flow(&x, fs);
+        let red = reductions(&fa, 0.7, 0.1);
+        let runs: Vec<(f64, f64)> = red.iter().flat_map(|r| r.apnea_runs.clone()).collect();
+        assert_eq!(runs.len(), 2, "{red:?}");
+    }
+
+    #[test]
+    fn decaying_tail_of_ac_coupled_sensor_is_not_breathing() {
+        let fs = 25.0;
+        // breaths, then after the last breath a slow exponential decay
+        // (AC-coupled pressure transducer) and a flat line for 20 s.
+        let x: Vec<f64> = (0..(600.0 * fs) as usize)
+            .map(|i| {
+                let t = i as f64 / fs;
+                if (300.0..320.0).contains(&t) {
+                    0.4 * (-(t - 300.0) / 2.5).exp()
+                } else {
+                    (2.0 * std::f64::consts::PI * 0.25 * t).sin()
+                }
+            })
+            .collect();
+        let fa = analyse_flow(&x, fs);
+        let red = reductions(&fa, 0.7, 0.1);
+        assert!(red.iter().any(|r| r.apnea_run >= 10.0), "{red:?}");
     }
 
     #[test]

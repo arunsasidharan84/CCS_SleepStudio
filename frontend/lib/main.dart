@@ -11,7 +11,11 @@ void main() {
   runZonedGuarded(
     () {
       WidgetsFlutterBinding.ensureInitialized();
-      MediaKit.ensureInitialized();
+      try {
+        MediaKit.ensureInitialized();
+      } catch (e) {
+        debugPrint('MediaKit initialization note (video player): $e');
+      }
       FilePicker.skipEntitlementsChecks();
       FlutterError.onError = FlutterError.presentError;
       PlatformDispatcher.instance.onError = (error, stack) {

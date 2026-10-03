@@ -6,7 +6,9 @@
 //! * LMs on both legs whose onsets are < 5 s apart count as one movement.
 //! * LMs within 0.5 s before/after an apnea, hypopnea or RERA are excluded.
 //! * PLM series: >= 4 consecutive LMs with onset-to-onset intervals of
-//!   5-90 s (an LM < 5 s after the previous one is skipped, not a break).
+//!   5-90 s (an LM < 5 s after the previous one is skipped, not a break;
+//!   movements > 10 s are not LMs and do not break a series).
+//! * EMG bursts < 0.5 s are not LMs (both standards).
 //!
 //! **WASM/IRLSSG 2016 (`standard = "wasm"`, Ferri et al., Sleep Med 2016)**
 //! * Bilateral LMs: monolateral LMs overlapping or separated by < 0.5 s;
@@ -260,8 +262,12 @@ pub fn analyse(edf: &Path, opts: &PlmOptions) -> Result<PlmReport> {
                     s.label
                 ));
             }
+            // EMG bursts shorter than 0.5 s are not LMs (AASM and WASM), so
+            // they neither join nor break bilateral LMs and PLM series.
             for (a, b, p) in lms {
-                mono.push((a, b, p, side));
+                if b - a >= 0.5 {
+                    mono.push((a, b, p, side));
+                }
             }
         }
     }
@@ -335,9 +341,12 @@ pub fn analyse(edf: &Path, opts: &PlmOptions) -> Result<PlmReport> {
             // monolateral components must each be 0.5-10 s
             let comp_ok = g.parts.iter().all(|(a, b)| (0.5..=10.0).contains(&(b - a)));
             if bilateral && !wasm {
-                if dur < 0.5 || dur > 10.0 {
+                // AASM: the 0.5-10 s criterion applies to each leg's LM; LMs
+                // on the two legs with onsets < 5 s apart count as one LM,
+                // whatever the combined span.
+                if !comp_ok {
                     clm = false;
-                    note = "duration outside 0.5-10 s".into();
+                    note = "a component outside 0.5-10 s".into();
                 }
             } else if bilateral {
                 if dur > 15.0 {
@@ -385,9 +394,10 @@ pub fn analyse(edf: &Path, opts: &PlmOptions) -> Result<PlmReport> {
         })
         .collect();
 
-    // PLM series over CLMs. Non-CLM LMs >= 0.5 s interrupt a series (WASM:
-    // an LM that is not a CLM breaks periodicity; short (< 0.5 s) activity
-    // does not).
+    // PLM series over CLMs. WASM 2016: an LM that is not a CLM (e.g. > 10 s)
+    // breaks the series. The AASM manual has no such rule, so in AASM mode
+    // long movements are simply not counted (this also matches the totals of
+    // the clinical scoring software on the GoaSleep PLM recording).
     let mut series: Vec<(f64, f64, usize)> = Vec::new();
     {
         let mut prev_clm: Option<usize> = None;
@@ -405,7 +415,7 @@ pub fn analyse(edf: &Path, opts: &PlmOptions) -> Result<PlmReport> {
         };
         for k in 0..movements.len() {
             if !movements[k].clm {
-                if movements[k].duration >= 0.5 {
+                if wasm && movements[k].duration >= 0.5 {
                     flush(&mut run, &mut movements, &mut series);
                     prev_clm = None;
                 }

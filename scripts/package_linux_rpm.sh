@@ -47,12 +47,14 @@ cat > "$source_dir/ccs-sleep-studio.desktop" <<EOF
 Type=Application
 Name=$display_name
 Comment=$description
-Exec=/usr/bin/ccs-sleep-studio
+Exec=/usr/bin/ccs-sleep-studio %F
 Icon=ccs-sleep-studio
 Terminal=false
-Categories=Science;Education;MedicalSoftware;
+Categories=Science;MedicalSoftware;Education;Utility;DataVisualization;
+Keywords=sleep;eeg;psg;polysomnography;scoring;hypnogram;neuroscience;
 StartupNotify=true
 StartupWMClass=CCSSleepStudio
+MimeType=application/octet-stream;application/x-edf;
 EOF
 
 cat > "$top_dir/SPECS/ccs-sleep-studio.spec" <<EOF
@@ -64,7 +66,8 @@ Summary:        $description
 License:        Proprietary
 URL:            https://github.com/arunsasidharan84/CCS-Sleep-Studio
 BuildArch:      x86_64
-Requires:       gtk3, glibc, libstdc++, xz-libs, mpv-libs
+Requires:       gtk3, glibc, libstdc++, xz-libs
+Recommends:     mpv-libs
 Conflicts:      $conflicts
 AutoReqProv:    no
 
@@ -81,20 +84,61 @@ mkdir -p \
   %{buildroot}/usr/lib/ccs-sleep-studio \
   %{buildroot}/usr/bin \
   %{buildroot}/usr/share/applications \
+  %{buildroot}/usr/share/pixmaps \
   %{buildroot}/usr/share/icons/hicolor/256x256/apps
 cp -a %{_sourcedir}/bundle/. %{buildroot}/usr/lib/ccs-sleep-studio/
 ln -s ../lib/ccs-sleep-studio/CCSSleepStudio %{buildroot}/usr/bin/ccs-sleep-studio
 install -m 0644 %{_sourcedir}/ccs-sleep-studio.desktop \
   %{buildroot}/usr/share/applications/ccs-sleep-studio.desktop
 install -m 0644 %{_sourcedir}/ccs-sleep-studio.png \
+  %{buildroot}/usr/share/pixmaps/ccs-sleep-studio.png
+install -m 0644 %{_sourcedir}/ccs-sleep-studio.png \
   %{buildroot}/usr/share/icons/hicolor/256x256/apps/ccs-sleep-studio.png
 
 %post
+# 1. libmpv compatibility symlink
 for dir in /usr/lib64 /usr/lib; do
   if [ ! -e "\$dir/libmpv.so.1" ] && [ -e "\$dir/libmpv.so.2" ]; then
     ln -sf libmpv.so.2 "\$dir/libmpv.so.1" || true
   fi
 done
+
+# 2. Update desktop database and icon caches
+if which update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database /usr/share/applications 2>/dev/null || true
+fi
+if which gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+fi
+
+# 3. Multi-user desktop launcher setup
+if [ -d /etc/skel ]; then
+  mkdir -p /etc/skel/Desktop
+  cp -f /usr/share/applications/ccs-sleep-studio.desktop /etc/skel/Desktop/
+  chmod 755 /etc/skel/Desktop/ccs-sleep-studio.desktop 2>/dev/null || true
+fi
+
+launcher=/usr/share/applications/ccs-sleep-studio.desktop
+if [ -f "\$launcher" ]; then
+  while IFS=: read -r _ _ uid gid _ homedir _; do
+    if [ "\$uid" -ge 1000 ] 2>/dev/null && [ -d "\$homedir/Desktop" ]; then
+      cp -f "\$launcher" "\$homedir/Desktop/ccs-sleep-studio.desktop" 2>/dev/null || true
+      chmod 755 "\$homedir/Desktop/ccs-sleep-studio.desktop" 2>/dev/null || true
+      chown "\$uid:\$gid" "\$homedir/Desktop/ccs-sleep-studio.desktop" 2>/dev/null || true
+    fi
+  done < <(getent passwd 2>/dev/null || cat /etc/passwd)
+
+  for udir in /home/* /serverdata/ccshome/* /export/home/* /data/home/*; do
+    if [ -d "\$udir/Desktop" ]; then
+      cp -f "\$launcher" "\$udir/Desktop/ccs-sleep-studio.desktop" 2>/dev/null || true
+      chmod 755 "\$udir/Desktop/ccs-sleep-studio.desktop" 2>/dev/null || true
+      owner_id=\$(stat -c '%u:%g' "\$udir" 2>/dev/null || true)
+      if [ -n "\$owner_id" ]; then
+        chown "\$owner_id" "\$udir/Desktop/ccs-sleep-studio.desktop" 2>/dev/null || true
+      fi
+    fi
+  done
+fi
 
 %postun
 if [ "\$1" -eq 0 ]; then
@@ -103,12 +147,20 @@ if [ "\$1" -eq 0 ]; then
       rm -f "\$dir/libmpv.so.1" || true
     fi
   done
+  rm -f /etc/skel/Desktop/ccs-sleep-studio.desktop
+  if which update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+  fi
+  if which gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+  fi
 fi
 
 %files
 /usr/bin/ccs-sleep-studio
 /usr/lib/ccs-sleep-studio
 /usr/share/applications/ccs-sleep-studio.desktop
+/usr/share/pixmaps/ccs-sleep-studio.png
 /usr/share/icons/hicolor/256x256/apps/ccs-sleep-studio.png
 
 %changelog

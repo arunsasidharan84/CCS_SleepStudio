@@ -2072,32 +2072,47 @@ class SelectionOverlayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // The viewport is 40s total (5s before, 30s epoch, 5s after)
-    const displayTotalSec = 40.0;
-    const paddingSec = 5.0;
-
+    // 30-s mode: 40 s shown (5 s before, the 30-s epoch, 5 s after) with
+    // the context shaded. Wider review windows (60 / 120 / 300 s) mark the
+    // epoch boundaries instead and outline the current (scored) epoch.
+    final displayTotalSec = viewport.visibleDurationSeconds > 0
+        ? viewport.visibleDurationSeconds
+        : 40.0;
     final drawWidth = size.width - leftPad;
-    final leftFrac = paddingSec / displayTotalSec;
-    final rightFrac = 1.0 - leftFrac;
+    final epochLen = viewport.epochSeconds.toDouble();
+    final epochStart = viewport.currentEpoch * epochLen;
+    double xAt(double sec) =>
+        leftPad + ((sec - viewport.visibleStartSeconds) / displayTotalSec) * drawWidth;
 
-    final paint = Paint()..color = Colors.black.withOpacity(0.30);
-
-    // Left shaded region
-    canvas.drawRect(
-      Rect.fromLTRB(leftPad, 0, leftPad + drawWidth * leftFrac, size.height),
-      paint,
-    );
-
-    // Right shaded region
-    canvas.drawRect(
-      Rect.fromLTRB(
-        leftPad + drawWidth * rightFrac,
-        0,
-        size.width,
-        size.height,
-      ),
-      paint,
-    );
+    if (displayTotalSec <= 40.5) {
+      final paint = Paint()..color = Colors.black.withOpacity(0.30);
+      final l = xAt(epochStart).clamp(leftPad, size.width).toDouble();
+      final r = xAt(epochStart + epochLen).clamp(leftPad, size.width).toDouble();
+      canvas.drawRect(Rect.fromLTRB(leftPad, 0, l, size.height), paint);
+      canvas.drawRect(Rect.fromLTRB(r, 0, size.width, size.height), paint);
+    } else {
+      final grid = Paint()
+        ..color = Colors.black.withOpacity(0.18)
+        ..strokeWidth = 0.8;
+      final first = (viewport.visibleStartSeconds / epochLen).ceil();
+      for (var k = first; k * epochLen <= viewport.visibleStartSeconds + displayTotalSec; k++) {
+        final x = xAt(k * epochLen);
+        canvas.drawLine(Offset(x, 0), Offset(x, size.height), grid);
+      }
+      final l = xAt(epochStart);
+      final r = xAt(epochStart + epochLen);
+      canvas.drawRect(
+        Rect.fromLTRB(l, 0, r, size.height),
+        Paint()..color = Colors.indigo.withOpacity(0.05),
+      );
+      canvas.drawRect(
+        Rect.fromLTRB(l, 0, r, size.height),
+        Paint()
+          ..color = Colors.indigo.withOpacity(0.55)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2,
+      );
+    }
 
     final visibleStart = viewport.visibleStartSeconds;
     final visibleEnd = visibleStart + displayTotalSec;
@@ -2381,6 +2396,9 @@ class SelectionOverlayPainter extends CustomPainter {
   @override
   bool shouldRepaint(SelectionOverlayPainter old) =>
       old.leftPad != leftPad ||
+      old.viewport.currentEpoch != viewport.currentEpoch ||
+      old.viewport.visibleStartSeconds != viewport.visibleStartSeconds ||
+      old.viewport.visibleDurationSeconds != viewport.visibleDurationSeconds ||
       old.viewport.selectionStartSec != viewport.selectionStartSec ||
       old.viewport.selectionEndSec != viewport.selectionEndSec ||
       old.viewport.selectionChannel != viewport.selectionChannel ||
@@ -2424,6 +2442,14 @@ Color _eventColor(int digit) {
     Color.fromARGB(120, 255, 152, 0), // 22 CAP A2
     Color.fromARGB(120, 233, 30, 99), // 23 CAP A3
     Color.fromARGB(60, 121, 85, 72), // 24 CAP sequence
+    Color.fromARGB(120, 255, 193, 7), // 25 arousal (auto)
   ];
   return colors[digit.clamp(0, colors.length - 1)];
 }
+
+/// Hypnogram colour of a stage (shared with the overnight timeline).
+Color hypnogramStageColor(SleepStage s) => _stageColor(s);
+
+/// Opaque marker colour for an event digit (shared with the overnight
+/// timeline).
+Color markerColorForDigit(int digit) => _eventColor(digit).withOpacity(1.0);

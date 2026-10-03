@@ -23,6 +23,8 @@ __pycache__/
 /bridge/target/
 /analyseNidra/target/
 /autoscore-backend.spec
+frontend/macos/Runner/*.dylib
+*.dylib
 
 # Temporary outputs/JSONs
 *.json

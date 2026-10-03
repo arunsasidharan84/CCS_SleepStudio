@@ -76,3 +76,4 @@ backend/vendor/soundfile.py
 backend/vendor/_soundfile*
 backend/vendor/pyqtgraph/
 backend/vendor/pyqtgraph-*/
+release_check.log

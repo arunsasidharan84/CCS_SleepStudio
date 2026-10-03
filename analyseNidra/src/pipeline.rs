@@ -1,11 +1,13 @@
 use crate::edf::{EdfData, read_selected};
-use crate::features::{acw50, bandpowers};
+use crate::config::FeatureConfig;
+use crate::features::{acw50, bandpowers_with_bands};
 use crate::hypnogram::{
-    ArchitectureWindow, SleepArchitecture, Stage, read_sleepgpt, sleep_architecture, upsample,
+    ArchitectureWindow, SleepArchitecture, Stage, read_sleepgpt,
+    sleep_architecture_with_epoch_sec, upsample_with_epoch_sec,
 };
 use crate::nonlinear;
 use crate::signal::{preprocess_mne_250hz, rereference, resample_channels_mne};
-use crate::spectral::{fooof_features, irasa_features};
+use crate::spectral::{fooof_features_with_bands, irasa_features_with_bands};
 use anyhow::{Context, Result, bail};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -33,6 +35,26 @@ pub fn load(
     lights_off_seconds: Option<f64>,
     lights_on_seconds: Option<f64>,
 ) -> Result<LoadedRecording> {
+    load_with_epoch(
+        edf_path,
+        scoring_path,
+        channels,
+        references,
+        lights_off_seconds,
+        lights_on_seconds,
+        30.0,
+    )
+}
+
+pub fn load_with_epoch(
+    edf_path: &Path,
+    scoring_path: &Path,
+    channels: &[String],
+    references: &[String],
+    lights_off_seconds: Option<f64>,
+    lights_on_seconds: Option<f64>,
+    epoch_length_sec: f64,
+) -> Result<LoadedRecording> {
     if channels.is_empty() {
         bail!("at least one EEG channel is required");
     }
@@ -52,13 +74,13 @@ pub fn load(
         edf.sfreq = crate::TARGET_SFREQ;
     }
     let stages = read_sleepgpt(scoring_path)?;
-    let sample_stages = upsample(&stages, edf.sfreq, edf.data_uv[0].len());
+    let sample_stages = upsample_with_epoch_sec(&stages, edf.sfreq, edf.data_uv[0].len(), epoch_length_sec);
     let window = ArchitectureWindow::from_seconds(
         edf.duration_seconds,
         lights_off_seconds,
         lights_on_seconds,
     );
-    let mut architecture = sleep_architecture(&stages, window);
+    let mut architecture = sleep_architecture_with_epoch_sec(&stages, window, epoch_length_sec);
     if let Some(stage_analysis) = crate::accs::analyse(&stages) {
         // Un-prefixed ACCS names (N1_duration, N2_percentage, ...) must not
         // overwrite the standard architecture values of the same name.
@@ -121,7 +143,14 @@ fn average_feature_maps(rows: &[BTreeMap<String, f64>]) -> BTreeMap<String, f64>
 }
 
 pub fn compute_core_stage_features(recording: &LoadedRecording) -> CoreStageFeatures {
-    let window_samples = (15.0 * recording.edf.sfreq).round() as usize;
+    compute_core_stage_features_with_config(recording, &FeatureConfig::default())
+}
+
+pub fn compute_core_stage_features_with_config(
+    recording: &LoadedRecording,
+    config: &FeatureConfig,
+) -> CoreStageFeatures {
+    let window_samples = (config.feature_window_sec * recording.edf.sfreq).round() as usize;
     let stages = [("N1", 1_i8), ("N2", 2_i8), ("N3", 3_i8), ("REM", 4_i8)];
     let channel_results: Vec<(String, BTreeMap<String, f64>)> = recording
         .edf
@@ -139,15 +168,15 @@ pub fn compute_core_stage_features(recording: &LoadedRecording) -> CoreStageFeat
                 let rows: Vec<BTreeMap<String, f64>> = stage_data
                     .par_chunks_exact(window_samples)
                     .map(|window| {
-                        let mut row = bandpowers(window, recording.edf.sfreq);
+                        let mut row = bandpowers_with_bands(window, recording.edf.sfreq, &config.bands);
                         row.insert("ACW".into(), acw50(window, recording.edf.sfreq));
                         row.extend(
                             nonlinear::all(window)
                                 .into_iter()
                                 .map(|(name, value)| (name.to_string(), value)),
                         );
-                        row.extend(fooof_features(window, recording.edf.sfreq));
-                        row.extend(irasa_features(window, recording.edf.sfreq));
+                        row.extend(fooof_features_with_bands(window, recording.edf.sfreq, &config.bands));
+                        row.extend(irasa_features_with_bands(window, recording.edf.sfreq, &config.bands));
                         row
                     })
                     .collect();

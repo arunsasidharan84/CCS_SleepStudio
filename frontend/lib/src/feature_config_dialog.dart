@@ -97,13 +97,30 @@ class _FeaturesAndPreprocessingWidgetState
   late final TextEditingController _stimCombsCtrl;
 
   // Feature detection controllers
+  late final TextEditingController _epochLenCtrl;
+  late final TextEditingController _featureWinCtrl;
   late final TextEditingController _spindleLoCtrl;
   late final TextEditingController _spindleHiCtrl;
   late final TextEditingController _spindleDurLoCtrl;
   late final TextEditingController _spindleDurHiCtrl;
+  late final TextEditingController _spindleRelPowCtrl;
+  late final TextEditingController _spindleCorrCtrl;
+  late final TextEditingController _spindleRmsCtrl;
+
   late final TextEditingController _swLoCtrl;
   late final TextEditingController _swHiCtrl;
-  late final TextEditingController _swAmpCtrl;
+  late final TextEditingController _swMinPtpCtrl;
+  late final TextEditingController _swMaxPtpCtrl;
+  late final TextEditingController _swMinNegAmpCtrl;
+  late final TextEditingController _swMaxNegAmpCtrl;
+  late final TextEditingController _swMinPosAmpCtrl;
+  late final TextEditingController _swMaxPosAmpCtrl;
+  late final TextEditingController _swDurMinCtrl;
+  late final TextEditingController _swDurMaxCtrl;
+  late final TextEditingController _swNegDurMinCtrl;
+  late final TextEditingController _swNegDurMaxCtrl;
+  late final TextEditingController _swPosDurMinCtrl;
+  late final TextEditingController _swPosDurMaxCtrl;
 
   // Band cutoff controllers
   late final TextEditingController _deltaLoCtrl;
@@ -132,13 +149,30 @@ class _FeaturesAndPreprocessingWidgetState
     _stimWinCtrl = TextEditingController(text: c.preprocessStimWin.toString());
     _stimCombsCtrl = TextEditingController(text: c.preprocessStimMaxCombs.toString());
 
+    _epochLenCtrl = TextEditingController(text: c.epochLengthSeconds.toString());
+    _featureWinCtrl = TextEditingController(text: c.featureWindowSeconds.toString());
     _spindleLoCtrl = TextEditingController(text: c.spindleFreqMin.toString());
     _spindleHiCtrl = TextEditingController(text: c.spindleFreqMax.toString());
     _spindleDurLoCtrl = TextEditingController(text: c.spindleDurationMin.toString());
     _spindleDurHiCtrl = TextEditingController(text: c.spindleDurationMax.toString());
+    _spindleRelPowCtrl = TextEditingController(text: c.spindleRelPowerThresh.toString());
+    _spindleCorrCtrl = TextEditingController(text: c.spindleCorrThresh.toString());
+    _spindleRmsCtrl = TextEditingController(text: c.spindleRmsMultiplier.toString());
+
     _swLoCtrl = TextEditingController(text: c.slowWaveFreqMin.toString());
     _swHiCtrl = TextEditingController(text: c.slowWaveFreqMax.toString());
-    _swAmpCtrl = TextEditingController(text: c.slowWaveMinAmpUv.toString());
+    _swMinPtpCtrl = TextEditingController(text: c.slowWaveMinPtpUv.toString());
+    _swMaxPtpCtrl = TextEditingController(text: c.slowWaveMaxPtpUv.toString());
+    _swMinNegAmpCtrl = TextEditingController(text: c.slowWaveMinNegAmpUv.toString());
+    _swMaxNegAmpCtrl = TextEditingController(text: c.slowWaveMaxNegAmpUv.toString());
+    _swMinPosAmpCtrl = TextEditingController(text: c.slowWaveMinPosAmpUv.toString());
+    _swMaxPosAmpCtrl = TextEditingController(text: c.slowWaveMaxPosAmpUv.toString());
+    _swDurMinCtrl = TextEditingController(text: c.slowWaveDurationMin.toString());
+    _swDurMaxCtrl = TextEditingController(text: c.slowWaveDurationMax.toString());
+    _swNegDurMinCtrl = TextEditingController(text: c.slowWaveNegDurationMin.toString());
+    _swNegDurMaxCtrl = TextEditingController(text: c.slowWaveNegDurationMax.toString());
+    _swPosDurMinCtrl = TextEditingController(text: c.slowWavePosDurationMin.toString());
+    _swPosDurMaxCtrl = TextEditingController(text: c.slowWavePosDurationMax.toString());
 
     _deltaLoCtrl = TextEditingController(text: c.bandDeltaLo.toString());
     _deltaHiCtrl = TextEditingController(text: c.bandDeltaHi.toString());
@@ -165,13 +199,30 @@ class _FeaturesAndPreprocessingWidgetState
     _stimWinCtrl.dispose();
     _stimCombsCtrl.dispose();
 
+    _epochLenCtrl.dispose();
+    _featureWinCtrl.dispose();
     _spindleLoCtrl.dispose();
     _spindleHiCtrl.dispose();
     _spindleDurLoCtrl.dispose();
     _spindleDurHiCtrl.dispose();
+    _spindleRelPowCtrl.dispose();
+    _spindleCorrCtrl.dispose();
+    _spindleRmsCtrl.dispose();
+
     _swLoCtrl.dispose();
     _swHiCtrl.dispose();
-    _swAmpCtrl.dispose();
+    _swMinPtpCtrl.dispose();
+    _swMaxPtpCtrl.dispose();
+    _swMinNegAmpCtrl.dispose();
+    _swMaxNegAmpCtrl.dispose();
+    _swMinPosAmpCtrl.dispose();
+    _swMaxPosAmpCtrl.dispose();
+    _swDurMinCtrl.dispose();
+    _swDurMaxCtrl.dispose();
+    _swNegDurMinCtrl.dispose();
+    _swNegDurMaxCtrl.dispose();
+    _swPosDurMinCtrl.dispose();
+    _swPosDurMaxCtrl.dispose();
 
     _deltaLoCtrl.dispose();
     _deltaHiCtrl.dispose();
@@ -478,6 +529,34 @@ class _FeaturesAndPreprocessingWidgetState
                   ),
                   const Divider(height: 16),
 
+                  // Analysis Windows & Epochs
+                  const Text('Epoch & Sub-Window Durations (s):', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildField(
+                          label: 'Epoch Length (s)',
+                          controller: _epochLenCtrl,
+                          hint: '30.0',
+                          onChanged: (v) => c.epochLengthSeconds = v ?? 30.0,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildField(
+                          label: 'Feature Sub-Window (s)',
+                          controller: _featureWinCtrl,
+                          hint: '15.0',
+                          onChanged: (v) => c.featureWindowSeconds = v ?? 15.0,
+                        ),
+                      ),
+                      const Spacer(),
+                      const Spacer(),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+
                   // Frequency Bands
                   const Text('EEG Frequency Band Definitions (Hz):', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 6),
@@ -586,8 +665,8 @@ class _FeaturesAndPreprocessingWidgetState
                   ),
                   const SizedBox(height: 14),
 
-                  // Spindle & Slow Wave detection thresholds
-                  const Text('Event Detection Thresholds:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  // Spindle detection thresholds
+                  const Text('Sleep Spindle Detection Parameters:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 6),
                   Row(
                     children: [
@@ -609,7 +688,7 @@ class _FeaturesAndPreprocessingWidgetState
                       const SizedBox(width: 8),
                       Expanded(
                         child: _buildField(
-                          label: 'Spindle Dur Min (s)',
+                          label: 'Duration Min (s)',
                           controller: _spindleDurLoCtrl,
                           onChanged: (v) => c.spindleDurationMin = v ?? 0.5,
                         ),
@@ -617,33 +696,186 @@ class _FeaturesAndPreprocessingWidgetState
                       const SizedBox(width: 8),
                       Expanded(
                         child: _buildField(
-                          label: 'Spindle Dur Max (s)',
+                          label: 'Duration Max (s)',
                           controller: _spindleDurHiCtrl,
-                          onChanged: (v) => c.spindleDurationMax = v ?? 3.0,
+                          onChanged: (v) => c.spindleDurationMax = v ?? 2.0,
                         ),
                       ),
-                      const SizedBox(width: 12),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
                       Expanded(
                         child: _buildField(
-                          label: 'Slow Wave Freq Min',
+                          label: 'Rel Power Thresh',
+                          controller: _spindleRelPowCtrl,
+                          hint: '0.20',
+                          onChanged: (v) => c.spindleRelPowerThresh = v ?? 0.20,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildField(
+                          label: 'Correlation Thresh',
+                          controller: _spindleCorrCtrl,
+                          hint: '0.65',
+                          onChanged: (v) => c.spindleCorrThresh = v ?? 0.65,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildField(
+                          label: 'RMS Multiplier',
+                          controller: _spindleRmsCtrl,
+                          hint: '1.5',
+                          onChanged: (v) => c.spindleRmsMultiplier = v ?? 1.5,
+                        ),
+                      ),
+                      const Spacer(),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Slow wave detection thresholds
+                  const Text('Slow Wave Detection Parameters:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildField(
+                          label: 'SW Freq Min (Hz)',
                           controller: _swLoCtrl,
+                          hint: '0.3',
                           onChanged: (v) => c.slowWaveFreqMin = v ?? 0.3,
                         ),
                       ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: _buildField(
-                          label: 'Slow Wave Freq Max',
+                          label: 'SW Freq Max (Hz)',
                           controller: _swHiCtrl,
+                          hint: '2.0',
                           onChanged: (v) => c.slowWaveFreqMax = v ?? 2.0,
                         ),
                       ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: _buildField(
-                          label: 'Slow Wave Min (µV)',
-                          controller: _swAmpCtrl,
-                          onChanged: (v) => c.slowWaveMinAmpUv = v ?? 75.0,
+                          label: 'Min PTP Amp (µV)',
+                          controller: _swMinPtpCtrl,
+                          hint: '75.0',
+                          onChanged: (v) {
+                            c.slowWaveMinPtpUv = v ?? 75.0;
+                            c.slowWaveMinAmpUv = v ?? 75.0;
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildField(
+                          label: 'Max PTP Amp (µV)',
+                          controller: _swMaxPtpCtrl,
+                          hint: '350.0',
+                          onChanged: (v) => c.slowWaveMaxPtpUv = v ?? 350.0,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildField(
+                          label: 'Min Neg Amp (µV)',
+                          controller: _swMinNegAmpCtrl,
+                          hint: '40.0',
+                          onChanged: (v) => c.slowWaveMinNegAmpUv = v ?? 40.0,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildField(
+                          label: 'Max Neg Amp (µV)',
+                          controller: _swMaxNegAmpCtrl,
+                          hint: '200.0',
+                          onChanged: (v) => c.slowWaveMaxNegAmpUv = v ?? 200.0,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildField(
+                          label: 'Min Pos Amp (µV)',
+                          controller: _swMinPosAmpCtrl,
+                          hint: '10.0',
+                          onChanged: (v) => c.slowWaveMinPosAmpUv = v ?? 10.0,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildField(
+                          label: 'Max Pos Amp (µV)',
+                          controller: _swMaxPosAmpCtrl,
+                          hint: '150.0',
+                          onChanged: (v) => c.slowWaveMaxPosAmpUv = v ?? 150.0,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildField(
+                          label: 'Total Dur Min (s)',
+                          controller: _swDurMinCtrl,
+                          hint: '0.4',
+                          onChanged: (v) => c.slowWaveDurationMin = v ?? 0.4,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildField(
+                          label: 'Total Dur Max (s)',
+                          controller: _swDurMaxCtrl,
+                          hint: '2.5',
+                          onChanged: (v) => c.slowWaveDurationMax = v ?? 2.5,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildField(
+                          label: 'Neg Dur Min (s)',
+                          controller: _swNegDurMinCtrl,
+                          hint: '0.3',
+                          onChanged: (v) => c.slowWaveNegDurationMin = v ?? 0.3,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildField(
+                          label: 'Neg Dur Max (s)',
+                          controller: _swNegDurMaxCtrl,
+                          hint: '1.5',
+                          onChanged: (v) => c.slowWaveNegDurationMax = v ?? 1.5,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildField(
+                          label: 'Pos Dur Min (s)',
+                          controller: _swPosDurMinCtrl,
+                          hint: '0.1',
+                          onChanged: (v) => c.slowWavePosDurationMin = v ?? 0.1,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildField(
+                          label: 'Pos Dur Max (s)',
+                          controller: _swPosDurMaxCtrl,
+                          hint: '1.0',
+                          onChanged: (v) => c.slowWavePosDurationMax = v ?? 1.0,
                         ),
                       ),
                     ],

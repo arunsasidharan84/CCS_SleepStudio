@@ -43,4 +43,68 @@ void main() {
       expect(restored.subjectDetails, 'Control participant');
     },
   );
+
+  test('feature extraction parameters survive native configuration serialization', () {
+    final config = AppConfig(
+      epochLengthSeconds: 20.0,
+      featureWindowSeconds: 10.0,
+      spindleFreqMin: 12.0,
+      spindleFreqMax: 15.0,
+      spindleDurationMin: 0.6,
+      spindleDurationMax: 2.5,
+      spindleRelPowerThresh: 0.25,
+      spindleCorrThresh: 0.70,
+      spindleRmsMultiplier: 1.8,
+      slowWaveFreqMin: 0.4,
+      slowWaveFreqMax: 1.8,
+      slowWaveMinAmpUv: 80.0,
+      slowWaveMinPtpUv: 80.0,
+      slowWaveMaxPtpUv: 300.0,
+      slowWaveMinNegAmpUv: 45.0,
+      slowWaveMaxNegAmpUv: 180.0,
+      slowWaveMinPosAmpUv: 15.0,
+      slowWaveMaxPosAmpUv: 120.0,
+      slowWaveDurationMin: 0.5,
+      slowWaveDurationMax: 2.2,
+      slowWaveNegDurationMin: 0.35,
+      slowWaveNegDurationMax: 1.4,
+      slowWavePosDurationMin: 0.15,
+      slowWavePosDurationMax: 0.9,
+      bandDeltaLo: 0.5,
+      bandDeltaHi: 4.0,
+      bandSigmaLo: 11.0,
+      bandSigmaHi: 15.0,
+    );
+
+    final json = config.toJson();
+    final restored = AppConfig.fromJson(json);
+
+    expect(restored.epochLengthSeconds, 20.0);
+    expect(restored.featureWindowSeconds, 10.0);
+    expect(restored.spindleFreqMin, 12.0);
+    expect(restored.spindleFreqMax, 15.0);
+    expect(restored.spindleDurationMin, 0.6);
+    expect(restored.spindleDurationMax, 2.5);
+    expect(restored.spindleRelPowerThresh, 0.25);
+    expect(restored.spindleCorrThresh, 0.70);
+    expect(restored.spindleRmsMultiplier, 1.8);
+    expect(restored.slowWaveFreqMin, 0.4);
+    expect(restored.slowWaveFreqMax, 1.8);
+    expect(restored.slowWaveMinAmpUv, 80.0);
+    expect(restored.slowWaveMinPtpUv, 80.0);
+    expect(restored.slowWaveMaxPtpUv, 300.0);
+    expect(restored.slowWaveMinNegAmpUv, 45.0);
+    expect(restored.slowWaveMaxNegAmpUv, 180.0);
+    expect(restored.slowWaveMinPosAmpUv, 15.0);
+    expect(restored.slowWaveMaxPosAmpUv, 120.0);
+    expect(restored.slowWaveDurationMin, 0.5);
+    expect(restored.slowWaveDurationMax, 2.2);
+    expect(restored.slowWaveNegDurationMin, 0.35);
+    expect(restored.slowWaveNegDurationMax, 1.4);
+    expect(restored.slowWavePosDurationMin, 0.15);
+    expect(restored.slowWavePosDurationMax, 0.9);
+    expect(restored.bandSigmaLo, 11.0);
+    expect(restored.bandSigmaHi, 15.0);
+  });
 }
+

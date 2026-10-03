@@ -369,6 +369,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         activeConfig.spectrogramPowerMin = _config.spectrogramPowerMin;
         activeConfig.spectrogramPowerMax = _config.spectrogramPowerMax;
         activeConfig.tfEnabled = _config.tfEnabled;
+        activeConfig.spectrogramEnabled = _config.spectrogramEnabled;
         activeConfig.tfDisplayMode = _config.tfDisplayMode;
         activeConfig.tfFrequencyScale = _config.tfFrequencyScale;
         activeConfig.tfShowRidge = _config.tfShowRidge;
@@ -932,6 +933,41 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
+  /// Index of the "Filters" tab in [ConfigDialog].
+  static const int _kConfigFiltersTab = 7;
+
+  Future<void> _toggleSpectrogram() async {
+    final enable = !_config.spectrogramEnabled;
+    setState(() => _config.spectrogramEnabled = enable);
+    if (_activePath != null) {
+      unawaited(saveAutoConfig(_activePath!, _config));
+    }
+    final eeg = _loadedEeg;
+    final v = _viewport;
+    if (eeg == null || v == null) return;
+    _setStatus(enable ? 'Computing full-night spectrogram…' : 'Spectrogram off');
+    final newEeg = await _backend.computeNightProducts(eeg, _config);
+    final newViewport = await _backend.viewportFromEeg(
+      newEeg,
+      currentEpoch: (_viewport ?? v).currentEpoch,
+      config: _config,
+      existingStages: (_viewport ?? v).stages,
+      existingStagesUncertain: (_viewport ?? v).stagesUncertain,
+      existingConfidence: (_viewport ?? v).stagesConfidence,
+      existingStageProbabilities: (_viewport ?? v).stageProbabilities,
+      includeTimeFrequency: false,
+    );
+    if (!mounted) return;
+    setState(() {
+      _loadedEeg = newEeg;
+      _viewport = _carryViewportState(_viewport ?? v, newViewport);
+      _status = enable ? 'Spectrogram computed' : 'Spectrogram off';
+    });
+    if (_config.tfEnabled) {
+      _scheduleTimeFrequencyRefresh(++_navigationSerial);
+    }
+  }
+
   void _toggleWavelet() async {
     final eeg = _loadedEeg;
     final v = _viewport;
@@ -962,7 +998,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         includeTimeFrequency: false,
       );
       setState(() {
-        _viewport = newViewport;
+        _viewport = _carryViewportState(_viewport ?? v, newViewport);
       });
     }
   }
@@ -2754,6 +2790,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 regionMapJson: regionMapJson,
                 options: analyseOptions,
                 skipExisting: skipExisting,
+                config: _config,
               ),
             ),
         ],
@@ -4003,6 +4040,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 },
               ),
               writeRegional: false,
+              config: _config,
             );
 
             final result = await Process.run(executable, args);
@@ -5616,7 +5654,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           if (mounted) {
             setState(() {
               _loadedEeg = newEeg;
-              _viewport = newViewport;
+              _viewport = _carryViewportState(_viewport ?? v, newViewport);
               _status = 'Configuration loaded successfully';
             });
             if (_config.tfEnabled) {
@@ -5678,8 +5716,27 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           final eeg = _loadedEeg;
           if (eeg != null && v != null) {
             if (!_configRequiresDisplayRecompute(oldCfg, newCfg)) {
+              // Display-only channel changes (filters, colours, scales,
+              // hidden channels): redraw the current window only.
+              final displayChanged =
+                  !_sameChannelConfig(oldCfg.channels, newCfg.channels);
+              if (displayChanged) _backend.clearDisplayCache();
+              final current = _viewport ?? v;
+              final base = displayChanged
+                  ? _backend
+                        .rebuildViewportForEpochSync(
+                          current,
+                          eeg,
+                          current.currentEpoch,
+                          config: newCfg,
+                        )
+                        .copyWith(
+                          stages: current.stages,
+                          stagesUncertain: current.stagesUncertain,
+                        )
+                  : current;
               setState(() {
-                _viewport = v.copyWith(
+                _viewport = base.copyWith(
                   amplitudeRangeUv: newCfg.amplitudeRangeUv,
                   spectrogramFlex: newCfg.spectrogramFlex,
                   hypnogramFlex: newCfg.hypnogramFlex,
@@ -5715,7 +5772,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               );
               setState(() {
                 _loadedEeg = newEeg;
-                _viewport = newViewport;
+                _viewport = _carryViewportState(_viewport ?? v, newViewport);
                 _status = 'Config applied — spectrogram channel updated';
               });
               if (_config.tfEnabled) {
@@ -5731,8 +5788,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   }
 
   bool _configRequiresDisplayRecompute(AppConfig oldCfg, AppConfig newCfg) {
-    if (!_sameChannelConfig(oldCfg.channels, newCfg.channels)) return true;
-    return oldCfg.spectrogramChannelIndex != newCfg.spectrogramChannelIndex ||
+    if (!_sameNightChannelConfig(oldCfg.channels, newCfg.channels)) return true;
+    return oldCfg.spectrogramEnabled != newCfg.spectrogramEnabled ||
+        oldCfg.spectrogramChannelIndex != newCfg.spectrogramChannelIndex ||
         oldCfg.swaChannelIndex != newCfg.swaChannelIndex ||
         oldCfg.periodogramChannelIndex != newCfg.periodogramChannelIndex ||
         oldCfg.tfChannelIndex != newCfg.tfChannelIndex ||
@@ -5756,6 +5814,26 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         oldCfg.robustZStandardize != newCfg.robustZStandardize ||
         oldCfg.distanceBetweenChannelsUv != newCfg.distanceBetweenChannelsUv ||
         oldCfg.referenceAmplitudeLineUv != newCfg.referenceAmplitudeLineUv;
+  }
+
+  /// Channel settings that change the night products (spectrogram, SWA):
+  /// which signal a channel is and how it is derived. Colour, scale and the
+  /// display filters only change the drawing.
+  bool _sameNightChannelConfig(List<ChannelConfig> a, List<ChannelConfig> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      final l = a[i];
+      final r = b[i];
+      if (l.name != r.name ||
+          l.sourceIndex != r.sourceIndex ||
+          l.derived != r.derived ||
+          l.sourceChannel != r.sourceChannel ||
+          l.reReference != r.reReference ||
+          l.flipPolarity != r.flipPolarity) {
+        return false;
+      }
+    }
+    return true;
   }
 
   bool _sameChannelConfig(List<ChannelConfig> a, List<ChannelConfig> b) {
@@ -5788,6 +5866,16 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     return true;
   }
 
+  /// A viewport rebuilt from the EEG (after a filter / config change) starts
+  /// without the session's markers and selections; carry them over so they
+  /// stay on the waveform and the hypnogram.
+  EegViewport _carryViewportState(EegViewport old, EegViewport fresh) =>
+      fresh.copyWith(
+        scoredEvents: old.scoredEvents,
+        disabledMarkerLabels: old.disabledMarkerLabels,
+        eventSelections: old.eventSelections,
+      );
+
   void _openFilterDialog() {
     final v = _viewport;
     final eeg = _loadedEeg;
@@ -5805,41 +5893,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         config: _config,
         channelLabels: eeg.channelLabels,
         onApply: (newCfg) {
-          setState(() {
-            _config = newCfg;
-          });
-          if (_activePath != null) {
-            saveAutoConfig(_activePath!, newCfg);
-          }
-          final eeg = _loadedEeg;
-          if (eeg != null) {
-            _backend.clearDisplayCache();
-            _setStatus('Applying filters and updating spectrogram…');
-            Future.microtask(() async {
-              final newEeg = await _backend.computeNightProducts(eeg, newCfg);
-              final newViewport = await _backend.viewportFromEeg(
-                newEeg,
-                currentEpoch: v.currentEpoch,
-                config: newCfg,
-                existingStages: v.stages,
-                existingStagesUncertain: v.stagesUncertain,
-                existingConfidence: v.stagesConfidence,
-                existingStageProbabilities: v.stageProbabilities,
-                includeTimeFrequency: false,
-              );
-              setState(() {
-                _loadedEeg = newEeg;
-                _viewport = newViewport;
-                _status = 'Filters applied and spectrogram updated';
-              });
-              if (_config.tfEnabled) {
-                _scheduleTimeFrequencyRefresh(++_navigationSerial);
-              }
-            });
-          } else {
-            _previewDisplayConfig(newCfg);
-            _setStatus('Filters applied');
-          }
+          // Display filters only change the drawn window: redraw it, keep
+          // the markers, and do not recompute anything for the whole night.
+          _previewDisplayConfig(newCfg);
+          _setStatus('Display filters applied');
         },
       ),
     );
@@ -5869,6 +5926,81 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       _scheduleTimeFrequencyRefresh(++_navigationSerial);
     }
   }
+
+  /// Right-click menu of a channel: hide it, or show hidden channels again.
+  Future<void> _showChannelContextMenu(int visibleIndex, Offset globalPos) async {
+    final v = _viewport;
+    final eeg = _loadedEeg;
+    if (v == null || eeg == null) return;
+    final labels = v.signalChannelLabels;
+    if (visibleIndex < 0 || visibleIndex >= labels.length) return;
+    final label = labels[visibleIndex];
+    if (_config.channels.isEmpty) {
+      _config.channels = [
+        for (var i = 0; i < eeg.channelSamples.length; i++)
+          AppConfig.defaultChannelConfig(
+            eeg.channelLabels[i],
+            i,
+            eeg.channelSamples.length,
+          ),
+      ];
+    }
+    final hidden = _config.channels.where((c) => !c.displayOnScreen).toList();
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(globalPos.dx, globalPos.dy, 1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        PopupMenuItem(
+          value: 'hide',
+          enabled: labels.length > 1,
+          child: Text('Hide $label'),
+        ),
+        if (hidden.isNotEmpty) ...[
+          const PopupMenuDivider(),
+          for (final c in hidden)
+            PopupMenuItem(value: 'show:${c.name}', child: Text('Show ${c.name}')),
+          PopupMenuItem(
+            value: 'showall',
+            child: Text('Show all hidden channels (${hidden.length})'),
+          ),
+        ],
+        const PopupMenuDivider(),
+        const PopupMenuItem(value: 'config', child: Text('Channel settings…')),
+      ],
+    );
+    if (choice == null || !mounted) return;
+    if (choice == 'config') {
+      _openConfigDialog(initialTabIndex: _kConfigChannelsTab);
+      return;
+    }
+    if (choice == 'hide') {
+      final idx = _config.channels.indexWhere((c) => c.name == label);
+      if (idx < 0) return;
+      _config.channels[idx].displayOnScreen = false;
+      _previewDisplayConfig(_config);
+      _setStatus('$label hidden — right-click a channel to show it again');
+    } else if (choice == 'showall') {
+      for (final c in _config.channels) {
+        c.displayOnScreen = true;
+      }
+      _previewDisplayConfig(_config);
+      _setStatus('All channels shown');
+    } else if (choice.startsWith('show:')) {
+      final name = choice.substring(5);
+      for (final c in _config.channels) {
+        if (c.name == name) c.displayOnScreen = true;
+      }
+      _previewDisplayConfig(_config);
+      _setStatus('$name shown');
+    }
+  }
+
+  /// Index of the "Channels" tab in [ConfigDialog].
+  static const int _kConfigChannelsTab = 2;
 
   void _adjustChannelScale(int visibleIndex, double multiplier) {
     final v = _viewport;
@@ -6270,7 +6402,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   if (mounted) {
                     setState(() {
                       _loadedEeg = newEeg;
-                      _viewport = newViewport;
+                      _viewport = _carryViewportState(_viewport ?? v, newViewport);
                       _status = 'Default configuration restored';
                     });
                     if (_config.tfEnabled) {
@@ -6641,7 +6773,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                       if (mounted) {
                         setState(() {
                           _loadedEeg = newEeg;
-                          _viewport = newViewport;
+                          _viewport = _carryViewportState(_viewport ?? v, newViewport);
                           _status = 'Default configuration restored';
                         });
                         if (_config.tfEnabled) {
@@ -7131,6 +7263,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 regionMapJson: regionMapJson,
                 options: _batchAnalyseOptions,
                 skipExisting: resume,
+                config: _config,
               );
             },
             onSuccess: (r, log) {
@@ -8726,6 +8859,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                         onToggleUncertainty: _toggleUncertainty,
                         tfEnabled: _config.tfEnabled,
                         onToggleWavelet: _toggleWavelet,
+                        spectrogramEnabled: _config.spectrogramEnabled,
+                        onToggleSpectrogram: _toggleSpectrogram,
+                        onFilter: () => _openConfigDialog(
+                          initialTabIndex: _kConfigFiltersTab,
+                        ),
                         onOverlayChanged: _setHypnogramOverlayMode,
                         onOpenMarkers: _openMarkersDialog,
                         onPreprocess: _openPreprocessDialog,
@@ -8760,6 +8898,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                     onChannelScaleSet: _setChannelScale,
                                     onChannelScaleApplyAll:
                                         _applyScaleToAllChannels,
+                                    onChannelContextMenu:
+                                        _showChannelContextMenu,
                                     onTimeUnitChanged: _setEegPanelTimeUnit,
                                     waveformMaximized: _waveformMaximized,
                                     onToggleMaximize: () => setState(
@@ -8964,6 +9104,9 @@ class _Toolbar extends StatefulWidget {
     required this.onToggleUncertainty,
     required this.tfEnabled,
     required this.onToggleWavelet,
+    this.spectrogramEnabled = false,
+    this.onToggleSpectrogram,
+    this.onFilter,
     this.onOverlayChanged,
     this.onOpenMarkers,
     this.onPreprocess,
@@ -9000,6 +9143,11 @@ class _Toolbar extends StatefulWidget {
   final VoidCallback onToggleUncertainty;
   final bool tfEnabled;
   final VoidCallback onToggleWavelet;
+  final bool spectrogramEnabled;
+  final VoidCallback? onToggleSpectrogram;
+
+  /// Opens the configuration dialog on its Filters tab.
+  final VoidCallback? onFilter;
   final void Function(String overlayMode, [String? probabilityStage])?
   onOverlayChanged;
   final VoidCallback? onOpenMarkers;
@@ -9432,6 +9580,21 @@ class _ToolbarState extends State<_Toolbar> {
                 onPressed: widget.onConfig,
               ),
               _ToolButton(
+                label: 'filter',
+                tooltip: 'Display filters (high-pass, low-pass, notch) — opens the Filters tab of the configuration',
+                enabled: enabled && widget.onFilter != null,
+                onPressed: widget.onFilter ?? () {},
+              ),
+              _ToolButton(
+                label: widget.spectrogramEnabled
+                    ? 'spectrogram [ON]'
+                    : 'spectrogram [OFF]',
+                tooltip: 'Compute and show the full-night spectrogram (and SWA trace). '
+                    'Off by default because it is slow for long recordings.',
+                enabled: enabled && widget.onToggleSpectrogram != null,
+                onPressed: widget.onToggleSpectrogram ?? () {},
+              ),
+              _ToolButton(
                 label: widget.tfEnabled ? 'wavelet [ON]' : 'wavelet [OFF]',
                 tooltip: 'Toggle wavelet time-frequency panel visibility',
                 enabled: enabled,
@@ -9499,6 +9662,7 @@ class _ScoringHeroSurface extends StatefulWidget {
     this.onChannelScaleAdjust,
     this.onChannelScaleSet,
     this.onChannelScaleApplyAll,
+    this.onChannelContextMenu,
     this.onTimeUnitChanged,
     this.waveformMaximized = false,
     this.onToggleMaximize,
@@ -9540,6 +9704,10 @@ class _ScoringHeroSurface extends StatefulWidget {
   final void Function(int channelIndex, double multiplier)? onChannelScaleAdjust;
   final void Function(int channelIndex, double newScale)? onChannelScaleSet;
   final void Function(double newScale)? onChannelScaleApplyAll;
+
+  /// Right-click on a channel (its label or its trace).
+  final void Function(int channelIndex, Offset globalPosition)?
+  onChannelContextMenu;
   final ValueChanged<String>? onTimeUnitChanged;
   final bool waveformMaximized;
   final VoidCallback? onToggleMaximize;
@@ -9968,6 +10136,14 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                       },
                       onPanEnd: _handlePanEnd,
                       onPanCancel: _handlePanCancel,
+                      onSecondaryTapDown: (d) {
+                        final n = widget.viewport.channelCount;
+                        if (n == 0 || widget.onChannelContextMenu == null) return;
+                        final ch = (d.localPosition.dy / constraints.maxHeight * n)
+                            .floor()
+                            .clamp(0, n - 1);
+                        widget.onChannelContextMenu!(ch, d.globalPosition);
+                      },
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
@@ -10065,6 +10241,7 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                           onAdjustScale: widget.onChannelScaleAdjust,
                           onSetScale: widget.onChannelScaleSet,
                           onApplyAll: widget.onChannelScaleApplyAll,
+                          onContextMenu: widget.onChannelContextMenu,
                         ),
                       ),
                       // Draggable vertical splitter for channel sidebar width
@@ -10156,17 +10333,7 @@ class _StatusBar extends StatelessWidget {
         }
       }
 
-      double totalSelectionLength = 0.0;
-      for (final sel in vp.eventSelections) {
-        totalSelectionLength += sel.durationSeconds;
-      }
-      if (vp.selectionStartSec != null && vp.selectionEndSec != null) {
-        totalSelectionLength += (vp.selectionEndSec! - vp.selectionStartSec!)
-            .abs();
-      }
-      final selectionStr = totalSelectionLength > 0
-          ? '  |  Total Length: ${totalSelectionLength.toStringAsFixed(2)} s'
-          : '';
+      // Selection durations are drawn under the boxes on the waveform.
 
       // Model confidence & stage probabilities display
       String confidenceStr = '';
@@ -10306,7 +10473,7 @@ class _StatusBar extends StatelessWidget {
             ),
           timeWidget,
           Text(
-            '  |  Epoch ${currentIdx + 1}/${vp.epochCount} (${currentStage.label}$uncertainStr)$comparisonStr$confidenceStr$probsStr$selectionStr  |  ${vp.sampleRateHz.toStringAsFixed(0)} Hz',
+            '  |  Epoch ${currentIdx + 1}/${vp.epochCount} (${currentStage.label}$uncertainStr)$comparisonStr$confidenceStr$probsStr  |  ${vp.sampleRateHz.toStringAsFixed(0)} Hz',
             style: const TextStyle(fontSize: 12, color: Colors.black87),
           ),
         ],
@@ -10864,10 +11031,12 @@ class _ElectrodeScaleColumn extends StatelessWidget {
     required this.onAdjustScale,
     required this.onSetScale,
     required this.onApplyAll,
+    this.onContextMenu,
   });
 
   final EegViewport viewport;
   final double channelHeight;
+  final void Function(int channelIndex, Offset globalPosition)? onContextMenu;
   final void Function(int channelIndex, double multiplier)? onAdjustScale;
   final void Function(int channelIndex, double newScale)? onSetScale;
   final void Function(double newScale)? onApplyAll;
@@ -10894,6 +11063,7 @@ class _ElectrodeScaleColumn extends StatelessWidget {
               onAdjustScale: onAdjustScale,
               onSetScale: onSetScale,
               onApplyAll: onApplyAll,
+              onContextMenu: onContextMenu,
             ),
           ),
       ],
@@ -10911,9 +11081,11 @@ class _ChannelScaleTile extends StatefulWidget {
     required this.onAdjustScale,
     required this.onSetScale,
     required this.onApplyAll,
+    this.onContextMenu,
   });
 
   final int channelIndex;
+  final void Function(int channelIndex, Offset globalPosition)? onContextMenu;
   final String channelName;
   final double scalePercent;
 
@@ -10946,7 +11118,12 @@ class _ChannelScaleTileState extends State<_ChannelScaleTile> {
           }
         }
       },
-      child: MouseRegion(
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onSecondaryTapDown: widget.onContextMenu == null
+            ? null
+            : (d) => widget.onContextMenu!(widget.channelIndex, d.globalPosition),
+        child: MouseRegion(
         onEnter: (_) => setState(() => _hovered = true),
         onExit: (_) => setState(() => _hovered = false),
         child: Container(
@@ -11081,6 +11258,7 @@ class _ChannelScaleTileState extends State<_ChannelScaleTile> {
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -11531,6 +11709,7 @@ List<String> _analyseNidraArguments(
   AnalyseNidraOptions? options,
   bool writeRegional = true,
   bool skipExisting = false,
+  AppConfig? config,
 }) {
   final baseDir = (outputDir != null && outputDir.trim().isNotEmpty)
       ? outputDir.trim()
@@ -11569,6 +11748,15 @@ List<String> _analyseNidraArguments(
   }
   if (regionMapJson != null && regionMapJson.trim().isNotEmpty) {
     args.addAll(['--region-map', regionMapJson.trim()]);
+  }
+  if (config != null) {
+    try {
+      final configPath = '${base}_analyse_config.json';
+      File(configPath).writeAsStringSync(jsonEncode(config.toJson()));
+      args.addAll(['--config', configPath]);
+    } catch (e) {
+      debugPrint('Failed to write analysis config file: $e');
+    }
   }
   args.addAll(
     (options ?? AnalyseNidraOptions()).toArgs(nlgOutPath: '${base}_analyse_nlg.json'),

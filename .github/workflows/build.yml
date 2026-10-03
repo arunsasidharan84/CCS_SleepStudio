@@ -464,6 +464,12 @@ jobs:
             echo "title=Release v${VERSION}" >> $GITHUB_OUTPUT
           fi
           echo "prerelease=false" >> $GITHUB_OUTPUT
+          TAG=$(grep -o 'tag=.*' $GITHUB_OUTPUT | tail -n1 | cut -d= -f2)
+          if [ -f "docs/release_notes/${TAG}.md" ]; then
+            echo "notes=docs/release_notes/${TAG}.md" >> $GITHUB_OUTPUT
+          else
+            echo "notes=" >> $GITHUB_OUTPUT
+          fi
         shell: bash
 
       - name: Create or Update Release
@@ -483,6 +489,7 @@ jobs:
             dist/CCSSleepStudio-lite-linux-x86_64.rpm
           draft: false
           make_latest: true
+          body_path: ${{ steps.release_info.outputs.notes }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -148,14 +148,15 @@ Jump to key epochs instantly using dedicated navigation controls:
 | **Click on spectrogram** | Navigate to any time point by clicking the spectrogram |
 
 ### Spectrogram Panel
+*   Off by default (it is the slowest step when opening long recordings); turn it on with the **spectrogram [ON/OFF]** toolbar button. The setting is saved per recording.
 *   Welch power spectral density computed across the full recording.
 *   Configurable frequency range (default: 0–20 Hz) and adjustable log10 power limits.
 *   Cached computation in native Rust backend — instant navigation with zero lag.
-*   Displays display filters (referencing, polarity, filters) applied to the segment.
+*   Uses the channel's derivation (re-referencing, polarity); display filters do not change it, so changing a filter never recomputes it.
 
 ### Hypnogram Panel
 *   Full-night sleep architecture timeline with color-coded stages.
-*   **Slow-wave activity (SWA) overlay** showing delta power across the night with adjustable median filter smoothing.
+*   **Slow-wave activity (SWA) overlay** showing delta power across the night with adjustable median filter smoothing (computed with the spectrogram, so it needs the spectrogram turned on).
 *   Disagreement highlights and uncertainty markers are drawn directly on the hypnogram step blocks.
 
 ![Hypnogram Disagreement Markers and Uncertainty Highlights](screenshots/annotations_markers.png)
@@ -186,9 +187,14 @@ The wavelet panel is disabled by default to preserve the primary scoring layout 
 ### Signal Filtering
 *   Apply **high-pass**, **low-pass**, and/or **notch** filters to each EEG channel independently.
 *   Zero-phase Chebyshev Type 2 filters.
-*   **Tab View Integration**: Located directly inside the Configuration Dialog as the 7th tab.
+*   **Tab View Integration**: Located directly inside the Configuration Dialog as the 8th tab; the toolbar **filter** button opens it directly.
 *   Live magnitude response plot updates in real time.
+*   Display filters: only the visible window is filtered, with a few seconds of real signal on each side so the result equals filtering the whole night. Applying a filter redraws the window instantly and keeps all markers.
 *   Filters affect display, zoom, periodograms, and wavelets, while raw signal power computations (spectrogram, SWA) remain unaffected.
+
+### Channel Display
+*   Right-click a channel's name or trace to hide it, show hidden channels again, or open its settings.
+*   Mouse selection boxes show their duration underneath; with several boxes the last one also shows the cumulative duration (Σ).
 
 ![Filter Tab](screenshots/filter.png)
 

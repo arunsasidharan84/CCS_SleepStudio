@@ -1,3 +1,4 @@
+use crate::config::{SlowWaveConfig, SpindleConfig};
 use crate::pipeline::LoadedRecording;
 use crate::signal::{analytic_signal_padded, linear_detrend, mne_overlap_add};
 use num_complex::Complex64;
@@ -400,9 +401,19 @@ fn channel_spindles(
     stages: &[i8],
     sfreq: f64,
     filters: &DetectionFilters,
+    config: &SpindleConfig,
 ) -> Vec<SpindleEvent> {
     let broad = mne_overlap_add(data, &filters.spindle_broad);
-    let sigma = mne_overlap_add(data, &filters.spindle_sigma);
+    let custom_sigma = if (config.freq_min - 12.0).abs() > 0.01 || (config.freq_max - 16.0).abs() > 0.01 {
+        Some(crate::signal::design_bandpass_fir(sfreq, config.freq_min, config.freq_max, 251))
+    } else {
+        None
+    };
+    let sigma = if let Some(ref taps) = custom_sigma {
+        mne_overlap_add(data, taps)
+    } else {
+        mne_overlap_add(data, &filters.spindle_sigma)
+    };
     let relative_power = spindle_relative_power(&broad, sfreq);
     let moving_correlation = moving_values(&sigma, Some(&broad), sfreq, true);
     let moving_rms = moving_values(&sigma, None, sfreq, false);
@@ -412,7 +423,7 @@ fn channel_spindles(
         .filter_map(|(&value, &stage)| matches!(stage, 2 | 3).then_some(value))
         .collect::<Vec<_>>();
     let rms_threshold = (included_rms.iter().sum::<f64>() / included_rms.len() as f64
-        + 1.5 * trimmed_sample_std(&included_rms))
+        + config.rms_multiplier * trimmed_sample_std(&included_rms))
     .min(10.0);
     let flags = relative_power
         .iter()
@@ -421,8 +432,8 @@ fn channel_spindles(
         .zip(stages)
         .map(|(((&power, &correlation), &rms), &stage)| {
             if matches!(stage, 2 | 3) {
-                (power >= 0.2) as usize
-                    + (correlation >= 0.65) as usize
+                (power >= config.rel_power_thresh) as usize
+                    + (correlation >= config.corr_thresh) as usize
                     + (rms >= rms_threshold) as usize
             } else {
                 0
@@ -474,7 +485,7 @@ fn channel_spindles(
         let start_time = start as f64 / sfreq;
         let end_time = end as f64 / sfreq;
         let duration = end_time - start_time;
-        if !(duration > 0.5 && duration < 2.0) {
+        if !(duration >= config.duration_min && duration <= config.duration_max) {
             continue;
         }
         let detrended = linear_detrend(&broad[start..=end]);
@@ -589,8 +600,18 @@ fn channel_slow_waves(
     stages: &[i8],
     sfreq: f64,
     filters: &DetectionFilters,
+    config: &SlowWaveConfig,
 ) -> Vec<SlowWaveEvent> {
-    let filtered = mne_overlap_add(data, &filters.slow_wave);
+    let custom_sw = if (config.freq_min - 0.3).abs() > 0.01 || (config.freq_max - 2.0).abs() > 0.01 {
+        Some(crate::signal::design_bandpass_fir(sfreq, config.freq_min, config.freq_max, 501))
+    } else {
+        None
+    };
+    let filtered = if let Some(ref taps) = custom_sw {
+        mne_overlap_add(data, taps)
+    } else {
+        mne_overlap_add(data, &filters.slow_wave)
+    };
     let sigma = mne_overlap_add(data, &filters.coupling_sigma);
     let fft_size = next_fast_len(data.len());
     let phase = analytic_signal_padded(&filtered, fft_size)
@@ -608,11 +629,11 @@ fn channel_slow_waves(
         .collect::<Vec<_>>();
 
     let included = |index: usize| matches!(stages[index], 2 | 3);
-    let negative = extrema(&filtered, false, 40.0, 200.0)
+    let negative = extrema(&filtered, false, config.min_neg_amp, config.max_neg_amp)
         .into_iter()
         .filter(|&index| included(index))
         .collect::<Vec<_>>();
-    let mut positive = extrema(&filtered, true, 10.0, 150.0)
+    let mut positive = extrema(&filtered, true, config.min_pos_amp, config.max_pos_amp)
         .into_iter()
         .filter(|&index| included(index))
         .collect::<Vec<_>>();
@@ -634,7 +655,7 @@ fn channel_slow_waves(
             continue;
         }
         let ptp = filtered[neg].abs() + filtered[pos];
-        if !(ptp > 75.0 && ptp < 350.0) {
+        if !(ptp >= config.min_ptp && ptp <= config.max_ptp) {
             continue;
         }
         let neg_crossing = upper_bound(&crossings, neg);
@@ -660,12 +681,12 @@ fn channel_slow_waves(
         let neg_peak = neg as f64 / sfreq;
         let slope = filtered[neg].abs() / (mid_crossing - neg_peak);
         if duration != both_duration
-            || duration > 2.5
-            || duration < 0.4
-            || neg_duration <= 0.3
-            || neg_duration >= 1.5
-            || pos_duration <= 0.1
-            || pos_duration >= 1.0
+            || duration > config.duration_max
+            || duration < config.duration_min
+            || neg_duration < config.neg_duration_min
+            || neg_duration > config.neg_duration_max
+            || pos_duration < config.pos_duration_min
+            || pos_duration > config.pos_duration_max
             || mid_crossing <= start
             || mid_crossing >= end
             || slope <= 0.0
@@ -748,6 +769,13 @@ fn circular_mean(events: &[SlowWaveEvent]) -> f64 {
 }
 
 pub fn slow_waves(recording: &LoadedRecording) -> SlowWaveResults {
+    slow_waves_with_config(recording, &SlowWaveConfig::default())
+}
+
+pub fn slow_waves_with_config(
+    recording: &LoadedRecording,
+    config: &SlowWaveConfig,
+) -> SlowWaveResults {
     let filters: DetectionFilters =
         serde_json::from_str(include_str!("../assets/mne_fir_250hz.json"))
             .expect("embedded MNE detection filters are valid");
@@ -765,6 +793,7 @@ pub fn slow_waves(recording: &LoadedRecording) -> SlowWaveResults {
                 &recording.sample_stages,
                 recording.edf.sfreq,
                 &filters,
+                config,
             )
         })
         .collect::<Vec<_>>();
@@ -805,6 +834,13 @@ fn spindle_mean(events: &[SpindleEvent], value: impl Fn(&SpindleEvent) -> f64) -
 }
 
 pub fn spindles(recording: &LoadedRecording) -> SpindleResults {
+    spindles_with_config(recording, &SpindleConfig::default())
+}
+
+pub fn spindles_with_config(
+    recording: &LoadedRecording,
+    config: &SpindleConfig,
+) -> SpindleResults {
     let filters: DetectionFilters =
         serde_json::from_str(include_str!("../assets/mne_fir_250hz.json"))
             .expect("embedded MNE detection filters are valid");
@@ -822,6 +858,7 @@ pub fn spindles(recording: &LoadedRecording) -> SpindleResults {
                 &recording.sample_stages,
                 recording.edf.sfreq,
                 &filters,
+                config,
             )
         })
         .collect::<Vec<_>>();

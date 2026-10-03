@@ -97,15 +97,26 @@ pub fn welch_median_nperseg(signal: &[f64], sfreq: f64, nperseg: usize) -> (Vec<
     (frequencies, psd)
 }
 
+use crate::config::BandDefinition;
+
 pub fn bandpowers(signal: &[f64], sfreq: f64) -> BTreeMap<String, f64> {
+    let bands = crate::config::default_bands();
+    bandpowers_with_bands(signal, sfreq, &bands)
+}
+
+pub fn bandpowers_with_bands(
+    signal: &[f64],
+    sfreq: f64,
+    bands: &[BandDefinition],
+) -> BTreeMap<String, f64> {
     let (frequencies, psd) = welch_median(signal, sfreq);
-    let minimum = BANDS
+    let minimum = bands
         .iter()
-        .map(|band| band.0)
+        .map(|band| band.low)
         .fold(f64::INFINITY, f64::min);
-    let maximum = BANDS
+    let maximum = bands
         .iter()
-        .map(|band| band.1)
+        .map(|band| band.high)
         .fold(f64::NEG_INFINITY, f64::max);
     let selected: Vec<(f64, f64)> = frequencies
         .iter()
@@ -116,17 +127,17 @@ pub fn bandpowers(signal: &[f64], sfreq: f64) -> BTreeMap<String, f64> {
     let resolution = frequencies[1] - frequencies[0];
     let total_values: Vec<f64> = selected.iter().map(|(_, value)| *value).collect();
     let total = simpson(&total_values, resolution);
-    BANDS
+    bands
         .iter()
-        .map(|&(low, high, label)| {
+        .map(|band| {
             let values: Vec<f64> = selected
                 .iter()
                 .filter_map(|(frequency, value)| {
-                    (*frequency >= low && *frequency <= high).then_some(*value)
+                    (*frequency >= band.low && *frequency <= band.high).then_some(*value)
                 })
                 .collect();
             let power = simpson(&values, resolution);
-            (format!("{label}_PSD"), power / total)
+            (format!("{}_PSD", band.label), power / total)
         })
         .collect()
 }

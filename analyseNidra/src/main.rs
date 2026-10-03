@@ -17,7 +17,7 @@ const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
 [--out-dir <path>] [--channels F3,F4,C3,C4,O1,O2] [--references M1,M2] \
 [--lights-off-sec SEC] [--lights-on-sec SEC] [--per-channel] [--region-map <json_or_file>] \
 [--analyses core,pac,slow_waves,spindles,nlg | --skip <list>] [--nlg-out <nlg.json>] [--nlg-bands slow_wave,sigma[,alpha]] \
-[--nlg-smooth-rate 0.01666] [--nlg-undersample N] [--nlg-edf-dir DIR] [--version]\n\
+[--nlg-smooth-rate 0.01666] [--nlg-undersample N] [--nlg-edf-dir DIR] [--config <config.json>] [--version]\n\
    or: analyse-nidra --preprocess <recording.edf> [--out-dir <dir>] [--steps <stimartifact,filter,badchannel,interpolate,gedai,save>] \
 [--downsample-hz <hz>] [--bandpass-lo <lo>] [--bandpass-hi <hi>] [--notch-hz <notch>] [--suffix <_clean>] \
 [--stim-f0 <hz>] [--stim-win <sec>] [--stim-max-combs <n>]\n\
@@ -55,6 +55,7 @@ struct Cli {
     nlg_out: Option<PathBuf>,
     nlg: NlgCli,
     skip_existing: bool,
+    config: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -236,6 +237,7 @@ fn parse_cli(arguments: impl IntoIterator<Item = OsString>) -> Result<Cli> {
     let mut nlg_out: Option<PathBuf> = None;
     let mut nlg = NlgCli::default();
     let mut skip_existing = false;
+    let mut config = None;
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         let text = argument.to_string_lossy().to_string();
@@ -332,6 +334,16 @@ fn parse_cli(arguments: impl IntoIterator<Item = OsString>) -> Result<Cli> {
             .and_then(|value| value.strip_prefix("--region-map="))
         {
             region_map = Some(parse_region_map(value.into())?);
+        } else if argument == "--config" {
+            let value = arguments
+                .next()
+                .context("--config requires a path argument")?;
+            config = Some(PathBuf::from(value));
+        } else if let Some(value) = argument
+            .to_str()
+            .and_then(|value| value.strip_prefix("--config="))
+        {
+            config = Some(PathBuf::from(value));
         } else if argument.to_string_lossy().starts_with("--") {
             bail!("unknown option: {}", argument.to_string_lossy());
         } else {
@@ -411,6 +423,7 @@ to write results automatically"
         nlg_out,
         nlg,
         skip_existing,
+        config,
     })
 }
 
@@ -1061,14 +1074,28 @@ fn main() -> Result<()> {
         }
     }
 
+    let feature_config = if let Some(ref path) = cli.config {
+        println!("loaded feature configuration from {}", path.display());
+        analyse_nidra::config::FeatureConfig::from_file(path)?
+    } else {
+        let sidecar = edf_path.with_extension("config.json");
+        if sidecar.exists() {
+            println!("loaded feature configuration from sidecar {}", sidecar.display());
+            analyse_nidra::config::FeatureConfig::from_file(&sidecar)?
+        } else {
+            analyse_nidra::config::FeatureConfig::default()
+        }
+    };
+
     let started = Instant::now();
-    let recording = pipeline::load(
+    let recording = pipeline::load_with_epoch(
         &edf_path,
         &scoring_path,
         &cli.channels,
         &cli.references,
         cli.lights_off_seconds,
         cli.lights_on_seconds,
+        feature_config.epoch_length_sec,
     )
     .with_context(|| format!("loading {}", edf_path.display()))?;
     println!(
@@ -1110,7 +1137,7 @@ fn main() -> Result<()> {
     let core = if run("core") && (output_path.is_some() || need_regional) {
         cached_or_compute(cli.skip_existing, output_path.as_ref(), "core stage features", || {
             let t = Instant::now();
-            let v = pipeline::compute_core_stage_features(&recording);
+            let v = pipeline::compute_core_stage_features_with_config(&recording, &feature_config);
             println!("computed core stage features in {:.3}s", t.elapsed().as_secs_f64());
             Some(v)
         })
@@ -1132,7 +1159,7 @@ fn main() -> Result<()> {
     let slow_wave_values = if run("slow_waves") && (slow_wave_output_path.is_some() || need_regional) {
         cached_or_compute(cli.skip_existing, slow_wave_output_path.as_ref(), "slow-wave results", || {
             let t = Instant::now();
-            let v = events::slow_waves(&recording);
+            let v = events::slow_waves_with_config(&recording, &feature_config.slow_waves);
             println!("detected slow waves in {:.3}s", t.elapsed().as_secs_f64());
             Some(v)
         })
@@ -1143,7 +1170,7 @@ fn main() -> Result<()> {
     let spindle_values = if run("spindles") && (spindle_output_path.is_some() || need_regional) {
         cached_or_compute(cli.skip_existing, spindle_output_path.as_ref(), "spindle results", || {
             let t = Instant::now();
-            let v = events::spindles(&recording);
+            let v = events::spindles_with_config(&recording, &feature_config.spindles);
             println!("detected spindles in {:.3}s", t.elapsed().as_secs_f64());
             Some(v)
         })
@@ -1201,7 +1228,7 @@ fn main() -> Result<()> {
             .file_stem()
             .and_then(|value| value.to_str())
             .context("EDF filename is not valid UTF-8")?;
-        regional::write_csv(output_path, recording_name, &recording, &rows)?;
+        regional::write_csv_with_bands(output_path, recording_name, &recording, &rows, &feature_config.bands)?;
         println!(
             "wrote final regional CSV to {} ({} rows) in {:.3}s",
             output_path.display(),
@@ -1267,6 +1294,21 @@ mod tests {
         .unwrap();
         assert_eq!(cli.lights_off_seconds, Some(120.5));
         assert_eq!(cli.lights_on_seconds, Some(3600.0));
+    }
+
+    #[test]
+    fn cli_accepts_config_option() {
+        let cli = parse_cli(
+            [
+                "recording.edf",
+                "scoring.json",
+                "--config",
+                "my_config.json",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(cli.config, Some(PathBuf::from("my_config.json")));
     }
 
     /// --out-dir sets all 5 output slots when no positional output paths are given.

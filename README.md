@@ -10,7 +10,7 @@
   <b>National Institute of Mental Health and Neurosciences (NIMHANS)</b>, Bangalore, India.
 </p>
 
-**Version:** 1.25.0
+**Version:** 1.26.0
 
 Welcome to **CCS Sleep Studio**, a high-performance, cross-platform desktop application designed to assist researchers and clinicians in sleep EEG visualization, event annotation, sleep scoring, automated staging, and advanced EEG analysis.
 
@@ -18,6 +18,14 @@ CCS Sleep Studio is comprised of the following key modules:
 *   **ScoringNidra**: Interactive sleep scoring and event annotation module supporting EDF, Brain Products (.vhdr / .vmrk), Nihon Kohden (.EEG / .LOG), EMBLA (.ebm), Orbit (.orb), and R09 (.r09).
 *   **AutoscoreNidra**: Automated sleep scoring module with both interactive and batch modes.
 *   **AnalyseNidra**: Automated sleep EEG analysis and reporting module operating in both interactive and batch modes.
+
+### 🌟 New in Version 1.26.0
+*   **Markers stay on screen after filtering.** Applying or changing display filters (or other settings) no longer removes the markers and events from the waveform and the hypnogram.
+*   **Much faster display filtering.** Filters are display filters: only the window on screen is filtered (with a few seconds of real signal on each side so there is no edge artefact), using flat, allocation-free buffers and cached filter designs. Applying a filter redraws the current window instantly instead of re-filtering the whole night, so long multi-channel recordings no longer freeze on low-spec computers and scrolling stays fast. The filtered window now matches filtering the whole night exactly (previously the window edges showed a filter transient).
+*   **Spectrogram off by default.** The full-night spectrogram (and the SWA trace computed with it) is the slowest step when opening long files, so it is now off by default. Turn it on with the new **spectrogram [ON/OFF]** toolbar button; the setting is saved with the recording's configuration. The current epoch's spectrum (right-hand panel) is still shown.
+*   **Durations under every selection box.** When several regions are selected with the mouse, each box shows its own duration underneath, and the last box also shows the cumulative duration (Σ) of all boxes. The total no longer appears in the status bar.
+*   **Hide a channel with a right-click.** Right-click a channel's name or trace to hide it, show hidden channels again (one by one or all), or open the channel settings.
+*   **filter button** in the toolbar opens the Filters tab of the configuration directly.
 
 ### 🌟 New in Version 1.25.0
 *   **Restored Sigma band (10–16 Hz) power extraction:** Fixed an issue where the AnalyseNidra feature engine omitted the Sigma band (`*_Sigma_PSD`, `*_Sigma_FOOOF`, `*_Sigma_Irasa`), leaving Sigma columns blank across all sleep stages (N1, N2, N3, REM) in the regional CSV and master compilation sheet.
@@ -340,8 +348,9 @@ We have enriched the UI with several flexibility and control improvements:
 *   **YASA List Parser**: Retains epoch alignment by preserving empty lines as unscored elements.
 
 ### Signal Filtering & Auto Spectrogram
-*   Apply high-pass, low-pass, and notch filters independently to each channel.
-*   Zero-phase Chebyshev Type 2 filters.
+*   Apply high-pass, low-pass, and notch filters independently to each channel (toolbar **filter** button, or the Filters tab of the configuration).
+*   Zero-phase Chebyshev Type 2 filters, applied as display filters: only the visible window (plus a margin of real signal) is filtered, so filtering never slows down scrolling and never triggers a full-night recomputation.
+*   The full-night spectrogram is off by default; turn it on with the **spectrogram** toolbar button.
 *   Live magnitude response plot updates in real time within the configuration dialog.
 *   **Auto Spectrogram Power Scaling**: Automatically calculates 2nd and 98th log10 power percentiles upon loading signals, keeping color scaling ranges modifiable.
 

@@ -50,14 +50,18 @@ const ARCHITECTURE_COLUMNS: [&str; 38] = [
     "LZc",
 ];
 
+use crate::config::BandDefinition;
+
 fn feature_columns() -> Vec<String> {
+    feature_columns_for_bands(&crate::config::default_bands())
+}
+
+fn feature_columns_for_bands(bands: &[BandDefinition]) -> Vec<String> {
     let mut output = Vec::new();
     for stage in ["N1", "N2", "N3", "REM"] {
         for suffix in ["PSD", "FOOOF"] {
-            for band in [
-                "Delta", "Theta", "Sigma", "Alpha", "Beta1", "Beta2", "Gamma1",
-            ] {
-                output.push(format!("{stage}_{band}_{suffix}"));
+            for band in bands {
+                output.push(format!("{stage}_{}_{suffix}", band.label));
             }
         }
         for parameter in [
@@ -76,10 +80,8 @@ fn feature_columns() -> Vec<String> {
         ] {
             output.push(format!("{stage}_{parameter}_FOOOF"));
         }
-        for band in [
-            "Delta", "Theta", "Sigma", "Alpha", "Beta1", "Beta2", "Gamma1",
-        ] {
-            output.push(format!("{stage}_{band}_Irasa"));
+        for band in bands {
+            output.push(format!("{stage}_{}_Irasa", band.label));
         }
         for parameter in ["intercept", "slope", "rsquared", "auc", "oscspectraledge"] {
             output.push(format!("{stage}_{parameter}_Irasa"));
@@ -516,13 +518,30 @@ pub fn write_csv(
     recording: &LoadedRecording,
     rows: &BTreeMap<String, RegionalRow>,
 ) -> Result<()> {
+    write_csv_with_bands(
+        path,
+        recording_name,
+        recording,
+        rows,
+        &crate::config::default_bands(),
+    )
+}
+
+pub fn write_csv_with_bands(
+    path: &Path,
+    recording_name: &str,
+    recording: &LoadedRecording,
+    rows: &BTreeMap<String, RegionalRow>,
+    bands: &[BandDefinition],
+) -> Result<()> {
     let mut columns = ARCHITECTURE_COLUMNS
         .iter()
         .map(|value| value.to_string())
         .collect::<Vec<_>>();
     columns.extend(["Subjname".into(), "Sessname".into(), "Chan".into()]);
     columns.extend(event_columns());
-    columns.extend(feature_columns());
+    let feat_columns = feature_columns_for_bands(bands);
+    columns.extend(feat_columns.clone());
     columns.extend(nlg_columns());
     // Stage dynamics and sleep-cycle parameters: non-redundant full-night
     // dynamics plus the first five sleep cycles (without accs_ prefix).
@@ -544,7 +563,7 @@ pub fn write_csv(
         values.push(csv_escape(recording_name));
         values.push(String::new());
         values.push(region.clone());
-        for column in event_columns().into_iter().chain(feature_columns()).chain(nlg_columns()) {
+        for column in event_columns().into_iter().chain(feat_columns.clone()).chain(nlg_columns()) {
             let value = row.get(&column).copied().unwrap_or(f64::NAN);
             values.push(if value.is_finite() {
                 value.to_string()

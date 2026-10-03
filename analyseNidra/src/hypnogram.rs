@@ -79,7 +79,16 @@ pub fn read_sleepgpt(path: &Path) -> Result<Vec<Stage>> {
 }
 
 pub fn upsample(stages: &[Stage], sfreq: f64, n_samples: usize) -> Vec<i8> {
-    let samples_per_epoch = (30.0 * sfreq).round() as usize;
+    upsample_with_epoch_sec(stages, sfreq, n_samples, 30.0)
+}
+
+pub fn upsample_with_epoch_sec(
+    stages: &[Stage],
+    sfreq: f64,
+    n_samples: usize,
+    epoch_length_sec: f64,
+) -> Vec<i8> {
+    let samples_per_epoch = (epoch_length_sec * sfreq).round() as usize;
     let mut output = Vec::with_capacity(n_samples);
     for stage in stages {
         output.extend(std::iter::repeat_n(stage.code(), samples_per_epoch));
@@ -149,6 +158,14 @@ impl ArchitectureWindow {
 }
 
 pub fn sleep_architecture(input: &[Stage], window: ArchitectureWindow) -> SleepArchitecture {
+    sleep_architecture_with_epoch_sec(input, window, 30.0)
+}
+
+pub fn sleep_architecture_with_epoch_sec(
+    input: &[Stage],
+    window: ArchitectureWindow,
+    epoch_length_sec: f64,
+) -> SleepArchitecture {
     let trailing_wake = input
         .iter()
         .rev()
@@ -156,7 +173,7 @@ pub fn sleep_architecture(input: &[Stage], window: ArchitectureWindow) -> SleepA
         .count();
     let trim = trailing_wake.saturating_sub(10);
     let stages = &input[..input.len().saturating_sub(trim)];
-    let epoch_minutes = 0.5;
+    let epoch_minutes = epoch_length_sec / 60.0;
     let labels = [
         ("W", Stage::Wake),
         ("N1", Stage::N1),

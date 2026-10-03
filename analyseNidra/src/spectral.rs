@@ -1,4 +1,4 @@
-use crate::features::{BANDS, welch_median, welch_median_nperseg};
+use crate::features::{welch_median, welch_median_nperseg};
 use nalgebra::{DMatrix, DVector};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -141,19 +141,22 @@ fn simpson(values: &[f64]) -> f64 {
     }
 }
 
+use crate::config::BandDefinition;
+
 fn relative_bandpowers(
     spectrum: &[f64],
     maximum_frequency: usize,
     suffix: &str,
+    bands: &[BandDefinition],
 ) -> BTreeMap<String, f64> {
     let total = simpson(&spectrum[1..=maximum_frequency]);
-    BANDS
+    bands
         .iter()
-        .map(|&(low, high, label)| {
-            let start = low as usize;
-            let end = (high as usize).min(maximum_frequency);
+        .map(|band| {
+            let start = band.low as usize;
+            let end = (band.high as usize).min(maximum_frequency);
             (
-                format!("{label}_{suffix}"),
+                format!("{}_{suffix}", band.label),
                 simpson(&spectrum[start..=end]) / total,
             )
         })
@@ -185,6 +188,15 @@ fn linear_fit_log_frequency(spectrum: &[f64]) -> (f64, f64, f64) {
 }
 
 pub fn irasa_features(signal: &[f64], sfreq: f64) -> BTreeMap<String, f64> {
+    let bands = crate::config::default_bands();
+    irasa_features_with_bands(signal, sfreq, &bands)
+}
+
+pub fn irasa_features_with_bands(
+    signal: &[f64],
+    sfreq: f64,
+    bands: &[BandDefinition],
+) -> BTreeMap<String, f64> {
     let (_, original) = welch_median(signal, sfreq);
     let resampled = H_FACTORS
         .par_iter()
@@ -247,7 +259,7 @@ pub fn irasa_features(signal: &[f64], sfreq: f64) -> BTreeMap<String, f64> {
         .collect::<Vec<_>>();
     let mut with_dc = vec![0.0];
     with_dc.extend_from_slice(&oscillatory);
-    let mut output = relative_bandpowers(&with_dc, 40, "Irasa");
+    let mut output = relative_bandpowers(&with_dc, 40, "Irasa", bands);
     output.insert("intercept_Irasa".into(), intercept);
     output.insert("slope_Irasa".into(), -slope);
     output.insert("rsquared_Irasa".into(), r_squared);
@@ -600,11 +612,20 @@ fn fooof_model(psd: &[f64]) -> (Vec<f64>, BTreeMap<String, f64>) {
 }
 
 pub fn fooof_features(signal: &[f64], sfreq: f64) -> BTreeMap<String, f64> {
+    let bands = crate::config::default_bands();
+    fooof_features_with_bands(signal, sfreq, &bands)
+}
+
+pub fn fooof_features_with_bands(
+    signal: &[f64],
+    sfreq: f64,
+    bands: &[BandDefinition],
+) -> BTreeMap<String, f64> {
     let (_, psd) = welch_median(signal, sfreq);
     let (oscillatory, mut output) = fooof_model(&psd);
     let mut with_dc = vec![0.0];
     with_dc.extend_from_slice(&oscillatory);
-    output.extend(relative_bandpowers(&with_dc, 40, "FOOOF"));
+    output.extend(relative_bandpowers(&with_dc, 40, "FOOOF", bands));
     output
 }
 

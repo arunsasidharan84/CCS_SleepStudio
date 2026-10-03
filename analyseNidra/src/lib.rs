@@ -1,5 +1,6 @@
 pub mod accs;
 pub mod cleaning;
+pub mod config;
 pub mod edf;
 pub mod events;
 pub mod features;

@@ -180,6 +180,7 @@ class AppConfig {
     this.spectrogramPowerMin = -1.0,
     this.spectrogramPowerMax = 3.0,
     this.tfEnabled = true,
+    this.spectrogramEnabled = false,
     this.tfDisplayMode = 'dB (median baseline)',
     this.tfFrequencyScale = 'Linear',
     this.tfShowRidge = false,
@@ -223,13 +224,30 @@ class AppConfig {
     this.preprocessStimMaxCombs = 4,
     // Feature extraction configuration
     List<String>? featureAnalyses,
+    this.epochLengthSeconds = 30.0,
+    this.featureWindowSeconds = 15.0,
     this.spindleFreqMin = 11.0,
     this.spindleFreqMax = 16.0,
     this.spindleDurationMin = 0.5,
-    this.spindleDurationMax = 3.0,
+    this.spindleDurationMax = 2.0,
+    this.spindleRelPowerThresh = 0.20,
+    this.spindleCorrThresh = 0.65,
+    this.spindleRmsMultiplier = 1.5,
     this.slowWaveFreqMin = 0.3,
     this.slowWaveFreqMax = 2.0,
     this.slowWaveMinAmpUv = 75.0,
+    this.slowWaveMinPtpUv = 75.0,
+    this.slowWaveMaxPtpUv = 350.0,
+    this.slowWaveMinNegAmpUv = 40.0,
+    this.slowWaveMaxNegAmpUv = 200.0,
+    this.slowWaveMinPosAmpUv = 10.0,
+    this.slowWaveMaxPosAmpUv = 150.0,
+    this.slowWaveDurationMin = 0.4,
+    this.slowWaveDurationMax = 2.5,
+    this.slowWaveNegDurationMin = 0.3,
+    this.slowWaveNegDurationMax = 1.5,
+    this.slowWavePosDurationMin = 0.1,
+    this.slowWavePosDurationMax = 1.0,
     // Band power definitions
     this.bandDeltaLo = 0.5,
     this.bandDeltaHi = 4.0,
@@ -237,12 +255,12 @@ class AppConfig {
     this.bandThetaHi = 8.0,
     this.bandAlphaLo = 8.0,
     this.bandAlphaHi = 12.0,
-    this.bandSigmaLo = 12.0,
+    this.bandSigmaLo = 10.0,
     this.bandSigmaHi = 16.0,
-    this.bandBetaLo = 16.0,
+    this.bandBetaLo = 12.0,
     this.bandBetaHi = 30.0,
     this.bandGammaLo = 30.0,
-    this.bandGammaHi = 45.0,
+    this.bandGammaHi = 40.0,
   }) : hypnogramOverlayMode =
            hypnogramOverlayMode ?? (showSwaPlot ? 'SWA' : 'Off'),
        featureAnalyses = featureAnalyses != null
@@ -265,13 +283,30 @@ class AppConfig {
 
   // Feature extraction configuration fields
   List<String> featureAnalyses;
+  double epochLengthSeconds;
+  double featureWindowSeconds;
   double spindleFreqMin;
   double spindleFreqMax;
   double spindleDurationMin;
   double spindleDurationMax;
+  double spindleRelPowerThresh;
+  double spindleCorrThresh;
+  double spindleRmsMultiplier;
   double slowWaveFreqMin;
   double slowWaveFreqMax;
   double slowWaveMinAmpUv;
+  double slowWaveMinPtpUv;
+  double slowWaveMaxPtpUv;
+  double slowWaveMinNegAmpUv;
+  double slowWaveMaxNegAmpUv;
+  double slowWaveMinPosAmpUv;
+  double slowWaveMaxPosAmpUv;
+  double slowWaveDurationMin;
+  double slowWaveDurationMax;
+  double slowWaveNegDurationMin;
+  double slowWaveNegDurationMax;
+  double slowWavePosDurationMin;
+  double slowWavePosDurationMax;
 
   double bandDeltaLo;
   double bandDeltaHi;
@@ -303,6 +338,11 @@ class AppConfig {
   /// Whether the Morlet time-frequency panel is shown.
   /// Disabling this skips all wavelet computation for instant navigation.
   bool tfEnabled;
+
+  /// Whether the full-night spectrogram (and the SWA trace and per-epoch
+  /// spectra precomputed with it) is computed. Off by default: it is the
+  /// slowest step when opening long recordings.
+  bool spectrogramEnabled;
 
   String tfDisplayMode;
   String tfFrequencyScale;
@@ -353,6 +393,7 @@ class AppConfig {
       'spectrogramPowerMin': spectrogramPowerMin,
       'spectrogramPowerMax': spectrogramPowerMax,
       'tfEnabled': tfEnabled,
+      'spectrogramEnabled': spectrogramEnabled,
       'tfDisplayMode': tfDisplayMode,
       'tfFrequencyScale': tfFrequencyScale,
       'tfShowRidge': tfShowRidge,
@@ -397,13 +438,30 @@ class AppConfig {
       'preprocessStimMaxCombs': preprocessStimMaxCombs,
       // Feature extraction serialization
       'featureAnalyses': featureAnalyses,
+      'epochLengthSeconds': epochLengthSeconds,
+      'featureWindowSeconds': featureWindowSeconds,
       'spindleFreqMin': spindleFreqMin,
       'spindleFreqMax': spindleFreqMax,
       'spindleDurationMin': spindleDurationMin,
       'spindleDurationMax': spindleDurationMax,
+      'spindleRelPowerThresh': spindleRelPowerThresh,
+      'spindleCorrThresh': spindleCorrThresh,
+      'spindleRmsMultiplier': spindleRmsMultiplier,
       'slowWaveFreqMin': slowWaveFreqMin,
       'slowWaveFreqMax': slowWaveFreqMax,
       'slowWaveMinAmpUv': slowWaveMinAmpUv,
+      'slowWaveMinPtpUv': slowWaveMinPtpUv,
+      'slowWaveMaxPtpUv': slowWaveMaxPtpUv,
+      'slowWaveMinNegAmpUv': slowWaveMinNegAmpUv,
+      'slowWaveMaxNegAmpUv': slowWaveMaxNegAmpUv,
+      'slowWaveMinPosAmpUv': slowWaveMinPosAmpUv,
+      'slowWaveMaxPosAmpUv': slowWaveMaxPosAmpUv,
+      'slowWaveDurationMin': slowWaveDurationMin,
+      'slowWaveDurationMax': slowWaveDurationMax,
+      'slowWaveNegDurationMin': slowWaveNegDurationMin,
+      'slowWaveNegDurationMax': slowWaveNegDurationMax,
+      'slowWavePosDurationMin': slowWavePosDurationMin,
+      'slowWavePosDurationMax': slowWavePosDurationMax,
       'bandDeltaLo': bandDeltaLo,
       'bandDeltaHi': bandDeltaHi,
       'bandThetaLo': bandThetaLo,
@@ -480,6 +538,7 @@ class AppConfig {
       spectrogramPowerMax:
           (json['spectrogramPowerMax'] as num?)?.toDouble() ?? 3.0,
       tfEnabled: safeBool(json['tfEnabled'], false),
+      spectrogramEnabled: safeBool(json['spectrogramEnabled'], false),
       tfDisplayMode: json['tfDisplayMode'] as String? ?? 'dB (median baseline)',
       tfFrequencyScale: json['tfFrequencyScale'] as String? ?? 'Linear',
       tfShowRidge: safeBool(json['tfShowRidge'], false),
@@ -546,16 +605,50 @@ class AppConfig {
       featureAnalyses: (json['featureAnalyses'] as List?)
           ?.map((e) => e.toString())
           .toList(),
+      epochLengthSeconds:
+          (json['epochLengthSeconds'] as num?)?.toDouble() ?? 30.0,
+      featureWindowSeconds:
+          (json['featureWindowSeconds'] as num?)?.toDouble() ?? 15.0,
       spindleFreqMin: (json['spindleFreqMin'] as num?)?.toDouble() ?? 11.0,
       spindleFreqMax: (json['spindleFreqMax'] as num?)?.toDouble() ?? 16.0,
       spindleDurationMin:
           (json['spindleDurationMin'] as num?)?.toDouble() ?? 0.5,
       spindleDurationMax:
-          (json['spindleDurationMax'] as num?)?.toDouble() ?? 3.0,
+          (json['spindleDurationMax'] as num?)?.toDouble() ?? 2.0,
+      spindleRelPowerThresh:
+          (json['spindleRelPowerThresh'] as num?)?.toDouble() ?? 0.20,
+      spindleCorrThresh:
+          (json['spindleCorrThresh'] as num?)?.toDouble() ?? 0.65,
+      spindleRmsMultiplier:
+          (json['spindleRmsMultiplier'] as num?)?.toDouble() ?? 1.5,
       slowWaveFreqMin: (json['slowWaveFreqMin'] as num?)?.toDouble() ?? 0.3,
       slowWaveFreqMax: (json['slowWaveFreqMax'] as num?)?.toDouble() ?? 2.0,
       slowWaveMinAmpUv:
           (json['slowWaveMinAmpUv'] as num?)?.toDouble() ?? 75.0,
+      slowWaveMinPtpUv:
+          (json['slowWaveMinPtpUv'] as num?)?.toDouble() ?? 75.0,
+      slowWaveMaxPtpUv:
+          (json['slowWaveMaxPtpUv'] as num?)?.toDouble() ?? 350.0,
+      slowWaveMinNegAmpUv:
+          (json['slowWaveMinNegAmpUv'] as num?)?.toDouble() ?? 40.0,
+      slowWaveMaxNegAmpUv:
+          (json['slowWaveMaxNegAmpUv'] as num?)?.toDouble() ?? 200.0,
+      slowWaveMinPosAmpUv:
+          (json['slowWaveMinPosAmpUv'] as num?)?.toDouble() ?? 10.0,
+      slowWaveMaxPosAmpUv:
+          (json['slowWaveMaxPosAmpUv'] as num?)?.toDouble() ?? 150.0,
+      slowWaveDurationMin:
+          (json['slowWaveDurationMin'] as num?)?.toDouble() ?? 0.4,
+      slowWaveDurationMax:
+          (json['slowWaveDurationMax'] as num?)?.toDouble() ?? 2.5,
+      slowWaveNegDurationMin:
+          (json['slowWaveNegDurationMin'] as num?)?.toDouble() ?? 0.3,
+      slowWaveNegDurationMax:
+          (json['slowWaveNegDurationMax'] as num?)?.toDouble() ?? 1.5,
+      slowWavePosDurationMin:
+          (json['slowWavePosDurationMin'] as num?)?.toDouble() ?? 0.1,
+      slowWavePosDurationMax:
+          (json['slowWavePosDurationMax'] as num?)?.toDouble() ?? 1.0,
       bandDeltaLo: (json['bandDeltaLo'] as num?)?.toDouble() ?? 0.5,
       bandDeltaHi: (json['bandDeltaHi'] as num?)?.toDouble() ?? 4.0,
       bandThetaLo: (json['bandThetaLo'] as num?)?.toDouble() ?? 4.0,
@@ -596,6 +689,7 @@ class AppConfig {
       'Periodogram_limit_hz': [periodogramFreqMin, periodogramFreqMax],
       'Periodogram_display_mode': periodogramDisplayMode,
       'Wavelet_panel_visible': tfEnabled,
+      'Spectrogram_panel_visible': spectrogramEnabled,
       'Wavelet_show_ridge': tfShowRidge,
       'Wavelet_autoscale': tfAutoScale,
       'Wavelet_display_mode': tfDisplayMode,
@@ -606,7 +700,7 @@ class AppConfig {
       'Robust_z_standardize': robustZStandardize,
       'Distance_between_channels_muV': distanceBetweenChannelsUv,
       'EEG_panel_time_unit': eegPanelTimeUnit,
-      'Epoch_length_s': 30,
+      'Epoch_length_s': epochLengthSeconds,
       'Sampling_rate_hz': 256.0,
       'Extension_epoch_s': [5.0, 5.0],
       'Spectrogram_flex': spectrogramFlex,
@@ -765,6 +859,7 @@ class AppConfig {
             (global['Amplitude_range_muV'] as num?)?.toDouble() ?? 75.0,
         referenceAmplitudeLineUv: amp?.toDouble() ?? 37.5,
         tfEnabled: tfVis,
+        spectrogramEnabled: global['Spectrogram_panel_visible'] == true,
         tfDisplayMode: tfDisplay,
         tfFrequencyScale: tfScale,
         tfShowRidge: tfRidge,
@@ -816,6 +911,8 @@ class AppConfig {
         subjectDetails: subjectDetails,
         recordingDate: recordingDate,
         channels: channels,
+        epochLengthSeconds:
+            (global['Epoch_length_s'] as num?)?.toDouble() ?? 30.0,
       );
     }
 
@@ -1660,19 +1757,54 @@ class EegBackend {
       config,
     );
     final swaConfigIndex = _clampConfigIndex(config.swaChannelIndex, config);
+
+    if (!config.spectrogramEnabled) {
+      // Spectrogram off: skip every full-night pass. The current epoch's
+      // spectrum is then computed on demand (_epochPeriodogramWithFreqs).
+      final spectSourceOff = _sourceIndexForConfig(
+        _configAt(config, spectConfigIndex, raw.channelSamples.length),
+        config,
+        spectConfigIndex,
+        raw.channelSamples.length,
+      );
+      final nyq = srate / 2;
+      final upper = math.max(0.02, nyq - 0.01);
+      final lower = math.min(0.25, upper / 2);
+      final fMin = config.tfFreqMin.clamp(lower, upper).toDouble();
+      final fMax = config.tfFreqMax.clamp(fMin, math.max(fMin, upper)).toDouble();
+      final tfFreqsOff = config.tfFrequencyScale == 'Logarithmic'
+          ? sp.geomspace(math.max(fMin, 0.1), fMax, 120)
+          : sp.linspaceList(fMin, fMax, 120);
+      final stats = sp.computeTfNormStats(const [], const [], tfFreqsOff);
+      return LoadedEeg(
+        sampleRateHz: raw.sampleRateHz,
+        channelLabels: raw.channelLabels,
+        channelSamples: raw.channelSamples,
+        sourceDescription: raw.sourceDescription,
+        tfFreqs: tfFreqsOff,
+        tfNormMedian: stats.median,
+        tfNormIqr: stats.iqr,
+        spectrogramChannelIndex: spectSourceOff >= 0 ? spectSourceOff : 0,
+        recordingStartTime: raw.recordingStartTime,
+      );
+    }
+
+    // Night products use the derivation (re-reference, polarity) but not the
+    // display filters: filters only change what is drawn, so changing them
+    // must not trigger a full-night recomputation.
     final spectSignal = _fullSignalForConfig(
       raw.channelSamples,
       srate,
       config,
       spectConfigIndex,
-      applyFilters: true,
+      applyFilters: false,
     );
     final periodSignal = _fullSignalForConfig(
       raw.channelSamples,
       srate,
       config,
       periodConfigIndex,
-      applyFilters: true,
+      applyFilters: false,
     );
     final swaSignal = swaConfigIndex == spectConfigIndex
         ? spectSignal
@@ -1681,7 +1813,7 @@ class EegBackend {
             srate,
             config,
             swaConfigIndex,
-            applyFilters: true,
+            applyFilters: false,
           );
     final spectSource = _sourceIndexForConfig(
       _configAt(config, spectConfigIndex, raw.channelSamples.length),
@@ -1876,7 +2008,7 @@ class EegBackend {
       visibleDurationSeconds: displayDurationSec,
       totalDurationSeconds: totalDuration,
       sourceDescription: eeg.sourceDescription,
-      spectrogramFiltered: _hasDisplayFilter(spectChCfg),
+      spectrogramFiltered: false, // night products ignore display filters
       periodogramFiltered: _hasDisplayFilter(periodChCfg),
       tfFiltered: _hasDisplayFilter(tfChCfg),
       spectrogramPower: eeg.spectrogramPower,
@@ -2207,7 +2339,7 @@ class EegBackend {
       spectrogramFreqMax: cfg.spectrogramFreqMax,
       spectrogramPowerMin: cfg.spectrogramPowerMin,
       spectrogramPowerMax: cfg.spectrogramPowerMax,
-      spectrogramFiltered: _hasDisplayFilter(spectChCfg),
+      spectrogramFiltered: false, // night products ignore display filters
       periodogramFiltered: _hasDisplayFilter(periodChCfg),
       tfFiltered: _hasDisplayFilter(tfChCfg),
       spectrogramFlex: cfg.spectrogramFlex,
@@ -3094,17 +3226,42 @@ class EegBackend {
     if (start >= safeEnd) return const [];
     final refIdx = _referenceIndexForConfig(channelCfg, cfg, channels.length);
     final ref = refIdx == null ? null : channels[refIdx];
-    final segment = List<double>.generate(safeEnd - start, (offset) {
-      final idx = start + offset;
+    final sos = applyFilters
+        ? _displayFilterSos(channelCfg, sampleRate)
+        : const <sp.BiquadSection>[];
+
+    // Filter a little real signal on both sides of the window so the
+    // filter's start-up transient falls outside what is drawn (a 0.3 Hz
+    // high-pass needs a few seconds). Only the window + margins is filtered,
+    // never the whole night, so scrolling stays fast.
+    final margin = sos.isEmpty ? 0 : _filterMarginSamples(channelCfg, sampleRate);
+    final from = math.max(0, start - margin);
+    final to = math.min(source.length, safeEnd + margin);
+    final n = to - from;
+    final buf = Float64List(n);
+    final flip = channelCfg.flipPolarity;
+    final refLen = ref?.length ?? 0;
+    for (var k = 0; k < n; k++) {
+      final idx = from + k;
       var value = source[idx];
-      if (ref != null && idx < ref.length) {
-        value -= ref[idx];
+      if (ref != null && idx < refLen) value -= ref[idx];
+      buf[k] = flip ? -value : value;
+    }
+    if (sos.isNotEmpty && n >= 8) {
+      if (!_filtfiltInPlace(buf, sos)) {
+        // Unstable design: fall back to the unfiltered derivation.
+        for (var k = 0; k < n; k++) {
+          final idx = from + k;
+          var value = source[idx];
+          if (ref != null && idx < refLen) value -= ref[idx];
+          buf[k] = flip ? -value : value;
+        }
       }
-      if (channelCfg.flipPolarity) value = -value;
-      return value;
-    }, growable: false);
-    if (!applyFilters || !_hasDisplayFilter(channelCfg)) return segment;
-    return _applyDisplayFilters(segment, sampleRate, channelCfg);
+    }
+    final offset = start - from;
+    final length = safeEnd - start;
+    if (offset == 0 && length == n) return buf;
+    return Float64List.sublistView(buf, offset, offset + length);
   }
 
   bool _hasDisplayFilter(ChannelConfig cfg) {
@@ -3115,140 +3272,139 @@ class EegBackend {
         (cfg.reReference != 'None' && cfg.reReference.isNotEmpty);
   }
 
-  List<double> _applyDisplayFilters(
-    List<double> signal,
-    double sampleRate,
-    ChannelConfig cfg,
-  ) {
-    if (signal.length < 8 || sampleRate <= 0) return signal;
+  /// Seconds of real signal filtered on each side of the window.
+  int _filterMarginSamples(ChannelConfig cfg, double sampleRate) {
+    var seconds = 0.5;
+    if (cfg.filterHpEnabled && cfg.filterHpCutoff > 0.01) {
+      // About two periods of the cut-off frequency, capped for speed.
+      seconds = math.max(seconds, math.min(8.0, 2.0 / cfg.filterHpCutoff));
+    }
+    if (cfg.filterNotchEnabled) seconds = math.max(seconds, 1.0);
+    return (seconds * sampleRate).ceil();
+  }
+
+  /// Second-order sections of a channel's display filters, cached by
+  /// settings and sample rate (designing them is the expensive part).
+  final Map<String, List<sp.BiquadSection>> _sosCache = {};
+
+  List<sp.BiquadSection> _displayFilterSos(ChannelConfig cfg, double sampleRate) {
+    if (sampleRate <= 0) return const [];
+    final key = [
+      sampleRate,
+      cfg.filterHpEnabled, cfg.filterHpCutoff, cfg.filterHpOrder,
+      cfg.filterLpEnabled, cfg.filterLpCutoff, cfg.filterLpOrder,
+      cfg.filterNotchEnabled, cfg.filterNotchCutoff, cfg.filterNotchOrder,
+    ].join('|');
+    final cached = _sosCache[key];
+    if (cached != null) return cached;
     final nyquist = sampleRate / 2.0;
-
-    final List<sp.BiquadSection> sos = [];
-
+    final sos = <sp.BiquadSection>[];
     if (cfg.filterHpEnabled &&
         cfg.filterHpCutoff > 0.01 &&
         cfg.filterHpCutoff < nyquist - 0.1) {
-      final cutoff = cfg.filterHpCutoff.clamp(0.05, nyquist - 0.5);
-      sos.addAll(
-        sp.designCheby2SOS(
-          order: cfg.filterHpOrder,
-          rs: 60.0,
-          cutoff: cutoff,
-          sampleRate: sampleRate,
-          btype: 'highpass',
-        ),
-      );
+      sos.addAll(sp.designCheby2SOS(
+        order: cfg.filterHpOrder,
+        rs: 60.0,
+        cutoff: cfg.filterHpCutoff.clamp(0.05, nyquist - 0.5).toDouble(),
+        sampleRate: sampleRate,
+        btype: 'highpass',
+      ));
     }
-
     if (cfg.filterLpEnabled &&
         cfg.filterLpCutoff > 0.1 &&
         cfg.filterLpCutoff < nyquist) {
-      final cutoff = cfg.filterLpCutoff.clamp(0.1, nyquist - 0.5);
-      sos.addAll(
-        sp.designCheby2SOS(
-          order: cfg.filterLpOrder,
-          rs: 60.0,
-          cutoff: cutoff,
-          sampleRate: sampleRate,
-          btype: 'lowpass',
-        ),
-      );
+      sos.addAll(sp.designCheby2SOS(
+        order: cfg.filterLpOrder,
+        rs: 60.0,
+        cutoff: cfg.filterLpCutoff.clamp(0.1, nyquist - 0.5).toDouble(),
+        sampleRate: sampleRate,
+        btype: 'lowpass',
+      ));
     }
-
     if (cfg.filterNotchEnabled &&
         cfg.filterNotchCutoff > 1.0 &&
         cfg.filterNotchCutoff < nyquist - 1.0) {
-      final cutoff = cfg.filterNotchCutoff.clamp(1.0, nyquist - 1.0);
-      sos.addAll(
-        sp.designCheby2SOS(
-          order: cfg.filterNotchOrder,
-          rs: 60.0,
-          cutoff: cutoff,
-          sampleRate: sampleRate,
-          btype: 'bandstop',
-        ),
-      );
+      sos.addAll(sp.designCheby2SOS(
+        order: cfg.filterNotchOrder,
+        rs: 60.0,
+        cutoff: cfg.filterNotchCutoff.clamp(1.0, nyquist - 1.0).toDouble(),
+        sampleRate: sampleRate,
+        btype: 'bandstop',
+      ));
     }
-
-    if (sos.isEmpty) return signal;
-    return _applyZeroPhaseSOS(signal, sos);
-  }
-
-  List<double> _applyZeroPhaseSOS(
-    List<double> input,
-    List<sp.BiquadSection> sos,
-  ) {
-    if (input.length < 4) return List<double>.from(input);
-
-    // Reflection-pad the signal to suppress edge transients,
-    // mirroring scipy.signal.filtfilt's approach.
-    // padLen = 3 × number_of_sos_sections (matches 3·order heuristic).
-    final padLen = math.min(input.length - 1, sos.length * 3);
-    final padded = List<double>.filled(input.length + 2 * padLen, 0.0);
-
-    // Reflect-pad the start: mirror the first padLen samples around input[0]
-    final firstVal = input.first;
-    for (var i = 0; i < padLen; i++) {
-      padded[padLen - 1 - i] = 2.0 * firstVal - input[i + 1];
-    }
-    // Copy original signal
-    for (var i = 0; i < input.length; i++) {
-      padded[padLen + i] = input[i];
-    }
-    // Reflect-pad the end: mirror the last padLen samples around input[last]
-    final lastVal = input.last;
-    final n = input.length;
-    for (var i = 0; i < padLen; i++) {
-      padded[padLen + n + i] = 2.0 * lastVal - input[n - 2 - i];
-    }
-
-    // Forward pass
-    var output = padded;
-    for (final section in sos) {
-      if (!section.b0.isFinite ||
-          !section.b1.isFinite ||
-          !section.b2.isFinite ||
-          !section.a1.isFinite ||
-          !section.a2.isFinite) {
-        return List<double>.from(input);
-      }
-      output = _applyBiquadSection(output, section);
-    }
-    // Reverse pass (zero-phase)
-    output = output.reversed.toList(growable: false);
-    for (final section in sos) {
-      output = _applyBiquadSection(output, section);
-    }
-    output = output.reversed.toList(growable: false);
-
-    // Trim padding — return only the original-length segment
-    final result = output.sublist(padLen, padLen + input.length);
-    for (final x in result) {
-      if (!x.isFinite) {
-        return List<double>.from(input);
-      }
-    }
+    final valid = sos.every((c) =>
+        c.b0.isFinite && c.b1.isFinite && c.b2.isFinite && c.a1.isFinite && c.a2.isFinite);
+    final result = valid ? List<sp.BiquadSection>.unmodifiable(sos) : const <sp.BiquadSection>[];
+    if (_sosCache.length > 64) _sosCache.clear();
+    _sosCache[key] = result;
     return result;
   }
 
-  List<double> _applyBiquadSection(List<double> input, sp.BiquadSection c) {
-    final out = List<double>.filled(input.length, 0.0, growable: false);
-    final x0 = input.first;
-    final num = c.b0 + c.b1 + c.b2;
-    final den = 1.0 + c.a1 + c.a2;
-    final G = den.abs() > 1e-12 ? (num / den) : 0.0;
-
-    double s1 = (G - c.b0) * x0;
-    double s2 = (c.b2 - c.a2 * G) * x0;
-
-    for (var i = 0; i < input.length; i++) {
-      final x = input[i];
-      final y = c.b0 * x + s1;
-      out[i] = y;
-      s1 = c.b1 * x - c.a1 * y + s2;
-      s2 = c.b2 * x - c.a2 * y;
+  /// Zero-phase (forward + backward) filtering of [x] in place with
+  /// odd-reflection padding at the ends, like scipy's sosfiltfilt.
+  /// Works on a flat Float64List with no per-sample allocation.
+  /// Returns false (leaving [x] unspecified) if the output is not finite.
+  static bool _filtfiltInPlace(Float64List x, List<sp.BiquadSection> sos) {
+    final n = x.length;
+    if (n < 4 || sos.isEmpty) return true;
+    final pad = math.min(n - 1, sos.length * 6);
+    final total = n + 2 * pad;
+    final w = Float64List(total);
+    final first = x[0];
+    final last = x[n - 1];
+    for (var i = 0; i < pad; i++) {
+      w[pad - 1 - i] = 2.0 * first - x[i + 1];
+      w[pad + n + i] = 2.0 * last - x[n - 2 - i];
     }
-    return out;
+    w.setRange(pad, pad + n, x);
+
+    for (final c in sos) {
+      _biquadForward(w, c);
+    }
+    for (final c in sos) {
+      _biquadBackward(w, c);
+    }
+    for (var i = 0; i < n; i++) {
+      final v = w[pad + i];
+      if (!v.isFinite) return false;
+      x[i] = v;
+    }
+    return true;
+  }
+
+  /// One biquad, transposed direct form II, initial state at steady state
+  /// for the first sample (scipy's sosfilt_zi).
+  static void _biquadForward(Float64List w, sp.BiquadSection c) {
+    final b0 = c.b0, b1 = c.b1, b2 = c.b2, a1 = c.a1, a2 = c.a2;
+    final den = 1.0 + a1 + a2;
+    final g = den.abs() > 1e-12 ? (b0 + b1 + b2) / den : 0.0;
+    final x0 = w[0];
+    var s1 = (g - b0) * x0;
+    var s2 = (b2 - a2 * g) * x0;
+    final n = w.length;
+    for (var i = 0; i < n; i++) {
+      final x = w[i];
+      final y = b0 * x + s1;
+      s1 = b1 * x - a1 * y + s2;
+      s2 = b2 * x - a2 * y;
+      w[i] = y;
+    }
+  }
+
+  static void _biquadBackward(Float64List w, sp.BiquadSection c) {
+    final b0 = c.b0, b1 = c.b1, b2 = c.b2, a1 = c.a1, a2 = c.a2;
+    final den = 1.0 + a1 + a2;
+    final g = den.abs() > 1e-12 ? (b0 + b1 + b2) / den : 0.0;
+    final x0 = w[w.length - 1];
+    var s1 = (g - b0) * x0;
+    var s2 = (b2 - a2 * g) * x0;
+    for (var i = w.length - 1; i >= 0; i--) {
+      final x = w[i];
+      final y = b0 * x + s1;
+      s1 = b1 * x - a1 * y + s2;
+      s2 = b2 * x - a2 * y;
+      w[i] = y;
+    }
   }
 
   ({double median, double iqr}) _robustStats(

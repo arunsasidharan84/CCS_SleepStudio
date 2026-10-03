@@ -25,6 +25,7 @@ void main() {
       sourceDescription: 'synthetic',
     );
 
+    config.spectrogramEnabled = true;
     final eeg = await backend.computeNightProducts(raw, config);
     final viewport = await backend.viewportFromEeg(
       eeg,
@@ -77,6 +78,7 @@ void main() {
       sourceDescription: 'synthetic',
     );
 
+    config.spectrogramEnabled = true;
     final eeg = await backend.computeNightProducts(raw, config);
     final viewport = await backend.viewportFromEeg(
       eeg,
@@ -130,8 +132,10 @@ void main() {
       sourceDescription: 'synthetic independent SWA channel',
     );
 
+    config.spectrogramEnabled = true;
     final lowFrequencySwa = await backend.computeNightProducts(raw, config);
     config.swaChannelIndex = 1;
+    config.spectrogramEnabled = true;
     final highFrequencySwa = await backend.computeNightProducts(raw, config);
 
     expect(lowFrequencySwa.swaPerEpoch, isNotEmpty);
@@ -172,6 +176,7 @@ void main() {
         sourceDescription: 'synthetic legacy config',
       );
 
+      config.spectrogramEnabled = true;
       final eeg = await backend.computeNightProducts(raw, config);
 
       expect(eeg.spectrogramPower, isNotEmpty);
@@ -218,6 +223,7 @@ void main() {
       sourceDescription: 'synthetic configured channels',
     );
 
+    config.spectrogramEnabled = true;
     final eeg = await backend.computeNightProducts(raw, config);
     final viewport = await backend.viewportFromEeg(
       eeg,
@@ -261,6 +267,7 @@ void main() {
       sourceDescription: 'varying amplitude',
     );
 
+    config.spectrogramEnabled = true;
     final eeg = await backend.computeNightProducts(raw, config);
     final initial = await backend.viewportFromEeg(
       eeg,
@@ -300,6 +307,7 @@ void main() {
       sourceDescription: 'manual scale',
     );
 
+    config.spectrogramEnabled = true;
     final eeg = await backend.computeNightProducts(raw, config);
     final viewport = await backend.viewportFromEeg(
       eeg,

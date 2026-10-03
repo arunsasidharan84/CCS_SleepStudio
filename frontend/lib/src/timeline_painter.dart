@@ -266,7 +266,13 @@ class SpectrogramPainter extends CustomPainter {
     final freqs = viewport.spectrogramFreqs;
 
     if (power.isEmpty || freqs.isEmpty) {
-      _paintPlaceholder(canvas, size, 'Load an EDF to see spectrogram');
+      _paintPlaceholder(
+        canvas,
+        size,
+        viewport.channelLabels.isNotEmpty && viewport.totalDurationSeconds > 0
+            ? 'Spectrogram off — press "spectrogram" in the toolbar to compute it'
+            : 'Load an EDF to see spectrogram',
+      );
       return;
     }
 
@@ -831,7 +837,19 @@ class HypnogramPainter extends CustomPainter {
       return;
     }
     final swa = viewport.swaPerEpoch;
-    if (swa.isEmpty) return;
+    if (swa.isEmpty) {
+      if (viewport.channelLabels.isNotEmpty && viewport.totalDurationSeconds > 0) {
+        _drawText(
+          canvas,
+          'SWA overlay: turn on "spectrogram" in the toolbar',
+          Offset(size.width - 6, 9),
+          style: const TextStyle(color: Colors.black45, fontSize: 9.5),
+          align: TextAlign.right,
+          maxWidth: 260,
+        );
+      }
+      return;
+    }
 
     final sEpoch = startEpoch ?? 0;
     final eEpoch = endEpoch ?? viewport.stages.length;
@@ -2181,7 +2199,25 @@ class SelectionOverlayPainter extends CustomPainter {
       canvas.drawRRect(bgRect, Paint()..color = color.withOpacity(0.88));
       labelPainter.paint(canvas, Offset(bgX + 2, 3));
     }
-    for (final selection in viewport.eventSelections) {
+    // Active drag selection is drawn on top. Committed selections remain
+    // visible and contribute to the total duration (multi-select).
+    final bool hasActiveDrag =
+        (activeDragStartSec != null &&
+        activeDragEndSec != null &&
+        activeDragChannel != null &&
+        activeDragStartUv != null &&
+        activeDragEndUv != null);
+
+    final committed = viewport.eventSelections;
+    var totalSec = 0.0;
+    for (final sel in committed) {
+      totalSec += (sel.endSec - sel.startSec).abs();
+    }
+    if (hasActiveDrag) totalSec += (activeDragEndSec! - activeDragStartSec!).abs();
+    final boxCount = committed.length + (hasActiveDrag ? 1 : 0);
+
+    for (var i = 0; i < committed.length; i++) {
+      final selection = committed[i];
       _drawSelectionBox(
         canvas,
         size,
@@ -2193,17 +2229,10 @@ class SelectionOverlayPainter extends CustomPainter {
         drawWidth,
         visibleStart,
         displayTotalSec,
+        // The last box (or the one being dragged) gets the full labels below.
+        showDuration: hasActiveDrag || i != committed.length - 1,
       );
     }
-
-    // Draw active drag selection on top. Committed selections remain visible and
-    // contribute to the total duration, matching Scoring Hero's multi-select use.
-    final bool hasActiveDrag =
-        (activeDragStartSec != null &&
-        activeDragEndSec != null &&
-        activeDragChannel != null &&
-        activeDragStartUv != null &&
-        activeDragEndUv != null);
 
     final EventSelection? labelTarget = hasActiveDrag
         ? EventSelection(
@@ -2271,7 +2300,8 @@ class SelectionOverlayPainter extends CustomPainter {
         align: TextAlign.center,
       );
 
-      // Bottom label: Width of the box in seconds
+      // Bottom label: Width of the box in seconds, and with several boxes
+      // the cumulative duration of all of them on a second line.
       final widthSec = (labelTarget.endSec - labelTarget.startSec).abs();
       final bottomText = "${widthSec.toStringAsFixed(2)} s";
       _drawText(
@@ -2285,6 +2315,19 @@ class SelectionOverlayPainter extends CustomPainter {
         ),
         align: TextAlign.center,
       );
+      if (boxCount > 1) {
+        _drawText(
+          canvas,
+          "Σ ${totalSec.toStringAsFixed(2)} s ($boxCount boxes)",
+          Offset((x1 + x2) / 2, math.max(y1, y2) + 22),
+          style: const TextStyle(
+            color: Color(0xFF7C2D12),
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+          ),
+          align: TextAlign.center,
+        );
+      }
 
       // Left label: Peak-to-peak amplitude of the signal inside the box, rotated 270 degrees
       double? peakToPeak;
@@ -2348,8 +2391,9 @@ class SelectionOverlayPainter extends CustomPainter {
     double endUv,
     double drawWidth,
     double visibleStart,
-    double displayTotalSec,
-  ) {
+    double displayTotalSec, {
+    bool showDuration = false,
+  }) {
     final x1 =
         leftPad + ((startSec - visibleStart) / displayTotalSec) * drawWidth;
     final x2 =
@@ -2377,6 +2421,19 @@ class SelectionOverlayPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.0,
     );
+    if (showDuration) {
+      _drawText(
+        canvas,
+        "${(endSec - startSec).abs().toStringAsFixed(2)} s",
+        Offset(boxRect.center.dx, boxRect.bottom + 8),
+        style: const TextStyle(
+          color: Color(0xFF0A640A),
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+        ),
+        align: TextAlign.center,
+      );
+    }
   }
 
   void _drawRotatedText(

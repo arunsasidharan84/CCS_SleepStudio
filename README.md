@@ -1,229 +1,131 @@
-# CCS Sleep Studio - The High-Performance Sleep EEG Visualization, Annotation & Analysis Suite
+<p align="center">
+  <img src="screenshots/ccs_logo.png" width="160" alt="Centre for Consciousness Studies Logo">
+</p>
+
+<h1 align="center">CCS Sleep Studio</h1>
 
 <p align="center">
-  <img src="screenshots/ccs_logo.png" width="200" alt="CCS NIMHANS Logo">
+  <b>The High-Performance Sleep EEG Visualization, Annotation & Analysis Suite</b>
 </p>
 
 <p align="center">
-  Developed by the <b>Team from Centre for Consciousness Studies (CCS)</b>,<br>
-  Department of Neurophysiology,<br>
-  <b>National Institute of Mental Health and Neurosciences (NIMHANS)</b>, Bangalore, India.
+  Developed by the<br>
+  <b>Centre for Consciousness Studies (CCS)</b>, Department of Neurophysiology,<br>
+  <b>National Institute of Mental Health and Neurosciences (NIMHANS)</b>, Bengaluru, India
 </p>
 
-**Version:** 1.26.0
+<p align="center">
+  <a href="#-quick-download"><b>📥 Download App</b></a> &nbsp;•&nbsp;
+  <a href="#about"><b>About</b></a> &nbsp;•&nbsp;
+  <a href="#-key-features"><b>Key Features</b></a> &nbsp;•&nbsp;
+  <a href="#-running--building-locally"><b>Build from Source</b></a> &nbsp;•&nbsp;
+  <a href="CHANGELOG.md"><b>Release Notes</b></a> &nbsp;•&nbsp;
+  <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/issues"><b>Report Issue</b></a>
+</p>
 
-Welcome to **CCS Sleep Studio**, a high-performance, cross-platform desktop application designed to assist researchers and clinicians in sleep EEG visualization, event annotation, sleep scoring, automated staging, and advanced EEG analysis.
+---
 
-CCS Sleep Studio is comprised of the following key modules:
-*   **ScoringNidra**: Interactive sleep scoring and event annotation module supporting EDF, Brain Products (.vhdr / .vmrk), Nihon Kohden (.EEG / .LOG), EMBLA (.ebm), Orbit (.orb), and R09 (.r09).
-*   **AutoscoreNidra**: Automated sleep scoring module with both interactive and batch modes.
-*   **AnalyseNidra**: Automated sleep EEG analysis and reporting module operating in both interactive and batch modes.
+### 📥 Quick Download
 
-### 🌟 New in Version 1.26.0
-*   **Markers stay on screen after filtering.** Applying or changing display filters (or other settings) no longer removes the markers and events from the waveform and the hypnogram.
-*   **Much faster display filtering.** Filters are display filters: only the window on screen is filtered (with a few seconds of real signal on each side so there is no edge artefact), using flat, allocation-free buffers and cached filter designs. Applying a filter redraws the current window instantly instead of re-filtering the whole night, so long multi-channel recordings no longer freeze on low-spec computers and scrolling stays fast. The filtered window now matches filtering the whole night exactly (previously the window edges showed a filter transient).
-*   **Spectrogram off by default.** The full-night spectrogram (and the SWA trace computed with it) is the slowest step when opening long files, so it is now off by default. Turn it on with the new **spectrogram [ON/OFF]** toolbar button; the setting is saved with the recording's configuration. The current epoch's spectrum (right-hand panel) is still shown.
-*   **Durations under every selection box.** When several regions are selected with the mouse, each box shows its own duration underneath, and the last box also shows the cumulative duration (Σ) of all boxes. The total no longer appears in the status bar.
-*   **Hide a channel with a right-click.** Right-click a channel's name or trace to hide it, show hidden channels again (one by one or all), or open the channel settings.
-*   **filter button** in the toolbar opens the Filters tab of the configuration directly.
+Pre-built standalone desktop installers and application bundles are published through GitHub Releases:
 
-### 🌟 New in Version 1.25.0
-*   **Restored Sigma band (10–16 Hz) power extraction:** Fixed an issue where the AnalyseNidra feature engine omitted the Sigma band (`*_Sigma_PSD`, `*_Sigma_FOOOF`, `*_Sigma_Irasa`), leaving Sigma columns blank across all sleep stages (N1, N2, N3, REM) in the regional CSV and master compilation sheet.
-*   **Review windows of 60 s, 2 min and 5 min** (toolbar, next to ◀ ▶) for respiratory and CAP events. The window is centred on the current epoch, epoch boundaries are marked and the current epoch is outlined, and ◀ ▶ page by the window. Stages are assigned only in the 30-s scoring window, and switching back to 30 s lands on the epoch that was at the centre.
-*   **Night timeline** (toolbar): an expanded overnight view with the hypnogram (one lane per stage), one row per event type (OA, CA, MA, hypopnea, RERA, desaturation, arousal, LM/PLM, CAP, plus scored annotation labels) and the SpO2 trend. Hovering shows the epoch, time, stage and events; clicking goes to that epoch, and double-clicking goes there and closes the view.
-*   **Respiratory scoring refinements** (checked against the EDF-annotated apneas of four GoaSleep OSA nights):
-    *   Apneas separated by recovery breaths are now scored as separate events, timed by the apnea itself, instead of one long event spanning the whole run of reduced breathing. Median apnea durations now match the annotations (15–25 s, previously 23–38 s).
-    *   The slow decay of AC-coupled pressure sensors after the last breath no longer hides an apnea.
-    *   A flow sensor that fails for a large part of the night is now recognised, and events there are scored on RIPsum/effort as the AASM allows.
-*   **PLM scoring (AASM mode):**
-    *   Leg EMG bursts shorter than 0.5 s are no longer treated as LMs.
-    *   Bilateral LMs are judged by each leg's duration (0.5–10 s), not by their combined span.
-    *   Movements longer than 10 s no longer break a PLM series; under WASM 2016 they still do.
-    *   On the GoaSleep PLM recording, the total number of PLMs now matches the clinical report (494 vs 510; previously 362).
-*   **Automatically detected arousals** are shown as *Arousal (auto)* markers on the waveforms and hypnogram, can be shown or hidden in *Show / Remove … Markers*, and have their own row in the PDF respiratory timeline (with scored arousals).
-*   **PDF report:** pages for analyses without data (spindle/slow-wave, aperiodic, complexity, respiratory, PLM, CAP) are left out instead of being printed empty. The SpO2 axis labels on the respiratory page are fixed.
+| Platform | Variant | Package Type | Direct Download Link |
+| :--- | :--- | :--- | :--- |
+| **macOS** | **Full** | Universal ZIP | [CCSSleepStudio-macos.zip](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-macos.zip) |
+| | **Lite** | Universal ZIP | [CCSSleepStudio-lite-macos.zip](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-lite-macos.zip) |
+| **Windows** | **Full** | x64 Installer EXE | [CCSSleepStudio-Installer.exe](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-Installer.exe) |
+| | **Lite** | x64 Installer EXE | [CCSSleepStudio-lite-Installer.exe](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-lite-Installer.exe) |
+| **Linux (Debian / Ubuntu)** | **Full** | x64 DEB Installer | [CCSSleepStudio-linux-amd64.deb](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-linux-amd64.deb) |
+| | **Lite** | x64 DEB Installer | [CCSSleepStudio-lite-linux-amd64.deb](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-lite-linux-amd64.deb) |
+| **Linux (RHEL / AlmaLinux)** | **Full** | x86_64 RPM Installer | [CCSSleepStudio-linux-x86_64.rpm](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-linux-x86_64.rpm) |
+| | **Lite** | x86_64 RPM Installer | [CCSSleepStudio-lite-linux-x86_64.rpm](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-lite-linux-x86_64.rpm) |
 
-### 🌟 New in Version 1.24.1
-*   **Polygraphic channels recorded at their own sampling rates are now shown at the right time.** EDF channels with a different rate from the EEG (e.g. flow and effort at 100 Hz, snore at 500 Hz, SpO2 at 1 Hz) are resampled to the common rate when loaded. Before, they were drawn against the EEG's clock: flow and effort ran at twice the speed and were out of step with the scored events, and 1 Hz SpO2 was not drawn at all.
-*   **Display scaling suited to each kind of channel** (new *Scaling* column in the channel settings):
-    *   **Auto:** flow, pressure, effort belts and snore are fitted to their row from the whole night's amplitude, so their relative changes (hypopnoeas) stay comparable across the night.
-    *   **Level:** SpO2, pulse, body position and CO2 are drawn on an absolute range, e.g. SpO2 70–100 %, shown under the channel name.
-    *   **Fixed µV:** EEG, EOG, EMG and ECG keep the µV scale.
-    *   Polygraphic traces are kept inside their own row. The per-channel zoom range is widened to 5–5000 %.
-    *   Polygraphic channels in saved settings switch to the new modes automatically, and their old manual gain is reset to 100 %.
+> 📦 **All Releases & Checksums:** View all published packages and assets on the **[GitHub Releases Page](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest)**.  
+> 🐧 **Automated Linux Workstations:** For one-line multi-user server installation, see [Quick Install for Linux](#-quick-install-for-linux-servers--multi-user-workstations).  
+> 🍏 **macOS Gatekeeper:** For first-time launch instructions, see [macOS Gatekeeper Setup](#for-macos-users).
 
-### 🌟 New in Version 1.24.0
-*   **Synchronised Video via media_kit / libmpv:** Full playback support for Nihon Kohden MPEG transport streams (`.m2t` with H.264 video and MP2 audio) and multi-hour recordings across all platforms. Reads `.VF2` video index files to seamlessly synchronise multi-camera hourly segments across the entire night with millisecond precision.
-*   **Waveform Scrub Cursor & Floating Video Window:** Real-time red scrub cursor on the EEG waveform tracks video playback; drag to scrub across the recording. Resizable floating video window with independent camera controls (per-camera time offset, mute, toggle, and double-click to solo). Includes a full-night slider, playback rate control, and a dedicated Stop button that unloads media.
-*   **Batch Metadata Integration:** New "Load metadata (CSV / XLSX)…" tool in the Batch Recordings panel. Automatically matches recording rows by file name, parent folder name, or fuzzy partial match with column auto-detection and an interactive preview modal. Merges clinical and demographic metadata directly into the AnalyseNidra master sheet and polygraphy summary CSVs.
-*   **Nihon Kohden Binary .LOG & .EVT Triggers:** Native parser for Nihon Kohden binary `.LOG` event files (REC START, electrical stimulation ON/OFF with sub-second timestamps) and `.EVT` trigger files.
-*   **Enhanced Nihon Kohden Channel Mapping & Clock Time:** Accurate `.21E` channel name resolution for higher channel codes (e.g. M2, O1, O2, LEOG, REOG, EMG1–3, ECG), automatic migration for previously saved montage settings, and true recording start time extraction for accurate clock time display on `.EEG` files.
-
-### 🌟 New in Version 1.23.0
-*   **Batch tab redesigned around the order you work in.** One shared list of **Recordings**, found with their scorings automatically, is used by four sections: **1 Autoscore**, **2 EEG analysis**, **3 Polygraphy (OSA & PLM)** and **4 Scoring comparison**.
-    *   **Autoscore** is a step of its own because every other analysis needs a scoring. It never replaces an existing (e.g. manual) scoring: each autoscore is saved as its own file and linked to the recording. The other sections can also *autoscore first*, then continue automatically.
-    *   **EEG analysis** is a linked pipeline of collapsible steps: **Preprocess** (stimulation-artefact removal on the continuous signal, then 30-s epoch cleaning) → **Extract features** (AnalyseNidra analyses and CAP on the cleaned EEG, mapped to sleep stages) → **Compile** (master sheet). Each step passes its output on to the next. You can run all ticked steps in one go or run one step on its own. A run window shows a recording × step status table, and *Resume* reuses outputs that already exist.
-    *   **Scoring comparison** can pair each recording's scoring with its autoscore.
-*   **Master-sheet compilation fixed.** Regional CSVs left with only a header (from an interrupted or crashed run) are now detected: *Resume* rebuilds them from the cached per-analysis results instead of skipping them. Empty CSVs are also left out of the master sheet and listed. Cached results containing NaN values can now be read back, and results are written atomically. A recording without N2/N3 no longer aborts: its NREM-only analyses are skipped with a warning. The new *Compile all CSVs in a folder…* option builds a master sheet from a whole folder.
-*   NeuroLoopGain now uses the average of all chosen references when more than one is given, which matches the rest of AnalyseNidra.
-
-### 🌟 New in Version 1.22.0
-*   **NeuroLoopGain** (Kemp et al., IEEE-BME 2000): a native port of the open-source NeuroLoopGain 2.x analyser, giving amplitude-independent slow-wave, sigma (and optionally alpha) feedback-loop gain per second. The output matches the reference program sample for sample: all 14 traces, 144 runs on the four sample PSG nights (6 channels × 3 bands × 2 smoother rates). It runs as part of AnalyseNidra (interactive and batch). The gain curves can be overlaid on the hypnogram (*Overlay: NeuroLoopGain*). Stage-wise, per-cycle and per-hour gain and the ACCS upper-quartile index are added to the regional CSV (`NLG_SW_*`, `NLG_Sigma_*`), and a NeuroLoopGain page is added to the PDF report. Polyman-compatible `_NeuroLoopGain.edf` files can also be written (`--nlg-edf-dir`).
-*   **Choose which analyses to run** in AnalyseNidra (interactive dialog and batch panel): spectral & complexity features, spindles, slow waves & SO–spindle coupling, PAC, and NeuroLoopGain (`--analyses` / `--skip` on the command line).
-*   **Compare multiple scorings** (Compare menu): compare every scoring of a recording (manual, autoscorers, saved files) against the reference you choose. Shows hypnogram strips with Cohen's kappa, agreement and macro-F1, confusion matrices, per-stage F1, and CSV / PNG export.
-
-### 🌟 New in Version 1.21.0
-*   **Sleep cycles & stage dynamics** (port of the NIMHANS ACCS `accs_sleep_StageAnalyser`): sleep cycles (NREM ≥15 min, REM periods merged across gaps ≤25 min, cycle end at long awakenings), stage arousals, short awakenings, stage transitions and cycle-wise NREM/REM composition. Non-redundant stage dynamics (`SleepCycle_number`, `Stage_transitions`, `Stage_arousals`, `ShortAwakenings`) and cycle-wise measures (`C1`..`C5`) are written to the AnalyseNidra CSV without confusing redundant duplicates or prefixes, and presented on a new *Sleep cycles & stage dynamics* page of the PDF report. Verified value-for-value against the MATLAB code (Octave) on the sample nights and 900 synthetic hypnograms.
-*   **Autoscoring fixes**: SeqSleepNet and SleepTransformer (spectrogram scaling), TinySleepNet (epoch normalisation) and U-Sleep now use the same 50 Hz notch and 0.3–35 Hz band-pass as the original models. U-Sleep is marked experimental. **YASA + SleepGPT** is the default everywhere.
-*   **Faster AnalyseNidra**: features are computed once and reused for the regional CSV, PAC/coupling is accumulated window by window (much lower memory use) and sample entropy uses a faster exact search — about 2× faster than 1.20 on full PSG nights.
-
-### 🌟 New in Version 1.20.0
-*   **Cyclic alternating pattern (CAP) analysis (Utilities menu and batch)** following Terzano et al. (2001): automatic A-phase detection (or your own A1/A2/A3 markers), A1/A2/A3 subtyping, CAP cycles and sequences, CAP rate overall, per NREM stage, per hour and per half of the night, A-phase indices and durations, B-phase duration, isolated A-phases, cycle variability, and coupling of A-phases with arousals, respiratory events and leg movements. A-phases and CAP sequences are drawn on the waveforms and hypnogram, and a CAP page is added to the PDF report.
-*   **Show / Remove OSA, PLM & CAP Markers** (Utilities): switch each group of analysis markers on or off; saved results (including batch results) can be shown again at any time.
-*   **PSG batch analysis** (Batch tab): run Respiratory/OSA, PLM and CAP analysis over many recordings, with auto-loaded scorings and optional channel overrides; writes per-recording results and one summary CSV.
-*   **Slow oscillation–spindle coupling**: mean vector length (MVL), phase-locking value (PLV) and phase consistency are added alongside PAC MI, gcPAC and ndPAC in AnalyseNidra outputs and the PDF report.
-
-### 🌟 New in Version 1.19.0
-*   **Respiratory / OSA analysis (Utilities menu)** following the AASM Scoring Manual v3: apneas (obstructive / central / mixed), hypopneas with the 1A (3 % or arousal) or 1B (4 %) rule, RERAs, alternative-sensor fallback when the flow sensor fails, ODI, T90/T88, hypoxic burden, pulse-rate response, ventilatory burden, REM-related and positional OSA and Cheyne-Stokes breathing. Events are shown as markers on the waveforms and hypnogram, and a Respiratory page is added to the PDF report.
-*   **Periodic limb movement (PLMS) analysis** using AASM v3 rules (WASM 2016 available): LM, PLMS/PLMW, PLMS-arousal and respiratory-related LM indices, periodicity index, inter-movement-interval histogram, with markers and a PLM page in the PDF report.
-*   **All autoscoring algorithms now run in the native engine** (TinySleepNet, YASA, U-Sleep, Luna POPS, GSSC, SeqSleepNet, SleepTransformer, Dreamento, SleepEEGpy), with multi-montage consensus and automatic EOG/EMG. Outputs are saved as `<recording>_<algorithm>_scoring.json`, so your manual scoring file is never overwritten.
-*   **Simpler batch file selection**: *Add Single Files…* and *Add from Folder…* in both batch panels, with *Include subfolders*, *Use wildcard pattern* and (AnalyseNidra) *Auto-load scorings* options. Every channel field can be filled from the channel list of the first recording.
-*   **Windows performance**: buffered EDF reading, coalesced hypnogram/spectrogram navigation, and a per-user install location under `%LOCALAPPDATA%\Programs` instead of the roaming profile.
-
-### 🌟 New in Version 1.7.0
-*   **Universal Markers & Annotations Support**:
-    *   Direct decoding of embedded **EDF+ TAL** (Time-stamped Annotation Lists).
-    *   Native parsing of **Brain Products / BrainVision (`.vmrk`)** marker files.
-    *   Parsing of **Nihon Kohden (`.LOG` / `.log`)** clinical event notes and timestamps.
-    *   Support for **Compumedics Profusion / Alice XML (`.xml`)** scored event lists.
-    *   Header-adaptive parsing of tabular **CSV / TSV / TXT** marker files (`${stem}_events.csv`).
-    *   Crisp canvas rendering distinguishing point markers (vertical lines + top pill badge) and interval spans (shaded boxes + top pill badge).
-    *   Interactive **Markers & Annotations Manager Dialog (`M`)** with category filter chips, search, click-to-jump navigation, and CSV export.
-*   **Time-Synchronized Video Playback (`V`)**:
-    *   Cross-platform video playback supporting MP4, MKV, AVI, MOV, and WebM on macOS and Windows.
-    *   Automatic detection of companion video files in the recording directory.
-    *   Bidirectional synchronization: epoch jumping immediately seeks the video, and playing video advances the EEG viewport.
-    *   Floating control overlay with fine-grained sync offset adjustments (`-1s`, `-0.1s`, `+0.1s`, `+1s`, manual entry, and reset).
-*   **Brain Products (`.vhdr` / `.vmrk`) Integration**:
-    *   Native loading and channel scaling for Brain Products recordings in both interactive viewer and batch modes.
-*   **Enhanced Navigation & Confidence Display**:
-    *   Hypnogram overlay dropdown directly on the toolbar (SWA, P(Wake), P(N1), P(N2), P(N3), P(REM), Off).
-    *   Context-aware "out-of" navigation readout (`/ 765`, `/ 06:22:30`, `/ 05:22:30`) matching Epoch, Elapsed, and Clock jump modes.
-    *   Multi-stage probability display on the status bar showing confidence scores across all competing stages.
-
-### 🌟 New in Version 1.6.0
-*   **Nihon Kohden (.EEG) Support**: Native reading of multi-block Nihon Kohden recordings, active channel filtering (<70 channels), and complete extraction of multi-hour (>6h to 36h+) continuous PSG payload data.
-*   **EMBLA (.ebm) Folder & File Loading**: Automatic multi-rate channel resampling (e.g. 10 Hz respiratory channels upsampled to match 200 Hz EEG) preserving full 7+ hour recording duration across 35+ channels.
-*   **REMlogic & EMBLA Stage Scoring**: Direct native parsing of `.esedb` (OLE event store) and `.esrc` scoring files into 30-second epoch hypnograms and event annotations.
-
-Built from the ground up using **Flutter** for a lightweight, fluid UI, and **Rust** for native-speed signal processing, **CCS Sleep Studio** is inspired heavily from the Python-based [ScoringHero](https://github.com/SvennoNito/ScoringHero) repository. It operates without any complex Python or MATLAB runtime setup, bringing near-instant response times to massive sleep EEG files and advanced analysis.
-
-![CCS Sleep Studio Main Window](screenshots/main.png)
+<p align="center">
+  <img src="screenshots/main.png" width="920" alt="CCS Sleep Studio Main Window">
+</p>
 
 ---
 
 ## About
 
-**CCS Sleep Studio** is a standalone desktop platform for sleep EEG review, manual staging, automated sleep scoring, and quantitative sleep neurophysiology. It combines a Flutter interface with native Rust signal-processing backends so full-night polysomnography files can be loaded, filtered, scored, compared, and analyzed without maintaining a separate Python or MATLAB environment.
+**CCS Sleep Studio** is a standalone, cross-platform desktop application designed to assist researchers and clinicians in sleep EEG visualization, event annotation, sleep scoring, automated staging, and quantitative neurophysiology.
 
-The application is built for research and clinical neurophysiology workflows that need repeatable staging, transparent manual review, batch processing, AnalyseNidra quantitative reports, and exportable outputs across macOS, Windows, and Linux.
+Built from the ground up using **Flutter** for a lightweight, fluid UI and a native **Rust** computational engine for signal processing, CCS Sleep Studio is inspired heavily by the Python-based [ScoringHero](https://github.com/SvennoNito/ScoringHero) repository. It operates without requiring complex Python or MATLAB environment configurations on the end user's computer, bringing near-instant response times to massive multi-hour polysomnography recordings.
 
----
-
-## 📥 Download Standalone Releases
-
-We compile two distinct variants of **CCS Sleep Studio** automatically via GitHub Actions:
-*   **CCS Sleep Studio (Full)**: Includes manual scoring (ScoringNidra), data loaders, detections, advanced sleep EEG analysis (AnalyseNidra) plus the packaged Python ML runtime to run automated staging models locally (AutoscoreNidra).
-*   **CCS Sleep Studio Lite**: A lightweight version focusing exclusively on manual scoring, EEG visualization, data loaders, and advanced sleep EEG analysis (AnalyseNidra), with a significantly smaller download size (does not bundle Python runtimes of AutoscoreNidra).
-
-[![Latest Release](https://img.shields.io/github/v/release/arunsasidharan84/CCS-Sleep-Studio?label=Latest%20Release&style=flat-square&color=blue)](https://github.com/arunsasidharan84/CCS-Sleep-Studio/releases/latest)
-[![Total Downloads](https://img.shields.io/github/downloads/arunsasidharan84/CCS-Sleep-Studio/total?label=Total%20Downloads&style=flat-square)](https://github.com/arunsasidharan84/CCS-Sleep-Studio/releases)
-
-📦 **[Download Application Packages from GitHub Releases Page](https://github.com/arunsasidharan84/CCS-Sleep-Studio/releases)**
-
-| Operating System | Variant | Package Type | Release Asset Name |
-|------------------|---------|--------------|--------------------|
-| **macOS** | **Full** | Universal ZIP | `CCSSleepStudio-macos.zip` |
-| | **Lite** | Universal ZIP | `CCSSleepStudio-lite-macos.zip` |
-| **Windows** | **Full** | x64 Installer EXE | `CCSSleepStudio-Installer.exe` |
-| | **Lite** | x64 Installer EXE | `CCSSleepStudio-lite-Installer.exe` |
-| **Linux (Debian/Ubuntu)** | **Full** | x64 DEB Installer | `CCSSleepStudio-linux-amd64.deb` |
-| | **Lite** | x64 DEB Installer | `CCSSleepStudio-lite-linux-amd64.deb` |
-| **Linux (RHEL/AlmaLinux)** | **Full** | x86_64 RPM Installer | `CCSSleepStudio-linux-x86_64.rpm` |
-| | **Lite** | x86_64 RPM Installer | `CCSSleepStudio-lite-linux-x86_64.rpm` |
-
-All binaries and installer packages are published directly under the [GitHub Releases Page](https://github.com/arunsasidharan84/CCS-Sleep-Studio/releases).
-
-### 🐧 Quick Install for Linux Servers & Multi-User Workstations
-
-To install the latest release automatically for all users on enterprise Linux servers (AlmaLinux, RHEL, Rocky, Fedora, Ubuntu, Debian), run this one-line command:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/arunsasidharan84/CCS_SleepStudio/main/scripts/install_linux.sh | sudo bash
-```
-
-Or from a local clone:
-```sh
-sudo bash scripts/install_linux.sh
-```
-
-The installer automatically:
-1. Enables EPEL and supplementary multimedia repositories (`mpv-libs`, `gtk3`).
-2. Downloads and installs the latest verified release package (`.rpm` or `.deb`).
-3. Installs an executable desktop launcher into `/etc/skel/Desktop/` so all new users receive it upon account creation.
-4. Propagates the launcher (`ccs-sleep-studio.desktop`) with `755` executable permissions and proper ownership across all existing user desktops (`/home/*/Desktop`, `/serverdata/ccshome/*/Desktop`).
-5. Updates system desktop and icon databases so CCS Sleep Studio immediately appears in the Applications menu under **Science / Medical** for all VNC and desktop sessions.
-
-#### Manual Installation (RPM - AlmaLinux / RHEL / Rocky / Fedora)
-```sh
-# Enable EPEL (required for mpv multimedia libraries)
-sudo dnf install -y epel-release
-sudo dnf config-manager --set-enabled crb   # On AlmaLinux / Rocky / RHEL 9
-
-# Install package
-sudo dnf install ./CCSSleepStudio-linux-x86_64.rpm
-```
-
-#### Manual Installation (DEB - Debian / Ubuntu / Mint)
-```sh
-sudo apt update
-sudo apt install ./CCSSleepStudio-linux-amd64.deb
-```
-
-### For macOS Users
-Because the application is signed ad-hoc, you must clear the macOS Gatekeeper quarantine flag after extracting:
-1.  Download & Extract the zip folder into your **Downloads** folder.
-2.  Open **Terminal**.
-3.  Copy, Paste & Run the following command:
-     ```sh
-     xattr -rd com.apple.quarantine ~/Downloads/CCS\ Sleep\ Studio.app
-     ```
-4.  Now you are ready to run the **CCS Sleep Studio.app**.
-5.  Drag and drop the **CCS Sleep Studio.app** into the **Applications** folder so that you can open it like any other app in the future.
+### Core Modules
+* **ScoringNidra**: Interactive sleep scoring and event annotation module supporting EDF/EDF+, Brain Products (`.vhdr`/`.vmrk`), Nihon Kohden (`.EEG`/`.LOG`), EMBLA (`.ebm`/`.esrc`), Orbit (`.orb`), and R09 (`.r09`).
+* **AutoscoreNidra**: Automated sleep scoring engine supporting 9 state-of-the-art ML/DL models with multi-montage consensus scoring, SleepGPT refinement, and single-channel support in both interactive and batch modes.
+* **AnalyseNidra**: High-throughput quantitative sleep EEG analysis and publication-grade PDF reporting engine operating across both single files and batch queues.
 
 ---
 
-## Sample PSG Data
+## 🌟 What's New in Version 1.26.0
 
-The repository includes a small demonstration dataset in [`SamplePSGData`](SamplePSGData/) for testing the viewer, manual scoring import, batch workflows, and AnalyseNidra report generation.
+* **Markers stay on screen after filtering:** Applying or changing display filters (or other settings) no longer removes markers and events from the waveform and hypnogram canvas.
+* **Instantaneous display filtering:** Display filters are calculated only for the active visible window (with a real-signal buffer to prevent edge artifacts) using flat, allocation-free buffers and cached filter designs. Window redraws are instant with zero scrolling freeze on multi-channel recordings.
+* **On-demand full-night spectrogram:** The full-night spectrogram (and its associated SWA trace) is toggleable via the toolbar **spectrogram [ON/OFF]** button, keeping initial file loading lightning fast while epoch spectra remain active.
+* **Duration indicators under selection boxes:** When multiple regions are selected with the mouse, each box displays its individual duration underneath, with cumulative duration ($\Sigma$) shown under the final selection box.
+* **Right-click channel management:** Right-click any channel trace or label to hide it, restore hidden channels individually or collectively, or jump straight to channel settings.
+* **Direct filter settings shortcut:** Dedicated toolbar button opens the Filters configuration tab with one click.
 
-* `SamplePSGData/Data/` contains four EDF PSG recordings.
-* `SamplePSGData/ManualScorings/` contains matching manual scoring EDF files with the same base filenames.
-* `SamplePSGData/Template_config.json` provides a reusable configuration template for the sample recordings.
-
-Load a recording from `SamplePSGData/Data/`, then import the corresponding file from `SamplePSGData/ManualScorings/` as the scoring/comparison file.
+> 📜 For older release highlights and detailed historical changes, see the complete **[CHANGELOG.md](CHANGELOG.md)**.
 
 ---
 
-## ⚡ Speed & Architectural Enhancements
+## 🔬 Key Features
 
-CCS Sleep Studio overcomes the main performance bottlenecks of standard Python-based visualization tools:
+### Multi-Channel EEG Signal Display
+* View multiple EEG channels simultaneously with configurable vertical spacing.
+* Adjust per-channel amplitude scaling and vertical offsets.
+* Predefined, high-contrast channel colors (Black, Blue, Green, Magenta, Orange, Cyan).
+* Add amplitude reference lines and 1-second grid overlays.
+* **Stack channels** on a shared baseline for direct overlay comparison.
+* **Robust z-standardization** (median/IQR normalization) for cross-channel comparison.
+* Configurable time axis units: Seconds, Minutes, or Hours.
 
-1.  **Hybrid Flutter + Rust FFI Pipeline**: Heavy mathematical operations (zero-phase Chebyshev/Butterworth filters, Welch periodograms, Morlet wavelets) are written in Rust, leveraging SIMD compiler optimizations and multi-threaded processing via `rayon`.
-2.  **Isolate-Based Background Worker**: Computations run off the main thread in background Dart **Isolates**, leaving the main interface to render at a locked 60+ FPS.
-3.  **Zero-Copy Memory Access**: Transfers between Dart and Rust utilize direct pointers and `.asTypedList` buffer access to avoid slow copy loops.
-    *   *Benchmarks*: Night-wide spectrogram updates complete in just **19 ms**, and wavelet time-frequency updates finish in **113 ms**.
-4.  **Self-Contained Executables**: Zero environment configuration required. Even the Full edition bundles its model runtimes inside a standalone package.
+### Sleep Stage Scoring
+* Score epochs (default 30s) as **Wake** (`W`), **N1** (`1`), **N2** (`2`), **N3** (`3`), **REM** (`R`), or **Inconclusive** (`I`).
+* Clear a score using the `Delete` key.
+* **Confidence Flagging**: Press `Q` (or the "Toggle uncertain" toolbar button) to flag an epoch as uncertain. Flagged epochs are visually marked on the hypnogram step timeline and saved with low-confidence metadata.
+* Automatic save prompts on close if epochs remain unscored.
+
+### Compare & Batch Scoring Comparison
+* Import a second scoring file (**Compare → Import scoring for comparison**) to evaluate against the current scoring.
+* **Disagreement Bands**: Epochs with conflicting scores are highlighted directly in the hypnogram timeline with a transparent red background band.
+* **Premium Scoring Report Card**: Displays Cohen's Kappa score ($\kappa$) with strength labels, a dynamically color-shaded Confusion Matrix (green for agreement, red for disagreement), and per-stage Precision, Recall, and F1-Scores.
+* **Batch Scoring Comparison**: Pair multiple scoring files interactively or auto-pair entire directories of reference vs comparison files. Generates a collated `Batch_Scoring_Comparison_Master.csv` output.
+
+<p align="center">
+  <img src="screenshots/compare_scoring.png" width="450" alt="Compare Scoring Window">
+  <img src="screenshots/comparison_report.png" width="450" alt="Scoring Comparison Report">
+</p>
+
+### Event Annotation
+* **13 event types**: Artefact (`A`) + 12 fully customizable event markers (`F1`–`F12`).
+* Draw event regions directly on the signal using click-and-drag selection boxes.
+* Real-time display of event duration (seconds) and amplitude while drawing.
+* Double-click on an existing event to remove it.
+* **Erase events in selection**: Draw selection boxes and press `Backspace` to delete all events inside the drawn region.
+
+### File Formats & EEG Utilities
+* **EMBLA / REMlogic (.ebm & .esrc / .esedb) Reader**: Native Rust reader for EMBLA single-channel binary files (`.ebm`) and REMlogic sleep stage scoring XML files (`.esrc`, `.esedb`), with physical unit calibration scaling and full directory assembly.
+* **Nihon Kohden (.EEG) Native Reader**: Built-in Rust binary parser for Nihon Kohden `.EEG`, `.PNT` metadata, and `.21E` channel mapping files, with physical voltage calibration and full recording payload assembly.
+* **EEG Utilities Module**: Perform signal downsampling, time cropping, channel renaming, channel filtering, and patient header anonymization (Patient ID, Name, Sex, DOB) for single files or in batch across EDF, Nihon Kohden, Orbit, and EMBLA recordings.
+* **Orbit (.orb / .signal) File Loader**: Native binary and JSON-lines parser for Orbit recordings, complete with gap-filling, linear interpolation, and automatic calibration scaling.
+* **EDF+ Annotations Reader**: Parses TAL structures directly from annotations channels.
+* **Polyman CSV Interval Loader**: Imports sleep events and labels from Polyman text logs.
+* **YASA List Parser**: Retains epoch alignment by preserving empty lines as unscored elements.
+
+### Signal Filtering & Auto Spectrogram
+* Apply high-pass, low-pass, and notch filters independently to each channel (toolbar **filter** button, or the Filters tab of the configuration).
+* Zero-phase Chebyshev Type 2 filters, applied as display filters: only the visible window (plus a margin of real signal) is filtered, so filtering never slows down scrolling and never triggers a full-night recomputation.
+* The full-night spectrogram is off by default; turn it on with the **spectrogram** toolbar button.
+* Live magnitude response plot updates in real time within the configuration dialog.
+* **Auto Spectrogram Power Scaling**: Automatically calculates 2nd and 98th log10 power percentiles upon loading signals, keeping color scaling ranges modifiable.
 
 ---
 
@@ -231,24 +133,28 @@ CCS Sleep Studio overcomes the main performance bottlenecks of standard Python-b
 
 **AutoscoreNidra** is the automated sleep-scoring system within CCS Sleep Studio. It provides a consistent UI, dependency preflight, live epoch progress, and local execution for modern deep-learning and machine-learning staging models:
 
-*   **Multi-Montage Consensus Scoring**: AutoscoreNidra independently scores every selected EEG channel and clinically valid reference combination. It then combines their epoch-wise probabilities into one consensus hypnogram, reducing dependence on any single channel or montage.
-*   **Optional SleepGPT Sequence Refinement**: After the base consensus scoring, SleepGPT can apply a condition-agnostic sequence correction pass. It uses the temporal sleep-stage sequence to reduce implausible transitions without requiring a diagnosis-specific model.
-*   **Single-Channel EEG Support**: AutoscoreNidra can score recordings containing only one usable EEG channel. When multiple channels or reference combinations are available, it automatically expands to the multi-montage consensus workflow.
-*   **Clear Scoring Filenames**: Final hypnograms use the suffix `_scoring.json`, for example `recording_yasa_scoring.json` or `recording_yasa_sleepgpt_scoring.json`, so they are easy to distinguish from AnalyseNidra and diagnostic JSON files.
-*   **9 Supported Staging Models**:
-    1.  **YASA LightGBM Consensus**: Lightweight boosted tree stager.
-    2.  **Offline U-Sleep Consensus**: Local convolutional neural network inference.
-    3.  **Luna POPS**: Probabilistic Sleep Stager (`lunapi` adapter).
-    4.  **Greifswald Sleep Stage Classifier (GSSC)**: Clinical model stager.
-    5.  **TinySleepNet**: Pretrained PhysioEx model.
-    6.  **SeqSleepNet**: Sequence-to-sequence model.
-    7.  **SleepTransformer**: Attention-based transformer stager.
-    8.  **Dreamento**: Feature-engineered YASA classifier.
-    9.  **SleepEEGpy**: Standard MNE/YASA scorer.
-*   **Batch AutoscoreNidra**: Queue multiple EDF/ORB/SIGNAL files for sequential background scoring with live status and epoch progress.
-*   **Interactive Checklists**: Configure stager EEG, EOG, EMG, and Reference signals dynamically using checklist selectors instead of manual comma-separated text input fields.
+* **Multi-Montage Consensus Scoring**: AutoscoreNidra independently scores every selected EEG channel and clinically valid reference combination. It then combines their epoch-wise probabilities into one consensus hypnogram, reducing dependence on any single channel or montage.
+* **Optional SleepGPT Sequence Refinement**: After the base consensus scoring, SleepGPT can apply a condition-agnostic sequence correction pass. It uses the temporal sleep-stage sequence to reduce implausible transitions without requiring a diagnosis-specific model.
+* **Single-Channel EEG Support**: AutoscoreNidra can score recordings containing only one usable EEG channel. When multiple channels or reference combinations are available, it automatically expands to the multi-montage consensus workflow.
+* **Clear Scoring Filenames**: Final hypnograms use the suffix `_scoring.json`, for example `recording_yasa_scoring.json` or `recording_yasa_sleepgpt_scoring.json`, so they are easy to distinguish from AnalyseNidra and diagnostic JSON files.
+* **9 Supported Staging Models**:
+  1. **YASA LightGBM Consensus**: Lightweight boosted tree stager.
+  2. **Offline U-Sleep Consensus**: Local convolutional neural network inference.
+  3. **Luna POPS**: Probabilistic Sleep Stager (`lunapi` adapter).
+  4. **Greifswald Sleep Stage Classifier (GSSC)**: Clinical model stager.
+  5. **TinySleepNet**: Pretrained PhysioEx model.
+  6. **SeqSleepNet**: Sequence-to-sequence model.
+  7. **SleepTransformer**: Attention-based transformer stager.
+  8. **Dreamento**: Feature-engineered YASA classifier.
+  9. **SleepEEGpy**: Standard MNE/YASA scorer.
+* **Batch AutoscoreNidra**: Queue multiple EDF/ORB/SIGNAL files for sequential background scoring with live status and epoch progress.
+* **Interactive Checklists**: Configure stager EEG, EOG, EMG, and Reference signals dynamically using checklist selectors instead of manual comma-separated text input fields.
 
-![Autoscoring Configuration and Model Run](screenshots/autoscoring_snapshot.png)
+<p align="center">
+  <img src="screenshots/autoscoring_snapshot.png" width="850" alt="Autoscoring Configuration and Model Run">
+</p>
+
+---
 
 ## AnalyseNidra — Advanced Sleep EEG Analysis
 
@@ -286,80 +192,101 @@ analyse-nidra <recording.edf> <scoring.json> [core.json|-] [pac.json|-] [slow-wa
 - `--channels <names>`: Comma-separated list of EEG channels to include in the analysis (e.g., `--channels F3,F4,C3,C4,O1,O2`). Defaults to `F3,F4,C3,C4,O1,O2`.
 - `--references <names>`: Comma-separated list of reference channels (e.g., `--references M1,M2` or `A1,A2`). Samples from reference channels are averaged and subtracted sample-wise. If not specified, defaults to `M1,M2`. Can be omitted or left blank to run without re-referencing.
 
-![analyseNidra Region Analysis Configuration](screenshots/analyse_nidra_snapshot.png)
-
-![analyseNidra Region Analysis Configuration](screenshots/sleep_analysis_report.png)
-
----
-
-## 🎨 New UI Features
-
-We have enriched the UI with several flexibility and control improvements:
-*   **Smooth Draggable Plot Borders**: Manually adjust the vertical boundaries between the Spectrogram, Hypnogram, and Periodogram panels in real time by dragging. Resizing is cumulative, smooth, locked to respect screen size limits, and is automatically saved to the recording's `.config.json` file.
-*   **Consolidated Batch Tab**: Houses Batch AutoscoreNidra, Batch AnalyseNidra, and AnalyseNidra master-sheet compilation in one workspace. Redundant batch menu commands are intentionally omitted.
-*   **Hypnogram Horizontal Zoom**: View the hypnogram step chart fully (Full Night) or zoom in on 100, 200, or 400 epoch windows centered around the active epoch. All mouse taps map correctly to coordinates within the zoomed viewport.
-*   **Wavelet Spectre Toggle**: The complex Morlet wavelet panel is off by default to avoid unnecessary computation and vertical scrolling, and can be enabled when needed.
-*   **Slow Wave Activity (SWA) Toggle**: Show or hide the SWA delta-power overlay on the hypnogram timeline, hiding its slider controls when inactive.
-*   **EEG Guide Customization**: Modify the thickness and color of the horizontal reference guide lines in the EEG viewport.
-*   **Centred Label Layout**: Stage labels on the Hypnogram panel are vertically centered on their corresponding colored bands.
+<p align="center">
+  <img src="screenshots/analyse_nidra_snapshot.png" width="450" alt="analyseNidra Region Analysis Configuration">
+  <img src="screenshots/sleep_analysis_report.png" width="450" alt="Publication Sleep Analysis Report">
+</p>
 
 ---
 
-## Features
+## 🎨 UI & Visualization Features
 
-### Multi-Channel EEG Signal Display
-*   View multiple EEG channels simultaneously with configurable vertical spacing.
-*   Adjust per-channel amplitude scaling and vertical offsets.
-*   Predefined, high-contrast channel colors (Black, Blue, Green, Magenta, Orange, Cyan).
-*   Add amplitude reference lines and 1-second grid overlays.
-*   **Stack channels** on a shared baseline for direct overlay comparison.
-*   **Robust z-standardization** (median/IQR normalization) for cross-channel comparison.
-*   Configurable time axis units: Seconds, Minutes, or Hours.
+* **Smooth Draggable Plot Borders**: Manually adjust the vertical boundaries between the Spectrogram, Hypnogram, and Periodogram panels in real time by dragging. Resizing is cumulative, smooth, locked to respect screen size limits, and is automatically saved to the recording's `.config.json` file.
+* **Consolidated Batch Tab**: Houses Batch AutoscoreNidra, Batch AnalyseNidra, and AnalyseNidra master-sheet compilation in one workspace.
+* **Hypnogram Horizontal Zoom**: View the hypnogram step chart fully (Full Night) or zoom in on 100, 200, or 400 epoch windows centered around the active epoch. All mouse taps map correctly to coordinates within the zoomed viewport.
+* **Wavelet Spectre Toggle**: The complex Morlet wavelet panel is off by default to avoid unnecessary computation and vertical scrolling, and can be enabled when needed.
+* **Slow Wave Activity (SWA) Toggle**: Show or hide the SWA delta-power overlay on the hypnogram timeline, hiding its slider controls when inactive.
+* **EEG Guide Customization**: Modify the thickness and color of the horizontal reference guide lines in the EEG viewport.
+* **Centred Label Layout**: Stage labels on the Hypnogram panel are vertically centered on their corresponding colored bands.
 
-### Sleep Stage Scoring
-*   Score epochs (default 30s) as **Wake** (`W`), **N1** (`1`), **N2** (`2`), **N3** (`3`), **REM** (`R`), or **Inconclusive** (`I`).
-*   Clear a score using the `Delete` key.
-*   **Confidence Flagging**: Press `Q` (or the "Toggle uncertain" toolbar button) to flag an epoch as uncertain. Flagged epochs are visually marked on the hypnogram step timeline and saved with low-confidence metadata.
-*   Automatic save prompts on close if epochs remain unscored.
+---
 
-### Compare & Batch Scoring Comparison
-*   Import a second scoring file (**Compare → Import scoring for comparison**) to evaluate against the current scoring.
-*   **Disagreement Bands**: Epochs with conflicting scores are highlighted directly in the hypnogram timeline with a transparent red background band.
-*   **Premium Scoring Report Card**: Displays Cohen's Kappa score ($\kappa$) with strength labels, a dynamically color-shaded Confusion Matrix (green for agreement, red for disagreement), and per-stage Precision, Recall, and F1-Scores.
-*   **Batch Scoring Comparison**: Pair multiple scoring files interactively or auto-pair entire directories of reference vs comparison files. Generates a collated `Batch_Scoring_Comparison_Master.csv` output.
+## ⚡ Speed & Architectural Highlights
 
-![Compare Scoring Window](screenshots/compare_scoring.png)
-![Scoring Comparison Report](screenshots/comparison_report.png)
+CCS Sleep Studio overcomes the main performance bottlenecks of standard Python-based visualization tools:
 
-### Event Annotation
-*   **13 event types**: Artefact (`A`) + 12 fully customizable event markers (`F1`–`F12`).
-*   Draw event regions directly on the signal using click-and-drag selection boxes.
-*   Real-time display of event duration (seconds) and amplitude while drawing.
-*   Double-click on an existing event to remove it.
-*   **Erase events in selection**: Draw selection boxes and press `Backspace` to delete all events inside the drawn region.
+1. **Hybrid Flutter + Rust FFI Pipeline**: Heavy mathematical operations (zero-phase Chebyshev/Butterworth filters, Welch periodograms, Morlet wavelets) are written in Rust, leveraging SIMD compiler optimizations and multi-threaded processing via `rayon`.
+2. **Isolate-Based Background Worker**: Computations run off the main thread in background Dart **Isolates**, leaving the main interface to render at a locked 60+ FPS.
+3. **Zero-Copy Memory Access**: Transfers between Dart and Rust utilize direct pointers and `.asTypedList` buffer access to avoid slow copy loops.
+   * *Benchmarks*: Night-wide spectrogram updates complete in just **19 ms**, and wavelet time-frequency updates finish in **113 ms**.
+4. **Self-Contained Executables**: Zero environment configuration required. Even the Full edition bundles its model runtimes inside a standalone package.
 
-### File Formats & EEG Utilities
-*   **EMBLA / REMlogic (.ebm & .esrc / .esedb) Reader**: Native Rust reader for EMBLA single-channel binary files (`.ebm`) and REMlogic sleep stage scoring XML files (`.esrc`, `.esedb`), with physical unit calibration scaling and full directory assembly.
-*   **Nihon Kohden (.EEG) Native Reader**: Built-in Rust binary parser for Nihon Kohden `.EEG`, `.PNT` metadata, and `.21E` channel mapping files, with physical voltage calibration and full recording payload assembly.
-*   **EEG Utilities Module**: Perform signal downsampling, time cropping, channel renaming, channel filtering, and patient header anonymization (Patient ID, Name, Sex, DOB) for single files or in batch across EDF, Nihon Kohden, Orbit, and EMBLA recordings.
-*   **Orbit (.orb / .signal) File Loader**: Native binary and JSON-lines parser for Orbit recordings, complete with gap-filling, linear interpolation, and automatic calibration scaling.
-*   **EDF+ Annotations Reader**: Parses TAL structures directly from annotations channels.
-*   **Polyman CSV Interval Loader**: Imports sleep events and labels from Polyman text logs.
-*   **YASA List Parser**: Retains epoch alignment by preserving empty lines as unscored elements.
+---
 
-### Signal Filtering & Auto Spectrogram
-*   Apply high-pass, low-pass, and notch filters independently to each channel (toolbar **filter** button, or the Filters tab of the configuration).
-*   Zero-phase Chebyshev Type 2 filters, applied as display filters: only the visible window (plus a margin of real signal) is filtered, so filtering never slows down scrolling and never triggers a full-night recomputation.
-*   The full-night spectrogram is off by default; turn it on with the **spectrogram** toolbar button.
-*   Live magnitude response plot updates in real time within the configuration dialog.
-*   **Auto Spectrogram Power Scaling**: Automatically calculates 2nd and 98th log10 power percentiles upon loading signals, keeping color scaling ranges modifiable.
+## Sample PSG Data
+
+The repository includes a small demonstration dataset in [`SamplePSGData`](SamplePSGData/) for testing the viewer, manual scoring import, batch workflows, and AnalyseNidra report generation:
+
+* `SamplePSGData/Data/` contains four EDF PSG recordings.
+* `SamplePSGData/ManualScorings/` contains matching manual scoring EDF files with the same base filenames.
+* `SamplePSGData/Template_config.json` provides a reusable configuration template for the sample recordings.
+
+Load a recording from `SamplePSGData/Data/`, then import the corresponding file from `SamplePSGData/ManualScorings/` as the scoring/comparison file.
+
+---
+
+## 🐧 Quick Install for Linux Servers & Multi-User Workstations
+
+To install the latest release automatically for all users on enterprise Linux servers (AlmaLinux, RHEL, Rocky, Fedora, Ubuntu, Debian), run this one-line command:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/arunsasidharan84/CCS_SleepStudio/main/scripts/install_linux.sh | sudo bash
+```
+
+Or from a local clone:
+```sh
+sudo bash scripts/install_linux.sh
+```
+
+The installer automatically:
+1. Enables EPEL and supplementary multimedia repositories (`mpv-libs`, `gtk3`).
+2. Downloads and installs the latest verified release package (`.rpm` or `.deb`).
+3. Installs an executable desktop launcher into `/etc/skel/Desktop/` so all new users receive it upon account creation.
+4. Propagates the launcher (`ccs-sleep-studio.desktop`) with `755` executable permissions across all existing user desktops (`/home/*/Desktop`, `/serverdata/ccshome/*/Desktop`).
+5. Updates system desktop and icon databases so CCS Sleep Studio immediately appears in the Applications menu under **Science / Medical** for all VNC and desktop sessions.
+
+### Manual Installation (RPM - AlmaLinux / RHEL / Rocky / Fedora)
+```sh
+# Enable EPEL (required for mpv multimedia libraries)
+sudo dnf install -y epel-release
+sudo dnf config-manager --set-enabled crb   # On AlmaLinux / Rocky / RHEL 9
+
+# Install package
+sudo dnf install ./CCSSleepStudio-linux-x86_64.rpm
+```
+
+### Manual Installation (DEB - Debian / Ubuntu / Mint)
+```sh
+sudo apt update
+sudo apt install ./CCSSleepStudio-linux-amd64.deb
+```
+
+### For macOS Users
+Because the application is signed ad-hoc, clear the macOS Gatekeeper quarantine flag after extracting:
+1. Download & Extract the zip folder into your **Downloads** folder.
+2. Open **Terminal**.
+3. Run:
+   ```sh
+   xattr -rd com.apple.quarantine ~/Downloads/CCS\ Sleep\ Studio.app
+   ```
+4. Drag and drop **CCS Sleep Studio.app** into the **Applications** folder.
 
 ---
 
 ## ⌨️ Keyboard Shortcuts
 
 | Shortcut | Action |
-|----------|--------|
+| :--- | :--- |
 | `W` | Score current epoch as **Wake** |
 | `1` | Score current epoch as **N1** |
 | `2` | Score current epoch as **N2** |
@@ -383,15 +310,16 @@ We have enriched the UI with several flexibility and control improvements:
 ## 🚀 Running & Building Locally
 
 ### Prerequisites
-*   [Flutter SDK](https://docs.flutter.dev/get-started/install) (latest Stable)
-*   [Rust Toolchain](https://www.rust-lang.org/tools/install) (cargo)
-*   For Windows installer: [Inno Setup](https://jrsoftware.org/isinfo.php) (iscc compiler)
+* [Flutter SDK](https://docs.flutter.dev/get-started/install) (latest Stable)
+* [Rust Toolchain](https://www.rust-lang.org/tools/install) (`cargo` and `rustc`)
+* For Windows installer: [Inno Setup](https://jrsoftware.org/isinfo.php) (`iscc` compiler)
 
 ### 1. Build the Rust Backend
 Compile the native library for your platform first:
 ```sh
 cd bridge
 cargo build --release
+cd ..
 ```
 
 ### 2. Run the App
@@ -407,7 +335,7 @@ flutter run -d windows
 ```
 
 ### 3. Compile Production Release
-To compile the release packages:
+To compile release packages:
 ```sh
 cd frontend
 
@@ -421,23 +349,11 @@ iscc windows/installer.iss
 
 ---
 
-## 📜 Release Log & Changelog
+## 🤝 Research Collaboration & Acknowledgments
 
-### Version 1.6.0
-*   **Nihon Kohden (.EEG) Version 1 & Version 2 (`EEG-1200A`) Dual Parser**: Added native Rust parsing for both standard Version 1 and Version 2 (`EEG-1200A` 3-tier extended block pointer chain) Nihon Kohden recordings. Corrected frame byte stride ($N+1$ channels), data start offsets, and physical voltage scaling ($0.09765625\ \mu\text{V}$), achieving **0.000000 µV exact match** against reference EDF files across 41+ channels and multi-hour datasets (up to 33M+ samples / 9.31+ hours).
-*   **EMBLA (.ebm) Signal Scaling & Calibration**: Fixed EMBLA physical microvolt scaling factors (`1000.0 / 65536.0` µV/count and Volts-to-microvolts conversion) and multi-channel directory loading.
-*   **REMlogic & EMBLA Stage Scoring**: Native parsing of `.esedb` (OLE event store) and `.esrc` scoring files into 30-second epoch hypnograms and event annotations.
-*   **FFI Symbol Lookup Resilience**: Isolated native FFI function bindings in Dart `EegBackend` so `.EEG`, `.ebm`, and `.edf` loaders operate independently without failing if any single symbol fails to bind.
+**CCS Sleep Studio** is developed and maintained by the:
 
-### Version 1.3.0
-*   **Branding & Name Consistency**: Application name unified as **CCS Sleep Studio** across code, UI labels, documentation, and Debian/RPM packaging scripts.
-*   **Batch Scoring Comparison**: Added interactive 2-column paired comparison table in Batch tab with **Auto-Pairing 2 Folders** support. Computes epoch-by-epoch agreement, Cohen's $\kappa$, stage-by-stage precision/recall/F1 scores, and exports `Batch_Scoring_Comparison_Master.csv`.
-*   **AnalyseNidra Non-Sleep Stage Parsing**: Updated Rust backend `analyseNidra/src/hypnogram.rs` to seamlessly parse non-sleep stages (`Inconclusive`, `None`, `Unscored`, `Unknown`, `?`, `Uncertain`, `Uncertainty`, `NOT SCORED`, `N/A`) without raising errors or crashing.
-*   **Keyboard Shortcuts**: Added `N`, `0`, `Numpad 0`, `Delete` for **None / Unscored (`?`)** stage and `U` / `Q` for **Uncertainty** toggle during manual scoring.
-*   **Auto Spectrogram Power Scaling**: Implemented automatic 2nd–98th percentile log10 power colorbar scaling on load while retaining editable min/max values in config dialog.
-*   **EDF Utilities Module**: Added interactive single-file and batch utility dialog for signal downsampling, time cropping, channel renaming, channel filtering, and patient header anonymization (Patient ID, Name, Sex, DOB).
-*   **Nihon Kohden (.EEG) Native Rust Loader & EDF Converter**: Implemented binary parser in Rust (`bridge/src/nk.rs`) porting Brainstorm's `in_fopen_nk.m`, `in_fread_nk.m`, and `in_channel_nk.m`. Supports reading `.EEG`, `.PNT` metadata, and `.21E` electrode mapping files with EDF conversion export.
-
-### Version 1.2.12
-*   Initial release of **AnalyseNidra** regional spectral analysis, EEG spectrogram heatmaps, and MT-Spindle / MT-KCD detection pipelines.
-
+* **Centre for Consciousness Studies (CCS)**  
+  *Department of Neurophysiology*,  
+  **National Institute of Mental Health and Neurosciences (NIMHANS)**, Bengaluru, India.  
+  *Advancing scientific inquiry and clinical methodologies in sleep medicine, neurophysiology, consciousness states, and computational neuroscience.*

@@ -7,6 +7,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'models.dart';
 import 'eeg_backend.dart';
 import 'analyse_options.dart';
 
@@ -73,6 +74,27 @@ class _FeatureSelectionAndConfigDialogState
   }
 }
 
+/// Controller wrapper for an individual frequency band row.
+class _BandControllers {
+  final TextEditingController labelCtrl;
+  final TextEditingController lowCtrl;
+  final TextEditingController highCtrl;
+
+  _BandControllers({
+    required String label,
+    required double low,
+    required double high,
+  })  : labelCtrl = TextEditingController(text: label),
+        lowCtrl = TextEditingController(text: low.toString()),
+        highCtrl = TextEditingController(text: high.toString());
+
+  void dispose() {
+    labelCtrl.dispose();
+    lowCtrl.dispose();
+    highCtrl.dispose();
+  }
+}
+
 /// Reusable widget containing all Preprocessing and Feature Extraction parameter controls.
 class FeaturesAndPreprocessingWidget extends StatefulWidget {
   const FeaturesAndPreprocessingWidget({super.key, required this.config});
@@ -122,19 +144,8 @@ class _FeaturesAndPreprocessingWidgetState
   late final TextEditingController _swPosDurMinCtrl;
   late final TextEditingController _swPosDurMaxCtrl;
 
-  // Band cutoff controllers
-  late final TextEditingController _deltaLoCtrl;
-  late final TextEditingController _deltaHiCtrl;
-  late final TextEditingController _thetaLoCtrl;
-  late final TextEditingController _thetaHiCtrl;
-  late final TextEditingController _alphaLoCtrl;
-  late final TextEditingController _alphaHiCtrl;
-  late final TextEditingController _sigmaLoCtrl;
-  late final TextEditingController _sigmaHiCtrl;
-  late final TextEditingController _betaLoCtrl;
-  late final TextEditingController _betaHiCtrl;
-  late final TextEditingController _gammaLoCtrl;
-  late final TextEditingController _gammaHiCtrl;
+  // Flexible frequency band controllers
+  late final List<_BandControllers> _bandCtrls;
 
   @override
   void initState() {
@@ -174,18 +185,9 @@ class _FeaturesAndPreprocessingWidgetState
     _swPosDurMinCtrl = TextEditingController(text: c.slowWavePosDurationMin.toString());
     _swPosDurMaxCtrl = TextEditingController(text: c.slowWavePosDurationMax.toString());
 
-    _deltaLoCtrl = TextEditingController(text: c.bandDeltaLo.toString());
-    _deltaHiCtrl = TextEditingController(text: c.bandDeltaHi.toString());
-    _thetaLoCtrl = TextEditingController(text: c.bandThetaLo.toString());
-    _thetaHiCtrl = TextEditingController(text: c.bandThetaHi.toString());
-    _alphaLoCtrl = TextEditingController(text: c.bandAlphaLo.toString());
-    _alphaHiCtrl = TextEditingController(text: c.bandAlphaHi.toString());
-    _sigmaLoCtrl = TextEditingController(text: c.bandSigmaLo.toString());
-    _sigmaHiCtrl = TextEditingController(text: c.bandSigmaHi.toString());
-    _betaLoCtrl = TextEditingController(text: c.bandBetaLo.toString());
-    _betaHiCtrl = TextEditingController(text: c.bandBetaHi.toString());
-    _gammaLoCtrl = TextEditingController(text: c.bandGammaLo.toString());
-    _gammaHiCtrl = TextEditingController(text: c.bandGammaHi.toString());
+    _bandCtrls = c.bands
+        .map((b) => _BandControllers(label: b.label, low: b.low, high: b.high))
+        .toList();
   }
 
   @override
@@ -224,18 +226,9 @@ class _FeaturesAndPreprocessingWidgetState
     _swPosDurMinCtrl.dispose();
     _swPosDurMaxCtrl.dispose();
 
-    _deltaLoCtrl.dispose();
-    _deltaHiCtrl.dispose();
-    _thetaLoCtrl.dispose();
-    _thetaHiCtrl.dispose();
-    _alphaLoCtrl.dispose();
-    _alphaHiCtrl.dispose();
-    _sigmaLoCtrl.dispose();
-    _sigmaHiCtrl.dispose();
-    _betaLoCtrl.dispose();
-    _betaHiCtrl.dispose();
-    _gammaLoCtrl.dispose();
-    _gammaHiCtrl.dispose();
+    for (final ctrl in _bandCtrls) {
+      ctrl.dispose();
+    }
     super.dispose();
   }
 
@@ -557,111 +550,205 @@ class _FeaturesAndPreprocessingWidgetState
                   ),
                   const SizedBox(height: 14),
 
-                  // Frequency Bands
-                  const Text('EEG Frequency Band Definitions (Hz):', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 6),
+                  // Flexible Frequency Bands
                   Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Expanded(
-                        child: _buildField(
-                          label: 'Delta Lo (Hz)',
-                          controller: _deltaLoCtrl,
-                          onChanged: (v) => c.bandDeltaLo = v ?? 0.5,
-                        ),
+                      const Text(
+                        'EEG Frequency Band Definitions (Hz):',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _buildField(
-                          label: 'Delta Hi (Hz)',
-                          controller: _deltaHiCtrl,
-                          onChanged: (v) => c.bandDeltaHi = v ?? 4.0,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildField(
-                          label: 'Theta Lo (Hz)',
-                          controller: _thetaLoCtrl,
-                          onChanged: (v) => c.bandThetaLo = v ?? 4.0,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _buildField(
-                          label: 'Theta Hi (Hz)',
-                          controller: _thetaHiCtrl,
-                          onChanged: (v) => c.bandThetaHi = v ?? 8.0,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildField(
-                          label: 'Alpha Lo (Hz)',
-                          controller: _alphaLoCtrl,
-                          onChanged: (v) => c.bandAlphaLo = v ?? 8.0,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _buildField(
-                          label: 'Alpha Hi (Hz)',
-                          controller: _alphaHiCtrl,
-                          onChanged: (v) => c.bandAlphaHi = v ?? 12.0,
-                        ),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            ),
+                            icon: const Icon(Icons.add, size: 16),
+                            label: const Text('Add Band', style: TextStyle(fontSize: 11.5)),
+                            onPressed: () {
+                              setState(() {
+                                final newBand = BandConfig(label: 'Custom', low: 4.0, high: 12.0);
+                                c.bands.add(newBand);
+                                _bandCtrls.add(_BandControllers(
+                                  label: newBand.label,
+                                  low: newBand.low,
+                                  high: newBand.high,
+                                ));
+                                c.syncLegacyBandFields();
+                              });
+                            },
+                          ),
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              foregroundColor: Colors.indigo,
+                            ),
+                            icon: const Icon(Icons.playlist_add, size: 16),
+                            label: const Text('Add Theta-Alpha (4–12 Hz)', style: TextStyle(fontSize: 11.5)),
+                            onPressed: () {
+                              setState(() {
+                                final hasThetaAlpha = c.bands.any(
+                                  (b) =>
+                                      b.label.toLowerCase() == 'thetaalpha' ||
+                                      b.label.toLowerCase() == 'theta-alpha',
+                                );
+                                if (!hasThetaAlpha) {
+                                  final newBand =
+                                      BandConfig(label: 'ThetaAlpha', low: 4.0, high: 12.0);
+                                  final idx = c.bands.indexWhere((b) => b.label.toLowerCase() == 'theta');
+                                  final insertIdx = idx >= 0 ? idx + 1 : c.bands.length;
+                                  c.bands.insert(insertIdx, newBand);
+                                  _bandCtrls.insert(
+                                    insertIdx,
+                                    _BandControllers(
+                                      label: newBand.label,
+                                      low: newBand.low,
+                                      high: newBand.high,
+                                    ),
+                                  );
+                                  c.syncLegacyBandFields();
+                                }
+                              });
+                            },
+                          ),
+                          TextButton.icon(
+                            style: TextButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            ),
+                            icon: const Icon(Icons.restore, size: 15),
+                            label: const Text('Reset Defaults', style: TextStyle(fontSize: 11.5)),
+                            onPressed: () {
+                              setState(() {
+                                for (final ctrl in _bandCtrls) {
+                                  ctrl.dispose();
+                                }
+                                _bandCtrls.clear();
+                                c.bands = defaultFrequencyBands();
+                                for (final b in c.bands) {
+                                  _bandCtrls.add(_BandControllers(
+                                    label: b.label,
+                                    low: b.low,
+                                    high: b.high,
+                                  ));
+                                }
+                                c.syncLegacyBandFields();
+                              });
+                            },
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildField(
-                          label: 'Sigma Lo (Hz)',
-                          controller: _sigmaLoCtrl,
-                          onChanged: (v) => c.bandSigmaLo = v ?? 12.0,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _buildField(
-                          label: 'Sigma Hi (Hz)',
-                          controller: _sigmaHiCtrl,
-                          onChanged: (v) => c.bandSigmaHi = v ?? 16.0,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildField(
-                          label: 'Beta Lo (Hz)',
-                          controller: _betaLoCtrl,
-                          onChanged: (v) => c.bandBetaLo = v ?? 16.0,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _buildField(
-                          label: 'Beta Hi (Hz)',
-                          controller: _betaHiCtrl,
-                          onChanged: (v) => c.bandBetaHi = v ?? 30.0,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildField(
-                          label: 'Gamma Lo (Hz)',
-                          controller: _gammaLoCtrl,
-                          onChanged: (v) => c.bandGammaLo = v ?? 30.0,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _buildField(
-                          label: 'Gamma Hi (Hz)',
-                          controller: _gammaHiCtrl,
-                          onChanged: (v) => c.bandGammaHi = v ?? 45.0,
-                        ),
-                      ),
-                    ],
+                  const SizedBox(height: 6),
+                  Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(6),
+                      color: Colors.grey.shade50,
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    child: Column(
+                      children: [
+                        for (int i = 0; i < c.bands.length; i++)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 3),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 170,
+                                  height: 32,
+                                  child: TextFormField(
+                                    controller: _bandCtrls[i].labelCtrl,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Band Name',
+                                      isDense: true,
+                                      border: OutlineInputBorder(),
+                                      contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                    ),
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                                    onChanged: (v) {
+                                      c.bands[i].label = v.trim();
+                                      c.syncLegacyBandFields();
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: SizedBox(
+                                    height: 32,
+                                    child: TextFormField(
+                                      controller: _bandCtrls[i].lowCtrl,
+                                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*'))],
+                                      decoration: const InputDecoration(
+                                        labelText: 'Low (Hz)',
+                                        isDense: true,
+                                        border: OutlineInputBorder(),
+                                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                      ),
+                                      style: const TextStyle(fontSize: 12),
+                                      onChanged: (v) {
+                                        final val = double.tryParse(v.trim());
+                                        if (val != null) {
+                                          c.bands[i].low = val;
+                                          c.syncLegacyBandFields();
+                                        }
+                                      },
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                const Text('–', style: TextStyle(fontWeight: FontWeight.bold)),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: SizedBox(
+                                    height: 32,
+                                    child: TextFormField(
+                                      controller: _bandCtrls[i].highCtrl,
+                                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*'))],
+                                      decoration: const InputDecoration(
+                                        labelText: 'High (Hz)',
+                                        isDense: true,
+                                        border: OutlineInputBorder(),
+                                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                      ),
+                                      style: const TextStyle(fontSize: 12),
+                                      onChanged: (v) {
+                                        final val = double.tryParse(v.trim());
+                                        if (val != null) {
+                                          c.bands[i].high = val;
+                                          c.syncLegacyBandFields();
+                                        }
+                                      },
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
+                                  tooltip: 'Remove ${c.bands[i].label}',
+                                  onPressed: c.bands.length <= 1
+                                      ? null
+                                      : () {
+                                          setState(() {
+                                            _bandCtrls[i].dispose();
+                                            _bandCtrls.removeAt(i);
+                                            c.bands.removeAt(i);
+                                            c.syncLegacyBandFields();
+                                          });
+                                        },
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 14),
 

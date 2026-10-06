@@ -859,3 +859,46 @@ class ChannelConfig {
     return false;
   }
 }
+
+/// A configurable EEG frequency band definition for spectral analysis (PSD, FOOOF, IRASA).
+class BandConfig {
+  BandConfig({
+    required this.label,
+    required this.low,
+    required this.high,
+  });
+
+  String label;
+  double low;
+  double high;
+
+  Map<String, dynamic> toJson() => {
+    'label': label,
+    'low': low,
+    'high': high,
+  };
+
+  factory BandConfig.fromJson(Map<String, dynamic> json) {
+    return BandConfig(
+      label: json['label'] as String? ?? 'Band',
+      low: (json['low'] as num?)?.toDouble() ?? 0.0,
+      high: (json['high'] as num?)?.toDouble() ?? 0.0,
+    );
+  }
+
+  BandConfig copy() => BandConfig(label: label, low: low, high: high);
+
+  @override
+  String toString() => '$label (${low.toStringAsFixed(1)} - ${high.toStringAsFixed(1)} Hz)';
+}
+
+/// Default standard frequency bands used in sleep EEG analysis.
+List<BandConfig> defaultFrequencyBands() => [
+  BandConfig(label: 'Delta', low: 0.5, high: 4.0),
+  BandConfig(label: 'Theta', low: 4.0, high: 8.0),
+  BandConfig(label: 'Alpha', low: 8.0, high: 12.0),
+  BandConfig(label: 'Sigma', low: 10.0, high: 16.0),
+  BandConfig(label: 'Beta', low: 12.0, high: 30.0),
+  BandConfig(label: 'Gamma', low: 30.0, high: 40.0),
+];
+

@@ -261,6 +261,7 @@ class AppConfig {
     this.bandBetaHi = 30.0,
     this.bandGammaLo = 30.0,
     this.bandGammaHi = 40.0,
+    List<BandConfig>? bands,
   }) : hypnogramOverlayMode =
            hypnogramOverlayMode ?? (showSwaPlot ? 'SWA' : 'Off'),
        featureAnalyses = featureAnalyses != null
@@ -268,7 +269,19 @@ class AppConfig {
            : ['core', 'spindles', 'slow_waves', 'pac', 'nlg'],
        customEventNames = customEventNames != null
            ? Map<int, String>.from(customEventNames)
-           : {};
+           : {},
+       bands = bands != null
+           ? bands.map((b) => b.copy()).toList()
+           : [
+               BandConfig(label: 'Delta', low: bandDeltaLo, high: bandDeltaHi),
+               BandConfig(label: 'Theta', low: bandThetaLo, high: bandThetaHi),
+               BandConfig(label: 'Alpha', low: bandAlphaLo, high: bandAlphaHi),
+               BandConfig(label: 'Sigma', low: bandSigmaLo, high: bandSigmaHi),
+               BandConfig(label: 'Beta', low: bandBetaLo, high: bandBetaHi),
+               BandConfig(label: 'Gamma', low: bandGammaLo, high: bandGammaHi),
+             ] {
+    syncLegacyBandFields();
+  }
 
   // Preprocessing configuration fields
   double preprocessDownsampleHz;
@@ -320,6 +333,32 @@ class AppConfig {
   double bandBetaHi;
   double bandGammaLo;
   double bandGammaHi;
+  List<BandConfig> bands;
+
+  void syncLegacyBandFields() {
+    for (final b in bands) {
+      final name = b.label.toLowerCase().trim();
+      if (name == 'delta') {
+        bandDeltaLo = b.low;
+        bandDeltaHi = b.high;
+      } else if (name == 'theta') {
+        bandThetaLo = b.low;
+        bandThetaHi = b.high;
+      } else if (name == 'alpha') {
+        bandAlphaLo = b.low;
+        bandAlphaHi = b.high;
+      } else if (name == 'sigma') {
+        bandSigmaLo = b.low;
+        bandSigmaHi = b.high;
+      } else if (name == 'beta') {
+        bandBetaLo = b.low;
+        bandBetaHi = b.high;
+      } else if (name == 'gamma') {
+        bandGammaLo = b.low;
+        bandGammaHi = b.high;
+      }
+    }
+  }
 
   int spectrogramChannelIndex;
   int swaChannelIndex;
@@ -474,6 +513,7 @@ class AppConfig {
       'bandBetaHi': bandBetaHi,
       'bandGammaLo': bandGammaLo,
       'bandGammaHi': bandGammaHi,
+      'bands': bands.map((b) => b.toJson()).toList(),
     };
   }
 
@@ -512,6 +552,15 @@ class AppConfig {
           parsedEventNames[d] = v.toString().trim();
         }
       });
+    }
+
+    final parsedBands = <BandConfig>[];
+    if (json['bands'] is List) {
+      for (final item in json['bands'] as List) {
+        if (item is Map) {
+          parsedBands.add(BandConfig.fromJson(Map<String, dynamic>.from(item)));
+        }
+      }
     }
 
     return AppConfig(
@@ -661,6 +710,7 @@ class AppConfig {
       bandBetaHi: (json['bandBetaHi'] as num?)?.toDouble() ?? 30.0,
       bandGammaLo: (json['bandGammaLo'] as num?)?.toDouble() ?? 30.0,
       bandGammaHi: (json['bandGammaHi'] as num?)?.toDouble() ?? 45.0,
+      bands: parsedBands.isNotEmpty ? parsedBands : null,
     );
   }
 

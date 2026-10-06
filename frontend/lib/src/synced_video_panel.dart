@@ -366,6 +366,7 @@ class SyncedVideoPanel extends StatefulWidget {
     required this.onResize,
     this.onAddVideo,
     this.epochStartSec,
+    this.isClockTime = false,
   });
 
   final VideoSyncController sync;
@@ -377,6 +378,9 @@ class SyncedVideoPanel extends StatefulWidget {
   /// Start of the epoch on screen, for the "go to epoch start" button.
   final double? epochStartSec;
 
+  /// Whether the host window is displaying clock time or elapsed time.
+  final bool isClockTime;
+
   @override
   State<SyncedVideoPanel> createState() => _SyncedVideoPanelState();
 }
@@ -384,6 +388,14 @@ class SyncedVideoPanel extends StatefulWidget {
 class _SyncedVideoPanelState extends State<SyncedVideoPanel> {
   int? _solo; // show a single camera
   double? _scrubValue;
+  Timer? _scrubThrottleTimer;
+  double? _pendingScrubTarget;
+
+  @override
+  void dispose() {
+    _scrubThrottleTimer?.cancel();
+    super.dispose();
+  }
 
   static const _bg = Color(0xFF1E293B);
   static const _bgDark = Color(0xFF0F172A);
@@ -659,12 +671,24 @@ class _SyncedVideoPanelState extends State<SyncedVideoPanel> {
           value: value,
           min: 0,
           max: dur,
-          onChangeStart: (v) => setState(() => _scrubValue = v),
+          onChangeStart: (v) {
+            setState(() => _scrubValue = v);
+          },
           onChanged: (v) {
             setState(() => _scrubValue = v);
-            s.seek(v);
+            _pendingScrubTarget = v;
+            if (_scrubThrottleTimer == null || !_scrubThrottleTimer!.isActive) {
+              s.seek(v);
+              _scrubThrottleTimer = Timer(const Duration(milliseconds: 60), () {
+                if (_pendingScrubTarget != null && _scrubValue != null) {
+                  s.seek(_pendingScrubTarget!);
+                }
+              });
+            }
           },
           onChangeEnd: (v) {
+            _scrubThrottleTimer?.cancel();
+            _pendingScrubTarget = null;
             setState(() => _scrubValue = null);
             s.seek(v);
           },
@@ -713,7 +737,7 @@ class _SyncedVideoPanelState extends State<SyncedVideoPanel> {
           const Spacer(),
           Flexible(
             child: Text(
-              s.recordingStart != null
+              widget.isClockTime && s.recordingStart != null
                   ? '${formatVideoClock(t, start: s.recordingStart)}  (${formatVideoClock(t)})'
                   : '${formatVideoClock(t)} / ${formatVideoClock(s.durationSec)}',
               style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'monospace'),

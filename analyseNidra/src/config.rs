@@ -275,8 +275,25 @@ impl FeatureConfig {
         let gamma_lo = value.get("bandGammaLo").and_then(|v| v.as_f64()).unwrap_or(30.0);
         let gamma_hi = value.get("bandGammaHi").and_then(|v| v.as_f64()).unwrap_or(40.0);
 
-        // If the user specified band parameters in AppConfig, populate them
-        if value.get("bandDeltaLo").is_some() || value.get("bandSigmaLo").is_some() {
+        // Flexible custom frequency bands (e.g. Theta-Alpha, Delta, etc.):
+        if let Some(bands_val) = value.get("bands").and_then(|v| v.as_array()) {
+            let mut parsed_bands = Vec::new();
+            for b in bands_val {
+                if let (Some(label), Some(low), Some(high)) = (
+                    b.get("label").and_then(|v| v.as_str()),
+                    b.get("low").and_then(|v| v.as_f64()),
+                    b.get("high").and_then(|v| v.as_f64()),
+                ) {
+                    let clean_label = label.trim().replace(' ', "_");
+                    if !clean_label.is_empty() && high > low {
+                        parsed_bands.push(BandDefinition::new(low, high, clean_label));
+                    }
+                }
+            }
+            if !parsed_bands.is_empty() {
+                cfg.bands = parsed_bands;
+            }
+        } else if value.get("bandDeltaLo").is_some() || value.get("bandSigmaLo").is_some() {
             cfg.bands = vec![
                 BandDefinition::new(delta_lo, delta_hi, "Delta"),
                 BandDefinition::new(theta_lo, theta_hi, "Theta"),
@@ -416,5 +433,25 @@ mod tests {
         assert_eq!(cfg.bands[2].label, "Sigma");
         assert_eq!(cfg.bands[2].low, 11.0);
         assert_eq!(cfg.bands[2].high, 15.0);
+    }
+
+    #[test]
+    fn test_parses_custom_bands_including_theta_alpha() {
+        let json_str = r#"{
+            "bands": [
+                {"label": "Delta", "low": 0.5, "high": 4.0},
+                {"label": "Theta", "low": 4.0, "high": 8.0},
+                {"label": "ThetaAlpha", "low": 4.0, "high": 12.0},
+                {"label": "Alpha", "low": 8.0, "high": 12.0},
+                {"label": "Sigma", "low": 10.0, "high": 16.0},
+                {"label": "Beta", "low": 12.0, "high": 30.0},
+                {"label": "Gamma", "low": 30.0, "high": 40.0}
+            ]
+        }"#;
+        let cfg = FeatureConfig::from_json_str(json_str).unwrap();
+        assert_eq!(cfg.bands.len(), 7);
+        assert_eq!(cfg.bands[2].label, "ThetaAlpha");
+        assert_eq!(cfg.bands[2].low, 4.0);
+        assert_eq!(cfg.bands[2].high, 12.0);
     }
 }

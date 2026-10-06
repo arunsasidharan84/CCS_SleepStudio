@@ -203,6 +203,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     FocusManager.instance.addListener(_handlePrimaryFocusChange);
     _viewport = _backend.loadDemoViewport();
     unawaited(_loadAppVersion());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkForUpdatesAtStartup();
+    });
   }
 
   Future<void> _loadAppVersion() async {
@@ -216,6 +219,21 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       });
     } on MissingPluginException {
       // Package metadata is unavailable in widget tests without a host runner.
+    }
+  }
+
+  Future<void> _checkForUpdatesAtStartup() async {
+    try {
+      final info = await UpdateChecker.checkForUpdates();
+      if (!mounted) return;
+      if (info.hasUpdate) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AppUpdateDialog(info: info),
+        );
+      }
+    } catch (_) {
+      // Silently ignore network failures at startup so offline users are not bothered.
     }
   }
 
@@ -562,6 +580,29 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
+  int? _pendingVideoPagingEpoch;
+
+  void _jumpToEpochFromVideo(int epochOneBased) {
+    if (_pendingVideoPagingEpoch != null) {
+      _pendingVideoPagingEpoch = epochOneBased;
+      return;
+    }
+    _pendingVideoPagingEpoch = epochOneBased;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = _pendingVideoPagingEpoch;
+      _pendingVideoPagingEpoch = null;
+      if (target != null && mounted) {
+        _pagingFromVideo = true;
+        try {
+          _jumpToEpoch(target, false);
+        } finally {
+          _pagingFromVideo = false;
+        }
+      }
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
   /// Video clock → cursor on the waveform; while playing, page the waveform
   /// so the cursor stays on screen.
   void _handleVideoTime(double sec) {
@@ -574,12 +615,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     if (sec < epochStart || sec >= epochStart + epochSec) {
       final target = (sec / epochSec).floor() + 1;
       if (target >= 1 && target <= v.epochCount) {
-        _pagingFromVideo = true;
-        try {
-          _jumpToEpoch(target, false);
-        } finally {
-          _pagingFromVideo = false;
-        }
+        _jumpToEpochFromVideo(target);
       }
     }
   }
@@ -682,6 +718,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       height: r.height,
       child: SyncedVideoPanel(
         sync: sync,
+        isClockTime: viewport.eegPanelTimeUnit == 'Clock time',
         epochStartSec: viewport.currentEpoch * viewport.epochSeconds.toDouble(),
         onClose: _closeVideo,
         onAddVideo: _openVideoFile,
@@ -5927,8 +5964,249 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     }
   }
 
-  /// Right-click menu of a channel: hide it, or show hidden channels again.
-  Future<void> _showChannelContextMenu(int visibleIndex, Offset globalPos) async {
+  String _formatTimeForDisplay(double sec) {
+    final v = _viewport;
+    if (v != null && v.eegPanelTimeUnit == 'Clock time' && v.recordingStartTime != null) {
+      final dt = v.recordingStartTime!.add(Duration(milliseconds: (sec * 1000).round()));
+      String two(int n) => n.toString().padLeft(2, '0');
+      return '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
+    }
+    return formatVideoClock(sec);
+  }
+
+  void _addMarkerAtTime(
+    double clickSec, {
+    required int digit,
+    required String label,
+    double duration = 0.0,
+    String? channel,
+  }) {
+    final v = _viewport;
+    if (v == null) return;
+    final key = digit == 0 ? 'A' : 'F$digit';
+    final newEvent = ScoredEvent(
+      digit: digit,
+      key: key,
+      label: label,
+      startSec: clickSec,
+      endSec: clickSec + duration,
+      channel: channel,
+    );
+    final updated = _mergeScoredEvents([...v.scoredEvents, newEvent]);
+    setState(() {
+      _viewport = v.copyWith(scoredEvents: updated);
+      _status = 'Added marker "$label" at ${_formatTimeForDisplay(clickSec)}';
+    });
+    autoSaveScoring(
+      _activePath,
+      v.stages,
+      v.epochSeconds,
+      events: updated,
+      stagesUncertain: v.stagesUncertain,
+      stagesConfidence: v.stagesConfidence,
+      stageProbabilities: v.stageProbabilities,
+    );
+  }
+
+  void _deleteMarker(double startSec, double endSec, String label) {
+    final v = _viewport;
+    if (v == null) return;
+    final updated = v.scoredEvents.where((e) =>
+      !(e.label == label && (e.startSec - startSec).abs() < 0.01 && (e.endSec - endSec).abs() < 0.01)
+    ).toList();
+    setState(() {
+      _viewport = v.copyWith(scoredEvents: updated);
+      _status = 'Deleted marker "$label"';
+    });
+    autoSaveScoring(
+      _activePath,
+      v.stages,
+      v.epochSeconds,
+      events: updated,
+      stagesUncertain: v.stagesUncertain,
+      stagesConfidence: v.stagesConfidence,
+      stageProbabilities: v.stageProbabilities,
+    );
+  }
+
+  Future<void> _showAddMarkerDialog(double clickSec, {String? channel}) async {
+    final v = _viewport;
+    if (v == null) return;
+    final timeStr = _formatTimeForDisplay(clickSec);
+    final textCtrl = TextEditingController(text: _eventLabel(0));
+    int selectedDigit = 0;
+    bool isPoint = true;
+    final durCtrl = TextEditingController(text: '1.0');
+    String? selectedChannel = channel;
+
+    final availableLabels = <(int, String)>[
+      (0, _eventLabel(0)),
+      (kDigitArousal, 'Arousal'),
+      (1, _eventLabel(1)),
+      (2, _eventLabel(2)),
+      (3, _eventLabel(3)),
+      (4, _eventLabel(4)),
+      (5, _eventLabel(5)),
+      (6, _eventLabel(6)),
+      (7, _eventLabel(7)),
+      (8, _eventLabel(8)),
+      (kDigitObstructiveApnea, 'Obstructive Apnea'),
+      (kDigitCentralApnea, 'Central Apnea'),
+      (kDigitMixedApnea, 'Mixed Apnea'),
+      (kDigitHypopnea, 'Hypopnea'),
+      (kDigitDesaturation, 'Desaturation'),
+      (kDigitLegMovement, 'Leg Movement'),
+    ];
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDlgState) => AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.bookmark_add, color: Color(0xFF0284C7)),
+              const SizedBox(width: 8),
+              Text('Add Marker at $timeStr', style: const TextStyle(fontSize: 16)),
+            ],
+          ),
+          content: SizedBox(
+            width: 380,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Marker Type / Label:', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<String>(
+                  value: textCtrl.text,
+                  isDense: true,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  ),
+                  items: [
+                    for (final item in availableLabels)
+                      DropdownMenuItem(
+                        value: item.$2,
+                        child: Text(item.$2),
+                      ),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) {
+                      setDlgState(() {
+                        textCtrl.text = val;
+                        final found = availableLabels.firstWhere(
+                          (it) => it.$2 == val,
+                          orElse: () => (1, val),
+                        );
+                        selectedDigit = found.$1;
+                      });
+                    }
+                  },
+                ),
+                const SizedBox(height: 10),
+                const Text('Custom Label (optional override):', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: textCtrl,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    hintText: 'Enter label text',
+                  ),
+                ),
+                const SizedBox(height: 14),
+                const Text('Type & Duration:', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Radio<bool>(
+                      value: true,
+                      groupValue: isPoint,
+                      onChanged: (val) => setDlgState(() => isPoint = true),
+                    ),
+                    const Text('Point marker (instantaneous)'),
+                  ],
+                ),
+                Row(
+                  children: [
+                    Radio<bool>(
+                      value: false,
+                      groupValue: isPoint,
+                      onChanged: (val) => setDlgState(() => isPoint = false),
+                    ),
+                    const Text('Duration:'),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 70,
+                      child: TextField(
+                        controller: durCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          suffixText: 's',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (v.signalChannelLabels.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  const Text('Channel:', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  DropdownButtonFormField<String?>(
+                    value: selectedChannel,
+                    isDense: true,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    ),
+                    items: [
+                      const DropdownMenuItem(value: null, child: Text('All Channels')),
+                      for (final chName in v.signalChannelLabels)
+                        DropdownMenuItem(value: chName, child: Text(chName)),
+                    ],
+                    onChanged: (val) => setDlgState(() => selectedChannel = val),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final label = textCtrl.text.trim();
+                if (label.isEmpty) return;
+                final duration = isPoint ? 0.0 : (double.tryParse(durCtrl.text) ?? 1.0);
+                Navigator.of(ctx).pop();
+                _addMarkerAtTime(
+                  clickSec,
+                  digit: selectedDigit,
+                  label: label,
+                  duration: duration,
+                  channel: selectedChannel,
+                );
+              },
+              child: const Text('Add Marker'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Right-click menu of a channel or waveform: add markers at click time,
+  /// hide channel, or show hidden channels again.
+  Future<void> _showChannelContextMenu(
+    int visibleIndex,
+    Offset globalPos, {
+    double? clickSec,
+  }) async {
     final v = _viewport;
     final eeg = _loadedEeg;
     if (v == null || eeg == null) return;
@@ -5947,6 +6225,20 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     }
     final hidden = _config.channels.where((c) => !c.displayOnScreen).toList();
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+
+    final timeStr = clickSec != null ? _formatTimeForDisplay(clickSec) : '';
+    ScoredEvent? existingEvent;
+    if (clickSec != null) {
+      for (final ev in v.scoredEvents) {
+        final t1 = math.min(ev.startSec, ev.endSec);
+        final t2 = math.max(ev.startSec, ev.endSec);
+        if (clickSec >= t1 - 0.3 && clickSec <= t2 + 0.3) {
+          existingEvent = ev;
+          break;
+        }
+      }
+    }
+
     final choice = await showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
@@ -5954,6 +6246,65 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         Offset.zero & overlay.size,
       ),
       items: [
+        if (clickSec != null) ...[
+          PopupMenuItem(
+            value: 'marker:dialog',
+            child: Row(
+              children: [
+                const Icon(Icons.bookmark_add, size: 16, color: Color(0xFF0284C7)),
+                const SizedBox(width: 8),
+                Text('Add marker at $timeStr…'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'marker:quick:0:Artifact',
+            child: Row(
+              children: [
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFE53935),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Text('Mark Artifact (0)'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'marker:quick:25:Arousal',
+            child: Row(
+              children: [
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFFB300),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Text('Mark Arousal (A)'),
+              ],
+            ),
+          ),
+          if (existingEvent != null) ...[
+            PopupMenuItem(
+              value: 'marker:delete:${existingEvent.startSec}:${existingEvent.endSec}:${existingEvent.label}',
+              child: Row(
+                children: [
+                  const Icon(Icons.delete_outline, size: 16, color: Colors.red),
+                  const SizedBox(width: 8),
+                  Text('Delete marker "${existingEvent.label}"'),
+                ],
+              ),
+            ),
+          ],
+          const PopupMenuDivider(),
+        ],
         PopupMenuItem(
           value: 'hide',
           enabled: labels.length > 1,
@@ -5973,6 +6324,27 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       ],
     );
     if (choice == null || !mounted) return;
+    if (choice == 'marker:dialog' && clickSec != null) {
+      unawaited(_showAddMarkerDialog(clickSec, channel: label));
+      return;
+    }
+    if (choice.startsWith('marker:quick:') && clickSec != null) {
+      final parts = choice.split(':');
+      final digit = int.tryParse(parts[2]) ?? 0;
+      final evLabel = parts.length > 3 ? parts[3] : _eventLabel(digit);
+      _addMarkerAtTime(clickSec, digit: digit, label: evLabel, channel: label);
+      return;
+    }
+    if (choice.startsWith('marker:delete:')) {
+      final parts = choice.split(':');
+      final s = double.tryParse(parts[2]);
+      final e = double.tryParse(parts[3]);
+      final lbl = parts.sublist(4).join(':');
+      if (s != null && e != null) {
+        _deleteMarker(s, e, lbl);
+      }
+      return;
+    }
     if (choice == 'config') {
       _openConfigDialog(initialTabIndex: _kConfigChannelsTab);
       return;
@@ -8900,6 +9272,20 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                         _applyScaleToAllChannels,
                                     onChannelContextMenu:
                                         _showChannelContextMenu,
+                                    spectrogramEnabled:
+                                        _config.spectrogramEnabled,
+                                    onAddMarkerAt: (sec, ch) => unawaited(
+                                      _showAddMarkerDialog(
+                                        sec,
+                                        channel: ch >= 0 &&
+                                                ch <
+                                                    viewport
+                                                        .signalChannelLabels
+                                                        .length
+                                            ? viewport.signalChannelLabels[ch]
+                                            : null,
+                                      ),
+                                    ),
                                     onTimeUnitChanged: _setEegPanelTimeUnit,
                                     waveformMaximized: _waveformMaximized,
                                     onToggleMaximize: () => setState(
@@ -9668,6 +10054,8 @@ class _ScoringHeroSurface extends StatefulWidget {
     this.onToggleMaximize,
     this.videoCursor,
     this.onVideoCursorDrag,
+    this.spectrogramEnabled = false,
+    this.onAddMarkerAt,
   });
 
   final EegViewport viewport;
@@ -9705,12 +10093,14 @@ class _ScoringHeroSurface extends StatefulWidget {
   final void Function(int channelIndex, double newScale)? onChannelScaleSet;
   final void Function(double newScale)? onChannelScaleApplyAll;
 
-  /// Right-click on a channel (its label or its trace).
-  final void Function(int channelIndex, Offset globalPosition)?
+  /// Right-click on a channel (its label or its trace) or waveform.
+  final void Function(int channelIndex, Offset globalPosition, {double? clickSec})?
   onChannelContextMenu;
   final ValueChanged<String>? onTimeUnitChanged;
   final bool waveformMaximized;
   final VoidCallback? onToggleMaximize;
+  final bool spectrogramEnabled;
+  final void Function(double clickSec, int channelIndex)? onAddMarkerAt;
 
   @override
   State<_ScoringHeroSurface> createState() => _ScoringHeroSurfaceState();
@@ -9760,14 +10150,15 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
         v.visibleStartSeconds +
         ((px - _waveformPlotLeftPad) / drawWidth).clamp(0.0, 1.0) * v.visibleDurationSeconds;
     const color = Color(0xFFE11D48);
+    final isClock = v.eegPanelTimeUnit == 'Clock time';
     String label() {
       final start = v.recordingStartTime;
-      if (start != null) {
+      if (isClock && start != null) {
         final c = start.add(Duration(milliseconds: (t * 1000).round()));
         String two(int n) => n.toString().padLeft(2, '0');
         return '${two(c.hour)}:${two(c.minute)}:${two(c.second)}';
       }
-      return '${t.toStringAsFixed(1)} s';
+      return formatVideoClock(t);
     }
 
     return [
@@ -9945,17 +10336,22 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
             // Top strip: spectrogram | hypnogram | optional SWA slider | power spectrum
             LayoutBuilder(
               builder: (context, constraints) {
+                final showSpectrogram = widget.spectrogramEnabled &&
+                    widget.viewport.spectrogramPower.isNotEmpty;
                 final totalWidth = constraints.maxWidth;
                 final showSwaSlider =
                     widget.viewport.hypnogramOverlayMode == 'SWA';
                 final swaWidth = showSwaSlider ? 42.0 : 0.0;
                 final dividerWidth = 8.0;
-                final netWidth = totalWidth - swaWidth - (dividerWidth * 2);
+                final numDividers = showSpectrogram ? 2 : 1;
+                final netWidth = totalWidth - swaWidth - (dividerWidth * numDividers);
 
                 final specFlex = widget.viewport.spectrogramFlex;
                 final hypFlex = widget.viewport.hypnogramFlex;
                 final perFlex = widget.viewport.periodogramFlex;
-                final totalFlex = specFlex + hypFlex + perFlex;
+                final totalFlex = showSpectrogram
+                    ? (specFlex + hypFlex + perFlex)
+                    : (hypFlex + perFlex);
 
                 final flexPerPixel = totalFlex / netWidth;
 
@@ -9963,51 +10359,53 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                   height: _topPanelHeight,
                   child: Row(
                     children: [
-                      Expanded(
-                        flex: specFlex,
-                        child: _ClickablePainterPanel(
-                          painter: SpectrogramPainter(widget.viewport),
-                          rightPadding: 38.0,
-                          onTapFraction: (fx) {
-                            final epoch = (fx * widget.viewport.epochCount)
-                                .floor()
-                                .clamp(0, widget.viewport.epochCount - 1);
-                            widget.onJump(epoch + 1);
-                          },
+                      if (showSpectrogram) ...[
+                        Expanded(
+                          flex: specFlex,
+                          child: _ClickablePainterPanel(
+                            painter: SpectrogramPainter(widget.viewport),
+                            rightPadding: 38.0,
+                            onTapFraction: (fx) {
+                              final epoch = (fx * widget.viewport.epochCount)
+                                  .floor()
+                                  .clamp(0, widget.viewport.epochCount - 1);
+                              widget.onJump(epoch + 1);
+                            },
+                          ),
                         ),
-                      ),
-                      GestureDetector(
-                        behavior: HitTestBehavior.translucent,
-                        onHorizontalDragStart: (_) {
-                          _cumulativeDx = 0.0;
-                          _dragSpecStartFlex = widget.viewport.spectrogramFlex;
-                          _dragHypStartFlex = widget.viewport.hypnogramFlex;
-                        },
-                        onHorizontalDragUpdate: (dragDetails) {
-                          _cumulativeDx += dragDetails.delta.dx;
-                          final deltaFlex = (_cumulativeDx * flexPerPixel)
-                              .round();
-                          final newSpec = (_dragSpecStartFlex + deltaFlex).clamp(
-                            5,
-                            totalFlex - perFlex - 5,
-                          );
-                          final newHyp = totalFlex - newSpec - perFlex;
-                          widget.onResizeFlex(newSpec, newHyp, perFlex);
-                        },
-                        child: MouseRegion(
-                          cursor: SystemMouseCursors.resizeLeftRight,
-                          child: SizedBox(
-                            width: dividerWidth,
-                            child: const Center(
-                              child: VerticalDivider(
-                                width: 1,
-                                thickness: 1,
-                                color: Color(0xFFD0D0D0),
+                        GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onHorizontalDragStart: (_) {
+                            _cumulativeDx = 0.0;
+                            _dragSpecStartFlex = widget.viewport.spectrogramFlex;
+                            _dragHypStartFlex = widget.viewport.hypnogramFlex;
+                          },
+                          onHorizontalDragUpdate: (dragDetails) {
+                            _cumulativeDx += dragDetails.delta.dx;
+                            final deltaFlex = (_cumulativeDx * flexPerPixel)
+                                .round();
+                            final newSpec = (_dragSpecStartFlex + deltaFlex).clamp(
+                              5,
+                              totalFlex - perFlex - 5,
+                            );
+                            final newHyp = totalFlex - newSpec - perFlex;
+                            widget.onResizeFlex(newSpec, newHyp, perFlex);
+                          },
+                          child: MouseRegion(
+                            cursor: SystemMouseCursors.resizeLeftRight,
+                            child: SizedBox(
+                              width: dividerWidth,
+                              child: const Center(
+                                child: VerticalDivider(
+                                  width: 1,
+                                  thickness: 1,
+                                  color: Color(0xFFD0D0D0),
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
+                      ],
                       Expanded(
                         flex: hypFlex,
                         child: _HypnogramPainterPanel(
@@ -10049,12 +10447,21 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                           _cumulativeDx += dragDetails.delta.dx;
                           final deltaFlex = (_cumulativeDx * flexPerPixel)
                               .round();
-                          final newHyp = (_dragHypStartFlex + deltaFlex).clamp(
-                            5,
-                            totalFlex - specFlex - 5,
-                          );
-                          final newPer = totalFlex - specFlex - newHyp;
-                          widget.onResizeFlex(specFlex, newHyp, newPer);
+                          if (showSpectrogram) {
+                            final newHyp = (_dragHypStartFlex + deltaFlex).clamp(
+                              5,
+                              totalFlex - specFlex - 5,
+                            );
+                            final newPer = totalFlex - specFlex - newHyp;
+                            widget.onResizeFlex(specFlex, newHyp, newPer);
+                          } else {
+                            final newHyp = (_dragHypStartFlex + deltaFlex).clamp(
+                              5,
+                              totalFlex - 5,
+                            );
+                            final newPer = totalFlex - newHyp;
+                            widget.onResizeFlex(specFlex, newHyp, newPer);
+                          }
                         },
                         child: MouseRegion(
                           cursor: SystemMouseCursors.resizeLeftRight,
@@ -10142,7 +10549,33 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                         final ch = (d.localPosition.dy / constraints.maxHeight * n)
                             .floor()
                             .clamp(0, n - 1);
-                        widget.onChannelContextMenu!(ch, d.globalPosition);
+                        double? clickSec;
+                        if (d.localPosition.dx >= _waveformPlotLeftPad) {
+                          final drawWidth = (constraints.maxWidth - _waveformPlotLeftPad)
+                              .clamp(1.0, double.infinity);
+                          final fx = ((d.localPosition.dx - _waveformPlotLeftPad) / drawWidth)
+                              .clamp(0.0, 1.0);
+                          clickSec = widget.viewport.visibleStartSeconds +
+                              fx * widget.viewport.visibleDurationSeconds;
+                        }
+                        widget.onChannelContextMenu!(ch, d.globalPosition, clickSec: clickSec);
+                      },
+                      onDoubleTapDown: (d) {
+                        if (d.localPosition.dx >= _waveformPlotLeftPad) {
+                          final drawWidth = (constraints.maxWidth - _waveformPlotLeftPad)
+                              .clamp(1.0, double.infinity);
+                          final fx = ((d.localPosition.dx - _waveformPlotLeftPad) / drawWidth)
+                              .clamp(0.0, 1.0);
+                          final clickSec = widget.viewport.visibleStartSeconds +
+                              fx * widget.viewport.visibleDurationSeconds;
+                          final n = widget.viewport.channelCount;
+                          final ch = n > 0
+                              ? (d.localPosition.dy / constraints.maxHeight * n)
+                                  .floor()
+                                  .clamp(0, n - 1)
+                              : 0;
+                          widget.onAddMarkerAt?.call(clickSec, ch);
+                        }
                       },
                       child: Stack(
                         fit: StackFit.expand,
@@ -10241,7 +10674,9 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                           onAdjustScale: widget.onChannelScaleAdjust,
                           onSetScale: widget.onChannelScaleSet,
                           onApplyAll: widget.onChannelScaleApplyAll,
-                          onContextMenu: widget.onChannelContextMenu,
+                          onContextMenu: widget.onChannelContextMenu != null
+                              ? (ch, pos) => widget.onChannelContextMenu!(ch, pos)
+                              : null,
                         ),
                       ),
                       // Draggable vertical splitter for channel sidebar width
@@ -14002,7 +14437,14 @@ class _DownloadStatsDialogState extends State<_DownloadStatsDialog> {
     });
 
     final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 10);
+    client.connectionTimeout = const Duration(seconds: 15);
+    client.badCertificateCallback = (cert, host, port) {
+      final h = host.toLowerCase();
+      return h == 'api.github.com' ||
+          h.endsWith('.github.com') ||
+          h == 'githubusercontent.com' ||
+          h.endsWith('.githubusercontent.com');
+    };
     try {
       final request = await client.getUrl(
         Uri.parse(

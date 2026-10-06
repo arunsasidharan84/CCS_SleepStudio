@@ -154,6 +154,7 @@ class _ConfigDialogState extends State<ConfigDialog> {
       bandBetaHi: widget.config.bandBetaHi,
       bandGammaLo: widget.config.bandGammaLo,
       bandGammaHi: widget.config.bandGammaHi,
+      bands: widget.config.bands.map((b) => b.copy()).toList(),
       channels: widget.config.channels.isNotEmpty
           ? widget.config.channels.map((c) => c.copy()).toList()
           : widget.channelLabels

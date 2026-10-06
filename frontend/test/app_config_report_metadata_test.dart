@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ccs_sleep_studio/src/models.dart';
 import 'package:ccs_sleep_studio/src/eeg_backend.dart';
 
 void main() {
@@ -106,5 +107,31 @@ void main() {
     expect(restored.bandSigmaLo, 11.0);
     expect(restored.bandSigmaHi, 15.0);
   });
+
+  test('custom bands including ThetaAlpha serialize and restore accurately', () {
+    final config = AppConfig(
+      bands: [
+        BandConfig(label: 'Delta', low: 0.5, high: 4.0),
+        BandConfig(label: 'Theta', low: 4.0, high: 8.0),
+        BandConfig(label: 'ThetaAlpha', low: 4.0, high: 12.0),
+        BandConfig(label: 'Alpha', low: 8.0, high: 12.0),
+        BandConfig(label: 'Sigma', low: 10.0, high: 16.0),
+        BandConfig(label: 'Beta', low: 12.0, high: 30.0),
+        BandConfig(label: 'Gamma', low: 30.0, high: 40.0),
+      ],
+    );
+
+    final json = config.toJson();
+    final restored = AppConfig.fromJson(json);
+
+    expect(restored.bands.length, 7);
+    expect(restored.bands[2].label, 'ThetaAlpha');
+    expect(restored.bands[2].low, 4.0);
+    expect(restored.bands[2].high, 12.0);
+    // Legacy fields should sync to matching bands
+    expect(restored.bandThetaLo, 4.0);
+    expect(restored.bandAlphaHi, 12.0);
+  });
 }
+
 

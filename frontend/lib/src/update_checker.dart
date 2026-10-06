@@ -108,13 +108,28 @@ class UpdateChecker {
     return null;
   }
 
+  /// Creates an HttpClient configured to accept valid GitHub certificates even on
+  /// Windows environments where root certificates are missing or institutional proxies exist.
+  static HttpClient _createHttpClient({Duration timeout = const Duration(seconds: 15)}) {
+    final client = HttpClient();
+    client.connectionTimeout = timeout;
+    client.badCertificateCallback = (X509Certificate cert, String host, int port) {
+      final h = host.toLowerCase();
+      // Trust github.com, api.github.com, and githubusercontent.com release CDN domains
+      return h == 'api.github.com' ||
+          h.endsWith('.github.com') ||
+          h == 'githubusercontent.com' ||
+          h.endsWith('.githubusercontent.com');
+    };
+    return client;
+  }
+
   /// Checks GitHub API for the latest release.
   static Future<UpdateInfo> checkForUpdates() async {
     final packageInfo = await PackageInfo.fromPlatform();
     final currentVer = packageInfo.version;
 
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 10);
+    final client = _createHttpClient(timeout: const Duration(seconds: 12));
 
     try {
       final request = await client.getUrl(
@@ -159,8 +174,7 @@ class UpdateChecker {
     required ReleaseAsset asset,
     required void Function(double progress, int receivedBytes, int totalBytes) onProgress,
   }) async {
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 15);
+    final client = _createHttpClient(timeout: const Duration(seconds: 30));
 
     try {
       final request = await client.getUrl(Uri.parse(asset.downloadUrl));

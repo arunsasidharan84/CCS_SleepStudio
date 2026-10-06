@@ -4,6 +4,17 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.27.0]
+*   **Prompt to update at startup:** The app automatically checks for newer releases at startup and presents a dialog with release notes and one-click update actions. Fails silently when offline.
+*   **Smooth video slider scrubbing:** Eliminated lag and glitchy scrolling during video slider dragging by throttling libmpv seeks and coalescing waveform epoch paging at 60 FPS.
+*   **Click-to-add markers:** Added ability to add point and duration markers directly at mouse click: right-click on the waveform for instant actions (Artifact, Arousal, or full dialog) or double-click to open the Add Marker dialog.
+*   **Spectrogram space distribution:** When full-night spectrogram is disabled, the panel and splitter are hidden and 100% of top strip width is redistributed to the hypnogram and periodogram.
+*   **Video time format matching:** Video slider and waveform cursor match the window's active time mode (`eegPanelTimeUnit`), showing elapsed time `HH:MM:SS` when in elapsed mode.
+*   **User-definable frequency bands:** Added support for adding, editing, and deleting spectral frequency bands in config and batch processing, including a preset for Theta-Alpha (4–12 Hz).
+*   **Windows update SSL certificate fix:** Added custom trust fallback for GitHub API and release download hosts to prevent `CERTIFICATE_VERIFY_FAILED` on Windows.
+
+---
+
 ## [1.26.0]
 *   **Markers stay on screen after filtering.** Applying or changing display filters (or other settings) no longer removes the markers and events from the waveform and the hypnogram.
 *   **Much faster display filtering.** Filters are display filters: only the window on screen is filtered (with a few seconds of real signal on each side so there is no edge artefact), using flat, allocation-free buffers and cached filter designs. Applying a filter redraws the current window instantly instead of re-filtering the whole night, so long multi-channel recordings no longer freeze on low-spec computers and scrolling stays fast. The filtered window now matches filtering the whole night exactly (previously the window edges showed a filter transient).

@@ -2547,6 +2547,7 @@ class EegBackend {
         currentEpochPeriodogram: periodogram,
         periodogramFreqs: freqs,
         clearSelection: true,
+        clearEventSelections: true,
       );
     }
 
@@ -2665,6 +2666,7 @@ class EegBackend {
           currentEpochPeriodogram: periodogram,
           periodogramFreqs: freqs,
           clearSelection: true,
+          clearEventSelections: newSelections.isEmpty,
         );
       }
 
@@ -2673,7 +2675,7 @@ class EegBackend {
       for (final ev in old.scoredEvents) {
         final tMin = math.min(ev.startSec, ev.endSec);
         final tMax = math.max(ev.startSec, ev.endSec);
-        if (startSec >= tMin && startSec <= tMax) {
+        if (startSec >= tMin - 0.5 && startSec <= tMax + 0.5) {
           clickedEvent = ev;
           break;
         }
@@ -2697,6 +2699,7 @@ class EegBackend {
         currentEpochPeriodogram: periodogram,
         periodogramFreqs: freqs,
         clearSelection: true,
+        clearEventSelections: true,
       );
     }
 

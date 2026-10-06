@@ -102,5 +102,35 @@ void main() {
       expect(find.text('22:00:00  (00:00:00)'), findsOneWidget);
       sync.dispose();
     });
+
+    testWidgets('SyncedVideoPanel displays seconds format when timeUnit is Seconds', (tester) async {
+      final sync = VideoSyncController(
+        cameras: const [],
+        durationSec: 3600,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 500,
+              height: 300,
+              child: SyncedVideoPanel(
+                sync: sync,
+                isClockTime: false,
+                timeUnit: 'Seconds',
+                onClose: () {},
+                onMove: (_) {},
+                onResize: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('0s / 3600s'), findsOneWidget);
+      sync.dispose();
+    });
   });
 }

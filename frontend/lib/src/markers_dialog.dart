@@ -48,6 +48,8 @@ class MarkersDialog extends StatefulWidget {
     required this.onToggleLabel,
     required this.onSetAllLabels,
     required this.onJumpToEvent,
+    this.onDeleteEvent,
+    this.onClearAllEvents,
   });
 
   final List<ScoredEvent> events;
@@ -60,6 +62,8 @@ class MarkersDialog extends StatefulWidget {
   final void Function(String label, bool visible) onToggleLabel;
   final void Function(bool selectAll) onSetAllLabels;
   final void Function(ScoredEvent event) onJumpToEvent;
+  final void Function(ScoredEvent event)? onDeleteEvent;
+  final VoidCallback? onClearAllEvents;
 
   @override
   State<MarkersDialog> createState() => _MarkersDialogState();
@@ -68,11 +72,13 @@ class MarkersDialog extends StatefulWidget {
 class _MarkersDialogState extends State<MarkersDialog> {
   String _searchQuery = '';
   late Set<String> _localDisabledLabels;
+  late List<ScoredEvent> _localEvents;
 
   @override
   void initState() {
     super.initState();
     _localDisabledLabels = Set<String>.from(widget.disabledLabels);
+    _localEvents = List<ScoredEvent>.from(widget.events);
   }
 
   String _formatElapsed(double seconds) {
@@ -219,12 +225,12 @@ class _MarkersDialogState extends State<MarkersDialog> {
     // Count per label
     final labelCounts = <String, int>{};
     final labelDigit = <String, int>{};
-    for (final ev in widget.events) {
+    for (final ev in _localEvents) {
       labelCounts[ev.label] = (labelCounts[ev.label] ?? 0) + 1;
       labelDigit[ev.label] = ev.digit;
     }
 
-    final filteredEvents = widget.events.where((ev) {
+    final filteredEvents = _localEvents.where((ev) {
       if (_searchQuery.isNotEmpty) {
         final q = _searchQuery.toLowerCase();
         final matchLabel = ev.label.toLowerCase().contains(q);
@@ -249,7 +255,7 @@ class _MarkersDialogState extends State<MarkersDialog> {
                 const Icon(Icons.bookmark_border, color: Color(0xFF1E88E5), size: 24),
                 const SizedBox(width: 10),
                 Text(
-                  'Markers & Annotations (${widget.events.length})',
+                  'Markers & Annotations (${_localEvents.length})',
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
                 const Spacer(),
@@ -488,6 +494,22 @@ class _MarkersDialogState extends State<MarkersDialog> {
                                       ),
                                     ),
                                     const Icon(Icons.arrow_forward_ios, size: 12, color: Colors.black45),
+                                    if (widget.onDeleteEvent != null) ...[
+                                      const SizedBox(width: 8),
+                                      IconButton(
+                                        icon: const Icon(Icons.delete_outline, size: 16, color: Colors.redAccent),
+                                        tooltip: 'Delete marker',
+                                        splashRadius: 16,
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                                        onPressed: () {
+                                          widget.onDeleteEvent!(ev);
+                                          setState(() {
+                                            _localEvents.remove(ev);
+                                          });
+                                        },
+                                      ),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -505,7 +527,7 @@ class _MarkersDialogState extends State<MarkersDialog> {
                 OutlinedButton.icon(
                   icon: const Icon(Icons.download, size: 16),
                   label: const Text('Export CSV…'),
-                  onPressed: widget.events.isEmpty
+                  onPressed: _localEvents.isEmpty
                       ? null
                       : () async {
                           final path = await FilePicker.saveFile(
@@ -516,18 +538,46 @@ class _MarkersDialogState extends State<MarkersDialog> {
                           );
                           if (path != null) {
                             final sb = StringBuffer('Onset_Sec,Duration_Sec,Label,Type,Channel\n');
-                            for (final ev in widget.events) {
+                            for (final ev in _localEvents) {
                               sb.writeln('${ev.startSec},${ev.durationSeconds},"${ev.label}","${ev.type}","${ev.channel ?? ''}"');
                             }
                             await File(path).writeAsString(sb.toString());
                             if (context.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Exported ${widget.events.length} markers to $path')),
+                                SnackBar(content: Text('Exported ${_localEvents.length} markers to $path')),
                               );
                             }
                           }
                         },
                 ),
+                if (widget.onClearAllEvents != null && _localEvents.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.delete_sweep, size: 16, color: Colors.redAccent),
+                    label: const Text('Clear All Markers', style: TextStyle(color: Colors.redAccent)),
+                    onPressed: () async {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('Clear All Markers'),
+                          content: Text('Are you sure you want to delete all ${_localEvents.length} markers? This action cannot be undone.'),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              style: TextButton.styleFrom(foregroundColor: Colors.red),
+                              child: const Text('Delete All'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirm == true) {
+                        widget.onClearAllEvents!();
+                        setState(() => _localEvents.clear());
+                      }
+                    },
+                  ),
+                ],
                 const Spacer(),
                 ElevatedButton(
                   onPressed: () => Navigator.of(context).pop(),

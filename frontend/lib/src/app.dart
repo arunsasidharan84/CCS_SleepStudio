@@ -719,6 +719,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       child: SyncedVideoPanel(
         sync: sync,
         isClockTime: viewport.eegPanelTimeUnit == 'Clock time',
+        timeUnit: viewport.eegPanelTimeUnit,
         epochStartSec: viewport.currentEpoch * viewport.epochSeconds.toDouble(),
         onClose: _closeVideo,
         onAddVideo: _openVideoFile,
@@ -772,6 +773,24 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         onJumpToEvent: (ev) {
           final epoch = (ev.startSec / vp.epochSeconds).floor() + 1;
           _jumpToEpoch(epoch);
+        },
+        onDeleteEvent: (ev) => _deleteMarker(ev.startSec, ev.endSec, ev.label),
+        onClearAllEvents: () {
+          final v = _viewport;
+          if (v == null) return;
+          setState(() {
+            _viewport = v.copyWith(scoredEvents: const []);
+            _status = 'Cleared all markers';
+          });
+          autoSaveScoring(
+            _activePath,
+            v.stages,
+            v.epochSeconds,
+            events: const [],
+            stagesUncertain: v.stagesUncertain,
+            stagesConfidence: v.stagesConfidence,
+            stageProbabilities: v.stageProbabilities,
+          );
         },
       ),
     );
@@ -1360,6 +1379,17 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     }
   }
 
+  void _clearSelection() {
+    final v = _viewport;
+    if (v == null) return;
+    setState(() {
+      _viewport = v.copyWith(
+        clearSelection: true,
+        clearEventSelections: true,
+      );
+    });
+  }
+
   void _markEvent(int digit) {
     final v = _viewport;
     if (v == null) return;
@@ -1778,8 +1808,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           var stem = _basename(path);
           final dot = stem.lastIndexOf('.');
           if (dot > 0) stem = stem.substring(0, dot);
-          stageInput = '${tempDir.path}${Platform.pathSeparator}$stem.edf';
-          await processEdfFile(path, stageInput, EdfTransformOptions());
+          final loaded = (_loadedEeg != null && _activePath == path) ? _loadedEeg : null;
+          final options = EdfTransformOptions();
+          if ((loaded?.sampleRateHz ?? 1000) > 200) {
+            options.downsample = true;
+            options.targetSampleRateHz = 200;
+          }
+          await processEdfFile(path, stageInput, options, loadedEeg: loaded);
           explicitOut = nativeStageOutputPath(
             path,
             algorithm,
@@ -2268,11 +2303,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final eeg = _loadedEeg;
     final viewport = _viewport;
     if (path == null || eeg == null || viewport == null) {
-      _setStatus('Load an EDF first');
-      return;
-    }
-    if (!path.toLowerCase().endsWith('.edf')) {
-      _setStatus('AnalyseNidra currently requires an EDF recording');
+      _setStatus('Load an EEG/EDF first');
       return;
     }
     await autoSaveScoring(
@@ -2299,12 +2330,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           bool perChannel = false,
           String? regionMapJson,
           AnalyseNidraOptions? options,
-        }) {
+        }) async {
           if (options != null) _analyseOptions = options;
+          final (edfPath, _) = await _nativeEdfFor(path);
           _runAnalyseNidraJobs(
             [
               _AnalyseNidraJob(
-                edfPath: path,
+                edfPath: edfPath,
                 scoringPath: scoringPath,
                 mappedScoringPath: scoringPath,
               ),
@@ -4026,6 +4058,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             : eeg.channelLabels,
         hasStages: hasStages,
         onRun: (settings) async {
+          bool progressShowing = true;
           showDialog(
             context: context,
             barrierDismissible: false,
@@ -4040,6 +4073,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             ),
           );
 
+          Directory? tempDir;
           try {
             await autoSaveScoring(
               path,
@@ -4052,6 +4086,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             );
             final scoringPath = _analyseNidraScoringPath(path);
 
+            final (edfPath, tmp) = await _nativeEdfFor(path);
+            tempDir = tmp;
+
             final executable = detectAnalyseNidraExecutable();
             final channels = List<String>.from(settings['channels'] as List);
             final references = List<String>.from(settings['references'] as List);
@@ -4059,7 +4096,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             final detectSlowWaves = settings['detectSlowWaves'] as bool;
 
             final job = _AnalyseNidraJob(
-              edfPath: path,
+              edfPath: edfPath,
               scoringPath: scoringPath,
               mappedScoringPath: scoringPath,
             );
@@ -4082,7 +4119,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
             final result = await Process.run(executable, args);
 
-            if (mounted) Navigator.of(context).pop();
+            if (progressShowing && mounted) {
+              Navigator.of(context).pop();
+              progressShowing = false;
+            }
 
             if (result.exitCode != 0) {
               final err = result.stderr.toString();
@@ -4095,12 +4135,18 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
             final newEvents = <ScoredEvent>[];
             if (detectSpindles) {
-              final spindles = await loadAnalyseNidraSpindles(path);
+              final spindles = await loadAnalyseNidraSpindles(edfPath);
               newEvents.addAll(spindles);
+              if (tempDir != null) {
+                await _copyCompanionJson(edfPath, path, '_spindles.json');
+              }
             }
             if (detectSlowWaves) {
-              final slowWaves = await loadAnalyseNidraSlowWaves(path);
+              final slowWaves = await loadAnalyseNidraSlowWaves(edfPath);
               newEvents.addAll(slowWaves);
+              if (tempDir != null) {
+                await _copyCompanionJson(edfPath, path, '_slow_waves.json');
+              }
             }
 
             final merged = _mergeScoredEvents([...v.scoredEvents, ...newEvents]);
@@ -4126,8 +4172,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               );
             }
           } catch (e) {
-            if (mounted) {
+            if (progressShowing && mounted) {
               Navigator.of(context).pop();
+              progressShowing = false;
+            }
+            if (mounted) {
               showDialog(
                 context: context,
                 builder: (context) => AlertDialog(
@@ -4144,10 +4193,34 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 ),
               );
             }
+          } finally {
+            if (tempDir != null) {
+              try {
+                await tempDir.delete(recursive: true);
+              } catch (_) {}
+            }
           }
         },
       ),
     );
+  }
+
+  Future<void> _copyCompanionJson(String srcEdf, String dstTarget, String suffix) async {
+    final srcStem = srcEdf.replaceAll(RegExp(r'\.[^.]+$'), '');
+    final dstStem = dstTarget.replaceAll(RegExp(r'\.[^.]+$'), '');
+    for (final cand in [
+      '$srcStem$suffix',
+      '${srcStem}_analyse$suffix',
+      '$srcStem.${suffix.replaceFirst('_', '')}',
+    ]) {
+      final f = File(cand);
+      if (f.existsSync()) {
+        try {
+          await f.copy('$dstStem$suffix');
+          break;
+        } catch (_) {}
+      }
+    }
   }
 
   // ─── Respiratory (OSA) & PLM analysis ────────────────────────────────────
@@ -4161,7 +4234,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final dot = stem.lastIndexOf('.');
     if (dot > 0) stem = stem.substring(0, dot);
     final edf = '${tempDir.path}${Platform.pathSeparator}$stem.edf';
-    await processEdfFile(path, edf, EdfTransformOptions());
+    final loaded = (_loadedEeg != null && _activePath == path) ? _loadedEeg : null;
+    final options = EdfTransformOptions();
+    if ((loaded?.sampleRateHz ?? 1000) > 200) {
+      options.downsample = true;
+      options.targetSampleRateHz = 200;
+    }
+    await processEdfFile(path, edf, options, loadedEeg: loaded);
     return (edf, tempDir);
   }
 
@@ -5966,10 +6045,19 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   String _formatTimeForDisplay(double sec) {
     final v = _viewport;
-    if (v != null && v.eegPanelTimeUnit == 'Clock time' && v.recordingStartTime != null) {
-      final dt = v.recordingStartTime!.add(Duration(milliseconds: (sec * 1000).round()));
+    final unit = v?.eegPanelTimeUnit ?? 'Seconds';
+    if (unit == 'Clock time' && v?.recordingStartTime != null) {
+      final dt = v!.recordingStartTime!.add(Duration(milliseconds: (sec * 1000).round()));
       String two(int n) => n.toString().padLeft(2, '0');
       return '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
+    } else if (unit == 'Seconds') {
+      return '${sec.round()}s';
+    } else if (unit == 'Minutes') {
+      return '${(sec / 60.0).toStringAsFixed(1)} min';
+    } else if (unit == 'Hours') {
+      final h = sec ~/ 3600;
+      final m = ((sec % 3600) / 60).round();
+      return m == 0 ? '${h}h' : '${h}h ${m}m';
     }
     return formatVideoClock(sec);
   }
@@ -6229,12 +6317,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final timeStr = clickSec != null ? _formatTimeForDisplay(clickSec) : '';
     ScoredEvent? existingEvent;
     if (clickSec != null) {
+      double bestDist = double.infinity;
       for (final ev in v.scoredEvents) {
         final t1 = math.min(ev.startSec, ev.endSec);
         final t2 = math.max(ev.startSec, ev.endSec);
-        if (clickSec >= t1 - 0.3 && clickSec <= t2 + 0.3) {
+        final dist = clickSec < t1 ? (t1 - clickSec) : (clickSec > t2 ? (clickSec - t2) : 0.0);
+        if (dist <= 1.5 && dist < bestDist) {
+          bestDist = dist;
           existingEvent = ev;
-          break;
         }
       }
     }
@@ -6246,6 +6336,35 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         Offset.zero & overlay.size,
       ),
       items: [
+        if (existingEvent != null) ...[
+          PopupMenuItem(
+            value: 'marker:delete:${existingEvent.startSec}:${existingEvent.endSec}:${existingEvent.label}',
+            child: Row(
+              children: [
+                const Icon(Icons.delete_forever, size: 18, color: Colors.redAccent),
+                const SizedBox(width: 8),
+                Text(
+                  'Delete marker "${existingEvent.label}" (${_formatTimeForDisplay(existingEvent.startSec)})',
+                  style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+          ),
+          const PopupMenuDivider(),
+        ],
+        if (v.eventSelections.isNotEmpty) ...[
+          PopupMenuItem(
+            value: 'selection:clear',
+            child: Row(
+              children: [
+                const Icon(Icons.deselect, size: 16, color: Colors.blueGrey),
+                const SizedBox(width: 8),
+                const Text('Clear selection box'),
+              ],
+            ),
+          ),
+          const PopupMenuDivider(),
+        ],
         if (clickSec != null) ...[
           PopupMenuItem(
             value: 'marker:dialog',
@@ -6291,18 +6410,6 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               ],
             ),
           ),
-          if (existingEvent != null) ...[
-            PopupMenuItem(
-              value: 'marker:delete:${existingEvent.startSec}:${existingEvent.endSec}:${existingEvent.label}',
-              child: Row(
-                children: [
-                  const Icon(Icons.delete_outline, size: 16, color: Colors.red),
-                  const SizedBox(width: 8),
-                  Text('Delete marker "${existingEvent.label}"'),
-                ],
-              ),
-            ),
-          ],
           const PopupMenuDivider(),
         ],
         PopupMenuItem(
@@ -6324,6 +6431,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       ],
     );
     if (choice == null || !mounted) return;
+    if (choice == 'selection:clear') {
+      _clearSelection();
+      return;
+    }
     if (choice == 'marker:dialog' && clickSec != null) {
       unawaited(_showAddMarkerDialog(clickSec, channel: label));
       return;
@@ -9110,6 +9221,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             _EraseEventsIntent: CallbackAction<_EraseEventsIntent>(
               onInvoke: (_) => _eraseEventsInSelections(),
             ),
+            _ClearSelectionIntent: CallbackAction<_ClearSelectionIntent>(
+              onInvoke: (_) => _clearSelection(),
+            ),
             _ZoomSelectionIntent: CallbackAction<_ZoomSelectionIntent>(
               onInvoke: (_) => _zoomOnSelectedEeg(),
             ),
@@ -10150,13 +10264,21 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
         v.visibleStartSeconds +
         ((px - _waveformPlotLeftPad) / drawWidth).clamp(0.0, 1.0) * v.visibleDurationSeconds;
     const color = Color(0xFFE11D48);
-    final isClock = v.eegPanelTimeUnit == 'Clock time';
+    final unit = v.eegPanelTimeUnit;
     String label() {
       final start = v.recordingStartTime;
-      if (isClock && start != null) {
+      if (unit == 'Clock time' && start != null) {
         final c = start.add(Duration(milliseconds: (t * 1000).round()));
         String two(int n) => n.toString().padLeft(2, '0');
         return '${two(c.hour)}:${two(c.minute)}:${two(c.second)}';
+      } else if (unit == 'Seconds') {
+        return '${t.round()}s';
+      } else if (unit == 'Minutes') {
+        return '${(t / 60.0).toStringAsFixed(1)}m';
+      } else if (unit == 'Hours') {
+        final h = t ~/ 3600;
+        final m = ((t % 3600) / 60).round();
+        return m == 0 ? '${h}h' : '${h}h ${m}m';
       }
       return formatVideoClock(t);
     }
@@ -10543,6 +10665,26 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                       },
                       onPanEnd: _handlePanEnd,
                       onPanCancel: _handlePanCancel,
+                      onTapUp: (d) {
+                        if (d.localPosition.dx >= _waveformPlotLeftPad) {
+                          final n = widget.viewport.channelCount;
+                          if (n == 0) return;
+                          final drawWidth = (constraints.maxWidth - _waveformPlotLeftPad)
+                              .clamp(1.0, double.infinity);
+                          final fx = ((d.localPosition.dx - _waveformPlotLeftPad) / drawWidth)
+                              .clamp(0.0, 1.0);
+                          final clickSec = widget.viewport.visibleStartSeconds +
+                              fx * widget.viewport.visibleDurationSeconds;
+                          final ch = (d.localPosition.dy / constraints.maxHeight * n)
+                              .floor()
+                              .clamp(0, n - 1);
+                          final baselineFraction = (ch + 0.5) / n;
+                          final yFrac = d.localPosition.dy / constraints.maxHeight;
+                          final normalizedVal = (baselineFraction - yFrac) * n / 0.42;
+                          final uv = normalizedVal * widget.viewport.amplitudeRangeUv;
+                          widget.onSelectionEnd(clickSec, clickSec, ch, uv, uv);
+                        }
+                      },
                       onSecondaryTapDown: (d) {
                         final n = widget.viewport.channelCount;
                         if (n == 0 || widget.onChannelContextMenu == null) return;
@@ -11899,6 +12041,10 @@ class _EraseEventsIntent extends Intent {
   const _EraseEventsIntent();
 }
 
+class _ClearSelectionIntent extends Intent {
+  const _ClearSelectionIntent();
+}
+
 class _ZoomSelectionIntent extends Intent {
   const _ZoomSelectionIntent();
 }
@@ -11981,6 +12127,8 @@ final _shortcuts = <ShortcutActivator, Intent>{
   const SingleActivator(LogicalKeyboardKey.f12): const _EventIntent(12),
   const SingleActivator(LogicalKeyboardKey.backspace):
       const _EraseEventsIntent(),
+  const SingleActivator(LogicalKeyboardKey.escape):
+      const _ClearSelectionIntent(),
   const SingleActivator(LogicalKeyboardKey.keyZ): const _ZoomSelectionIntent(),
   // Markers & Video Shortcuts
   const SingleActivator(LogicalKeyboardKey.keyM): const _MarkersIntent(),

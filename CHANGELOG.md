@@ -4,6 +4,15 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.27.1]
+*   **Video cursor and slider time unit matching:** Video cursor badge and video slider elapsed format strictly respect active time units (`Seconds` as `...s`, `Minutes` as `...m`, `Hours` as `...h`, and `Clock time`).
+*   **Easy marker removal & selection box dismissal:** Right-clicking near any marker displays a prominent Delete Marker option with generous hit tolerance; clicking the waveform dismisses active selection boxes; pressing `Escape` clears active selections; Markers & Annotations dialog includes per-row delete and Clear All options.
+*   **Fixed AnalyseNidra detection error and app crash on .EEG files:** Wrapped AnalyseNidra detection with native EDF conversion (`_nativeEdfFor`) and guarded progress dialog dismissals against duplicate navigator pops that caused a blank screen and crash.
+*   **High-performance streaming EDF conversion:** Replaced dynamic Dart `List<int>` byte allocations in `_writeLoadedEegToEdf` and `processEdfFile` with zero-allocation `ByteData` streaming via `RandomAccessFile`, cutting .EEG conversion time from 60 seconds to ~1 second with near-zero memory footprint. Automatically reuses in-memory EEG and downsamples high-frequency recordings (>200 Hz) for rapid analysis.
+*   **Utilities review & enhancements:** Enabled non-EDF file support across all Utilities options, including AnalyseNidra Advanced Analysis, respiratory OSA, PLMS, and CAP analyses.
+
+---
+
 ## [1.27.0]
 *   **Prompt to update at startup:** The app automatically checks for newer releases at startup and presents a dialog with release notes and one-click update actions. Fails silently when offline.
 *   **Smooth video slider scrubbing:** Eliminated lag and glitchy scrolling during video slider dragging by throttling libmpv seeks and coalescing waveform epoch paging at 60 FPS.

@@ -367,6 +367,7 @@ class SyncedVideoPanel extends StatefulWidget {
     this.onAddVideo,
     this.epochStartSec,
     this.isClockTime = false,
+    this.timeUnit = 'Elapsed',
   });
 
   final VideoSyncController sync;
@@ -380,6 +381,9 @@ class SyncedVideoPanel extends StatefulWidget {
 
   /// Whether the host window is displaying clock time or elapsed time.
   final bool isClockTime;
+
+  /// Time unit matching the EEG panel: 'Clock time', 'Seconds', 'Minutes', 'Hours'
+  final String timeUnit;
 
   @override
   State<SyncedVideoPanel> createState() => _SyncedVideoPanelState();
@@ -737,9 +741,21 @@ class _SyncedVideoPanelState extends State<SyncedVideoPanel> {
           const Spacer(),
           Flexible(
             child: Text(
-              widget.isClockTime && s.recordingStart != null
-                  ? '${formatVideoClock(t, start: s.recordingStart)}  (${formatVideoClock(t)})'
-                  : '${formatVideoClock(t)} / ${formatVideoClock(s.durationSec)}',
+              () {
+                if (widget.isClockTime && s.recordingStart != null) {
+                  return '${formatVideoClock(t, start: s.recordingStart)}  (${formatVideoClock(t)})';
+                }
+                if (widget.timeUnit == 'Seconds') {
+                  return '${t.round()}s / ${s.durationSec.round()}s';
+                }
+                if (widget.timeUnit == 'Minutes') {
+                  return '${(t / 60.0).toStringAsFixed(1)}m / ${(s.durationSec / 60.0).toStringAsFixed(1)}m';
+                }
+                if (widget.timeUnit == 'Hours') {
+                  return '${(t / 3600.0).toStringAsFixed(2)}h / ${(s.durationSec / 3600.0).toStringAsFixed(2)}h';
+                }
+                return '${formatVideoClock(t)} / ${formatVideoClock(s.durationSec)}';
+              }(),
               style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'monospace'),
               overflow: TextOverflow.ellipsis,
             ),

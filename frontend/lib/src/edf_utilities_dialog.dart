@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -564,14 +565,15 @@ class _EegUtilitiesDialogState extends State<EegUtilitiesDialog>
 Future<void> processEdfFile(
   String inputPath,
   String outputPath,
-  EdfTransformOptions options,
-) async {
+  EdfTransformOptions options, {
+  LoadedEeg? loadedEeg,
+}) async {
   final file = File(inputPath);
   if (!await file.exists()) throw Exception('Input file does not exist.');
 
   final lower = inputPath.toLowerCase();
   if (!lower.endsWith('.edf')) {
-    final loaded = EegBackend().loadEdf(inputPath);
+    final loaded = loadedEeg ?? EegBackend().loadEdf(inputPath);
     await _writeLoadedEegToEdf(loaded, outputPath, options);
     return;
   }
@@ -661,8 +663,8 @@ Future<void> processEdfFile(
   newHdr.write(newNumSignals.toString().padRight(4));
 
   // Write new signal attributes
-  List<int> outBytes = [];
-  outBytes.addAll(newHdr.toString().codeUnits);
+  final hdrBytes = BytesBuilder();
+  hdrBytes.add(newHdr.toString().codeUnits);
 
   // Labels
   for (final idx in keptIndices) {
@@ -670,47 +672,51 @@ Future<void> processEdfFile(
     if (options.channelNameMap.containsKey(name) && options.channelNameMap[name]!.isNotEmpty) {
       name = options.channelNameMap[name]!;
     }
-    outBytes.addAll(name.padRight(16).codeUnits.sublist(0, 16));
+    hdrBytes.add(name.padRight(16).codeUnits.sublist(0, 16));
   }
   // Transducers
-  for (int i = 0; i < newNumSignals; i++) outBytes.addAll(''.padRight(80).codeUnits);
+  for (int i = 0; i < newNumSignals; i++) hdrBytes.add(''.padRight(80).codeUnits);
   // Dimensions
-  for (int i = 0; i < newNumSignals; i++) outBytes.addAll('uV'.padRight(8).codeUnits);
+  for (int i = 0; i < newNumSignals; i++) hdrBytes.add('uV'.padRight(8).codeUnits);
   // Phys min
-  for (final idx in keptIndices) outBytes.addAll(physMin[idx].toStringAsFixed(2).padRight(8).codeUnits);
+  for (final idx in keptIndices) hdrBytes.add(physMin[idx].toStringAsFixed(2).padRight(8).codeUnits);
   // Phys max
-  for (final idx in keptIndices) outBytes.addAll(physMax[idx].toStringAsFixed(2).padRight(8).codeUnits);
+  for (final idx in keptIndices) hdrBytes.add(physMax[idx].toStringAsFixed(2).padRight(8).codeUnits);
   // Dig min
-  for (final idx in keptIndices) outBytes.addAll(digMin[idx].toString().padRight(8).codeUnits);
+  for (final idx in keptIndices) hdrBytes.add(digMin[idx].toString().padRight(8).codeUnits);
   // Dig max
-  for (final idx in keptIndices) outBytes.addAll(digMax[idx].toString().padRight(8).codeUnits);
+  for (final idx in keptIndices) hdrBytes.add(digMax[idx].toString().padRight(8).codeUnits);
   // Prefilter
-  for (int i = 0; i < newNumSignals; i++) outBytes.addAll(''.padRight(80).codeUnits);
+  for (int i = 0; i < newNumSignals; i++) hdrBytes.add(''.padRight(80).codeUnits);
   // Samples per record
-  for (final idx in keptIndices) outBytes.addAll(samplesPerRec[idx].toString().padRight(8).codeUnits);
+  for (final idx in keptIndices) hdrBytes.add(samplesPerRec[idx].toString().padRight(8).codeUnits);
   // Reserved
-  for (int i = 0; i < newNumSignals; i++) outBytes.addAll(''.padRight(32).codeUnits);
+  for (int i = 0; i < newNumSignals; i++) hdrBytes.add(''.padRight(32).codeUnits);
 
   // Copy raw signal payload for kept channels
   final totalBytesPerRec = samplesPerRec.reduce((a, b) => a + b) * 2;
   final totalRecs = numRecords > 0 ? numRecords : (bytes.length - headerBytes) ~/ totalBytesPerRec;
 
-  int dataPos = headerBytes;
-  for (int r = 0; r < totalRecs; r++) {
-    if (dataPos + totalBytesPerRec > bytes.length) break;
-    int recOffset = dataPos;
-    for (int s = 0; s < numSignals; s++) {
-      final sigLen = samplesPerRec[s] * 2;
-      if (keptIndices.contains(s)) {
-        outBytes.addAll(bytes.sublist(recOffset, recOffset + sigLen));
-      }
-      recOffset += sigLen;
-    }
-    dataPos += totalBytesPerRec;
-  }
-
   final outFile = File(outputPath);
-  await outFile.writeAsBytes(outBytes);
+  final raf = await outFile.open(mode: FileMode.write);
+  try {
+    await raf.writeFrom(hdrBytes.toBytes());
+    int dataPos = headerBytes;
+    for (int r = 0; r < totalRecs; r++) {
+      if (dataPos + totalBytesPerRec > bytes.length) break;
+      int recOffset = dataPos;
+      for (int s = 0; s < numSignals; s++) {
+        final sigLen = samplesPerRec[s] * 2;
+        if (keptIndices.contains(s)) {
+          await raf.writeFrom(bytes, recOffset, recOffset + sigLen);
+        }
+        recOffset += sigLen;
+      }
+      dataPos += totalBytesPerRec;
+    }
+  } finally {
+    await raf.close();
+  }
 }
 
 Future<void> _writeLoadedEegToEdf(
@@ -765,8 +771,8 @@ Future<void> _writeLoadedEegToEdf(
   newHdr.write('1.0'.padRight(8)); // 1 sec per record
   newHdr.write(newNumSignals.toString().padRight(4));
 
-  List<int> outBytes = [];
-  outBytes.addAll(newHdr.toString().codeUnits);
+  final hdrBytes = BytesBuilder();
+  hdrBytes.add(newHdr.toString().codeUnits);
 
   // Labels
   for (final idx in keptIndices) {
@@ -774,26 +780,26 @@ Future<void> _writeLoadedEegToEdf(
     if (options.channelNameMap.containsKey(name) && options.channelNameMap[name]!.isNotEmpty) {
       name = options.channelNameMap[name]!;
     }
-    outBytes.addAll(name.padRight(16).codeUnits.sublist(0, 16));
+    hdrBytes.add(name.padRight(16).codeUnits.sublist(0, 16));
   }
   // Transducers
-  for (int i = 0; i < newNumSignals; i++) outBytes.addAll(''.padRight(80).codeUnits);
+  for (int i = 0; i < newNumSignals; i++) hdrBytes.add(''.padRight(80).codeUnits);
   // Dimensions
-  for (int i = 0; i < newNumSignals; i++) outBytes.addAll('uV'.padRight(8).codeUnits);
+  for (int i = 0; i < newNumSignals; i++) hdrBytes.add('uV'.padRight(8).codeUnits);
   // Phys min
-  for (int i = 0; i < newNumSignals; i++) outBytes.addAll('-3000.00'.padRight(8).codeUnits);
+  for (int i = 0; i < newNumSignals; i++) hdrBytes.add('-3000.00'.padRight(8).codeUnits);
   // Phys max
-  for (int i = 0; i < newNumSignals; i++) outBytes.addAll('3000.00'.padRight(8).codeUnits);
+  for (int i = 0; i < newNumSignals; i++) hdrBytes.add('3000.00'.padRight(8).codeUnits);
   // Dig min
-  for (int i = 0; i < newNumSignals; i++) outBytes.addAll('-32768'.padRight(8).codeUnits);
+  for (int i = 0; i < newNumSignals; i++) hdrBytes.add('-32768'.padRight(8).codeUnits);
   // Dig max
-  for (int i = 0; i < newNumSignals; i++) outBytes.addAll('32767'.padRight(8).codeUnits);
+  for (int i = 0; i < newNumSignals; i++) hdrBytes.add('32767'.padRight(8).codeUnits);
   // Prefilter
-  for (int i = 0; i < newNumSignals; i++) outBytes.addAll(''.padRight(80).codeUnits);
+  for (int i = 0; i < newNumSignals; i++) hdrBytes.add(''.padRight(80).codeUnits);
   // Samples per record
-  for (int i = 0; i < newNumSignals; i++) outBytes.addAll(recordSamples.toString().padRight(8).codeUnits);
+  for (int i = 0; i < newNumSignals; i++) hdrBytes.add(recordSamples.toString().padRight(8).codeUnits.sublist(0, 8));
   // Reserved
-  for (int i = 0; i < newNumSignals; i++) outBytes.addAll(''.padRight(32).codeUnits);
+  for (int i = 0; i < newNumSignals; i++) hdrBytes.add(''.padRight(32).codeUnits);
 
   const physMin = -3000.0;
   const physMax = 3000.0;
@@ -801,22 +807,34 @@ Future<void> _writeLoadedEegToEdf(
   const digMax = 32767;
   const scale = (digMax - digMin) / (physMax - physMin);
 
-  for (int r = 0; r < numRecords; r++) {
-    final recordStartSec = r * 1.0;
-    final rStartSample = startSample + (recordStartSec * loaded.sampleRateHz).round();
-
-    for (final chIdx in keptIndices) {
-      final samples = loaded.channelSamples[chIdx];
-      for (int s = 0; s < recordSamples; s++) {
-        final srcIdx = rStartSample + (s * sampleStep);
-        final val = (srcIdx >= 0 && srcIdx < samples.length) ? samples[srcIdx] : 0.0;
-        final int16Val = ((val - physMin) * scale + digMin).round().clamp(-32768, 32767);
-        outBytes.add(int16Val & 0xFF);
-        outBytes.add((int16Val >> 8) & 0xFF);
-      }
-    }
-  }
-
   final outFile = File(outputPath);
-  await outFile.writeAsBytes(outBytes);
+  final raf = await outFile.open(mode: FileMode.write);
+  try {
+    await raf.writeFrom(hdrBytes.toBytes());
+
+    final recordBytes = recordSamples * newNumSignals * 2;
+    final recordBuffer = Uint8List(recordBytes);
+    final byteData = ByteData.sublistView(recordBuffer);
+
+    for (int r = 0; r < numRecords; r++) {
+      final recordStartSec = r * 1.0;
+      final rStartSample = startSample + (recordStartSec * loaded.sampleRateHz).round();
+
+      int byteOffset = 0;
+      for (final chIdx in keptIndices) {
+        final samples = loaded.channelSamples[chIdx];
+        final samplesLen = samples.length;
+        for (int s = 0; s < recordSamples; s++) {
+          final srcIdx = rStartSample + (s * sampleStep);
+          final val = (srcIdx >= 0 && srcIdx < samplesLen) ? samples[srcIdx] : 0.0;
+          final int16Val = ((val - physMin) * scale + digMin).round().clamp(-32768, 32767);
+          byteData.setInt16(byteOffset, int16Val, Endian.little);
+          byteOffset += 2;
+        }
+      }
+      await raf.writeFrom(recordBuffer);
+    }
+  } finally {
+    await raf.close();
+  }
 }

@@ -1,0 +1,58 @@
+name: Tests
+
+# Runs on every push and pull request. Installer builds stay in build.yml.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            bridge
+            analyseNidra
+      - name: bridge tests
+        run: cargo test
+        working-directory: bridge
+      - name: analyseNidra tests
+        run: cargo test
+        working-directory: analyseNidra
+
+  flutter:
+    name: Flutter analyze and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bridge
+      - name: Build native library (found by the tests via ../bridge/target/release)
+        run: cargo build --release
+        working-directory: bridge
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+        working-directory: frontend
+      - run: flutter analyze
+        working-directory: frontend
+      - run: flutter test
+        working-directory: frontend

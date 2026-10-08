@@ -526,6 +526,7 @@ class HypnogramPainter extends CustomPainter {
     this.nlgOverlay,
     this.startEpoch,
     this.endEpoch,
+    this.showMicroEvents = true,
   });
 
   final EegViewport viewport;
@@ -534,6 +535,7 @@ class HypnogramPainter extends CustomPainter {
   final NlgOverlayData? nlgOverlay;
   final int? startEpoch;
   final int? endEpoch;
+  final bool showMicroEvents;
 
   static const _yMin = -4.0;
   static const _yMax = 2.5;
@@ -637,7 +639,14 @@ class HypnogramPainter extends CustomPainter {
     final microEvents = <ScoredEvent>[];
     for (final ev in visibleEvents) {
       final dur = (ev.endSec - ev.startSec).abs();
-      if (dur >= 15.0) {
+      final isMicro = dur < 15.0 &&
+          (ev.digit == 7 ||
+              ev.digit == 8 ||
+              ev.label.startsWith('SlowWave') ||
+              ev.label.startsWith('Spindle'));
+      if (isMicro) {
+        if (showMicroEvents) microEvents.add(ev);
+      } else if (dur >= 15.0) {
         macroEvents.add(ev);
       } else {
         microEvents.add(ev);
@@ -696,7 +705,8 @@ class HypnogramPainter extends CustomPainter {
     final topY = cy - 8.0;
     final trackH = bandH / totalTracks;
 
-    for (final event in visibleEvents) {
+    final eventsToDraw = [...macroEvents, ...microEvents];
+    for (final event in eventsToDraw) {
       final start = math.min(event.startSec, event.endSec);
       final end = math.max(event.startSec, event.endSec);
       final visibleStart = math.max(start, startTime);
@@ -1238,6 +1248,7 @@ class HypnogramPainter extends CustomPainter {
       old.viewport.eegPanelTimeUnit != viewport.eegPanelTimeUnit ||
       old.viewport.recordingStartTime != viewport.recordingStartTime ||
       old.viewport.scoredEvents != viewport.scoredEvents ||
+      old.showMicroEvents != showMicroEvents ||
       old.viewport.lightsOffSeconds != viewport.lightsOffSeconds ||
       old.viewport.lightsOnSeconds != viewport.lightsOnSeconds;
 }

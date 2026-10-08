@@ -231,6 +231,21 @@ if [[ -d /usr/lib/ccs-sleep-studio/assets/models ]]; then
   echo "    [OK] AI Autoscory models present ($MODEL_COUNT model suites bundled)"
 fi
 
+# Step 6: Install system updater command
+UPDATER_BIN="/usr/local/bin/update-ccs-sleep-studio"
+mkdir -p /usr/local/bin
+cat > "$UPDATER_BIN" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "--> Checking for latest CCS Sleep Studio updates..."
+TMP_SCRIPT=$(mktemp)
+curl -fsSL "https://raw.githubusercontent.com/arunsasidharan84/CCS_SleepStudio/main/scripts/install_linux.sh" -o "$TMP_SCRIPT"
+chmod +x "$TMP_SCRIPT"
+exec bash "$TMP_SCRIPT" "$@"
+EOF
+chmod 755 "$UPDATER_BIN"
+echo "--> Created system updater: $UPDATER_BIN"
+
 echo ""
 echo "======================================================================"
 echo "  CCS Sleep Studio installed successfully for all server users!       "
@@ -238,4 +253,5 @@ echo "======================================================================"
 echo "  • Desktop Launch: Double-click 'CCS Sleep Studio' on your Desktop. "
 echo "  • Menu Launch   : Applications > Science / Medical > CCS Sleep Studio"
 echo "  • Terminal      : Run 'ccs-sleep-studio' from any shell.           "
+echo "  • Update Anytime: Run 'sudo update-ccs-sleep-studio'               "
 echo "======================================================================"

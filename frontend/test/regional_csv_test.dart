@@ -45,4 +45,21 @@ void main() {
 
     expect(resolveRegionalCsvEdfPath(regional.path), edf.path);
   });
+
+  test('merges companion _cap.json summary metrics into compiled master sheet', () async {
+    final directory = await Directory.systemTemp.createTemp('analyse_cap_');
+    final regional = await File(
+      '${directory.path}/rec01_analyse_regional.csv',
+    ).writeAsString('Chan,N2_ACW\nCentral,0.12\n');
+    await File(
+      '${directory.path}/rec01_cap.json',
+    ).writeAsString('{"summary": {"CAP_rate": 45.2, "A_index": 12.3}}');
+
+    final compiled = await compileRegionalCsvFiles([regional.path]);
+
+    expect(compiled, contains('CAP_rate'));
+    expect(compiled, contains('CAP_A_index'));
+    expect(compiled, contains('45.200'));
+    expect(compiled, contains('12.300'));
+  });
 }

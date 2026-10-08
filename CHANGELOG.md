@@ -4,6 +4,17 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.28.0]
+*   **CAP analysis in batch processing & master sheet integration:** Cyclic Alternating Pattern (CAP) analysis is now integrated into both the Batch EEG Pipeline and Batch PSG Polygraphy workflow. All CAP metrics are formatted with the standard `CAP_` prefix across CSV headers, and companion `_cap.json` metrics are automatically consolidated into `AnalyseNidra_master_sheet.csv`.
+*   **Sleep cycle prefix standardisation ("Cyc"):** Updated sleep cycle metrics across ACCS, NeuroLoopGain (NLG), and Regional CSV outputs to use the standard `Cyc` prefix (e.g. `Cyc1_start_epoch`, `Cyc1_Sleep_duration_cycle`, `NLG_SW_Cyc1_NREM`) while maintaining backwards-compatible fallbacks.
+*   **Autoload scorings from external folder:** Added a dedicated external scoring folder picker and text field in the Batch Recordings panel. The loader automatically discovers matching scoring files (`.json`, `.csv`) across both the external directory and the recording directory, matching by full stem and base stem.
+*   **Case-insensitive and flexible channel matching:** Channel lookups across native EDF headers, BrainVision VHDR files, and frontend feature detectors are now fully case-insensitive and tolerant of common prefixes and reference suffixes (`c3`, `C3`, `c3-m2`, `EEG C3-REF`).
+*   **Direct loading of preprocessed files in batch analysis:** Preprocessed recordings (`*_clean.edf`, `*_stimclean.edf`, etc.) can now be loaded directly without being discarded or re-triggering raw file preprocessing. Added a "Prefer preprocessed files" toggle, and automated base-stem resolution pairs preprocessed files with parent scorings automatically.
+*   **Official Windows app logo & taskbar icon:** Generated an official multi-resolution `app_icon.ico` (256x256 down to 16x16) for Windows builds and added native `WM_SETICON` handling for reliable taskbar and title bar icon rendering. Added the official logo to the app top bar.
+*   **Multi-instance window support & datestamped batch exports:** Added `Cmd+N` / `Ctrl+N` to launch independent app windows to analyse multiple recordings simultaneously. Batch result CSV files now include timestamps to prevent accidental overwrites, and a "Clear File List" button allows quick reloads of batch queues.
+
+---
+
 ## [1.27.1]
 *   **Video cursor and slider time unit matching:** Video cursor badge and video slider elapsed format strictly respect active time units (`Seconds` as `...s`, `Minutes` as `...m`, `Hours` as `...h`, and `Clock time`).
 *   **Easy marker removal & selection box dismissal:** Right-clicking near any marker displays a prominent Delete Marker option with generous hit tolerance; clicking the waveform dismisses active selection boxes; pressing `Escape` clears active selections; Markers & Annotations dialog includes per-row delete and Clear All options.

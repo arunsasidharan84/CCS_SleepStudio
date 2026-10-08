@@ -19,9 +19,12 @@ class TimelineRow {
   final List<(double, double)> spans;
 }
 
+const int kDigitSlowWave = 7;
+const int kDigitSpindle = 8;
+
 /// Groups markers into rows: analysis results by type (OA, CA, MA, Hyp,
-/// RERA, Desat, Arousal, LM/PLM, CAP), other markers (e.g. scored EDF
-/// annotations) by their label.
+/// RERA, Desat, Arousal, LM/PLM, CAP, Slow Wave, Spindle), other markers
+/// (e.g. scored EDF annotations) by their label.
 List<TimelineRow> overnightTimelineRows(
   List<ScoredEvent> events, {
   Set<String> hiddenLabels = const {},
@@ -42,6 +45,8 @@ List<TimelineRow> overnightTimelineRows(
     ('CAP A2', kDigitCapA2),
     ('CAP A3', kDigitCapA3),
     ('CAP seq', kDigitCapSequence),
+    ('Slow Wave', kDigitSlowWave),
+    ('Spindle', kDigitSpindle),
   ];
   final byDigit = {for (final o in order) o.$2: o.$1};
   for (final e in events) {
@@ -49,9 +54,24 @@ List<TimelineRow> overnightTimelineRows(
     final a = math.min(e.startSec, e.endSec);
     var b = math.max(e.startSec, e.endSec);
     if (b - a < 1) b = a + 1;
-    final name = byDigit[e.digit];
+    final String? name;
+    final int digit;
+    if (e.digit == kDigitSlowWave ||
+        e.type == 'AnalyseNidra SlowWave' ||
+        e.label.startsWith('SlowWave')) {
+      name = 'Slow Wave';
+      digit = kDigitSlowWave;
+    } else if (e.digit == kDigitSpindle ||
+        e.type == 'AnalyseNidra Spindle' ||
+        e.label.startsWith('Spindle')) {
+      name = 'Spindle';
+      digit = kDigitSpindle;
+    } else {
+      name = byDigit[e.digit];
+      digit = e.digit;
+    }
     if (name != null) {
-      typed.putIfAbsent(name, () => (e.digit, <(double, double)>[])).$2.add((a, b));
+      typed.putIfAbsent(name, () => (digit, <(double, double)>[])).$2.add((a, b));
     } else {
       other.putIfAbsent(e.label.trim().isEmpty ? 'Marker' : e.label.trim(), () => []).add((a, b));
     }

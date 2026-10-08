@@ -300,7 +300,7 @@ fn moving_values(x: &[f64], y: Option<&[f64]>, sfreq: f64, correlation: bool) ->
     cubic_interpolate(&times, &values, x.len(), sfreq)
 }
 
-fn spindle_relative_power(data: &[f64], sfreq: f64) -> Vec<f64> {
+fn spindle_relative_power(data: &[f64], sfreq: f64, freq_min: f64, freq_max: f64) -> Vec<f64> {
     let size = (2.0 * sfreq) as usize;
     let step = (0.2 * sfreq) as usize;
     let half = size / 2;
@@ -328,12 +328,12 @@ fn spindle_relative_power(data: &[f64], sfreq: f64) -> Vec<f64> {
                 if (1.0..=30.0).contains(&frequency) {
                     let value = value.norm_sqr();
                     total += value;
-                    if (12.0..=15.0).contains(&frequency) {
+                    if (freq_min..=freq_max).contains(&frequency) {
                         sigma += value;
                     }
                 }
             }
-            sigma / total
+            if total > 0.0 { sigma / total } else { 0.0 }
         })
         .collect::<Vec<_>>();
     let times = centers
@@ -403,8 +403,20 @@ fn channel_spindles(
     filters: &DetectionFilters,
     config: &SpindleConfig,
 ) -> Vec<SpindleEvent> {
-    let broad = mne_overlap_add(data, &filters.spindle_broad);
-    let custom_sigma = if (config.freq_min - 12.0).abs() > 0.01 || (config.freq_max - 16.0).abs() > 0.01 {
+    let custom_broad = if (sfreq - 250.0).abs() > 0.01 {
+        Some(crate::signal::design_bandpass_fir(sfreq, 1.0, 30.0, 251))
+    } else {
+        None
+    };
+    let broad = if let Some(ref taps) = custom_broad {
+        mne_overlap_add(data, taps)
+    } else {
+        mne_overlap_add(data, &filters.spindle_broad)
+    };
+    let custom_sigma = if (sfreq - 250.0).abs() > 0.01
+        || (config.freq_min - 12.0).abs() > 0.01
+        || (config.freq_max - 16.0).abs() > 0.01
+    {
         Some(crate::signal::design_bandpass_fir(sfreq, config.freq_min, config.freq_max, 251))
     } else {
         None
@@ -414,7 +426,7 @@ fn channel_spindles(
     } else {
         mne_overlap_add(data, &filters.spindle_sigma)
     };
-    let relative_power = spindle_relative_power(&broad, sfreq);
+    let relative_power = spindle_relative_power(&broad, sfreq, config.freq_min, config.freq_max);
     let moving_correlation = moving_values(&sigma, Some(&broad), sfreq, true);
     let moving_rms = moving_values(&sigma, None, sfreq, false);
     let included_rms = moving_rms
@@ -602,17 +614,31 @@ fn channel_slow_waves(
     filters: &DetectionFilters,
     config: &SlowWaveConfig,
 ) -> Vec<SlowWaveEvent> {
-    let custom_sw = if (config.freq_min - 0.3).abs() > 0.01 || (config.freq_max - 2.0).abs() > 0.01 {
+    let custom_sw = if (sfreq - 250.0).abs() > 0.01
+        || (config.freq_min - 0.3).abs() > 0.01
+        || (config.freq_max - 2.0).abs() > 0.01
+    {
         Some(crate::signal::design_bandpass_fir(sfreq, config.freq_min, config.freq_max, 501))
     } else {
         None
     };
-    let filtered = if let Some(ref taps) = custom_sw {
-        mne_overlap_add(data, taps)
+    let sw_taps = if let Some(ref taps) = custom_sw {
+        taps.as_slice()
     } else {
-        mne_overlap_add(data, &filters.slow_wave)
+        filters.slow_wave.as_slice()
     };
-    let sigma = mne_overlap_add(data, &filters.coupling_sigma);
+    let filtered = mne_overlap_add(data, sw_taps);
+    let custom_sigma = if (sfreq - 250.0).abs() > 0.01 {
+        Some(crate::signal::design_bandpass_fir(sfreq, 12.0, 16.0, 251))
+    } else {
+        None
+    };
+    let sigma_taps = if let Some(ref taps) = custom_sigma {
+        taps.as_slice()
+    } else {
+        filters.coupling_sigma.as_slice()
+    };
+    let sigma = mne_overlap_add(data, sigma_taps);
     let fft_size = next_fast_len(data.len());
     let phase = analytic_signal_padded(&filtered, fft_size)
         .into_iter()
@@ -623,7 +649,7 @@ fn channel_slow_waves(
         .map(|value| value.norm())
         .collect::<Vec<_>>();
     // Phase of the sigma envelope's slow-oscillation component (for the PLV).
-    let envelope_phase = analytic_signal_padded(&mne_overlap_add(&sigma_amplitude, &filters.slow_wave), fft_size)
+    let envelope_phase = analytic_signal_padded(&mne_overlap_add(&sigma_amplitude, sw_taps), fft_size)
         .into_iter()
         .map(|value| value.arg())
         .collect::<Vec<_>>();
@@ -890,4 +916,38 @@ pub fn spindles_with_config(
         })
         .collect();
     SpindleResults { events, summary }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    #[ignore]
+    fn test_diagnose_spindles_fa7312q6() {
+        let edf_path = Path::new("/var/folders/9k/ls5yw_rj7h7_pm57rh7ngtgw0000gn/T/ccs_psg_KQ5VCA/FA7312Q6.edf");
+        let scoring_path = Path::new("/Users/arunsasidharan/EEGdata/Sleep/SiyamPSGData/LD_Pi_03/FA7312Q6_scoring.json");
+        if !edf_path.exists() || !scoring_path.exists() {
+            println!("Skipping test: test files not present");
+            return;
+        }
+        let recording = crate::pipeline::load(
+            edf_path,
+            scoring_path,
+            &["C3".to_string()],
+            &["M1".to_string(), "M2".to_string()],
+            None,
+            None,
+        ).unwrap();
+        println!("Loaded recording: sfreq={}, n_samples={}, stages_len={}", recording.edf.sfreq, recording.edf.data_uv[0].len(), recording.sample_stages.len());
+        let stage_n2_n3_count = recording.sample_stages.iter().filter(|&&s| s == 2 || s == 3).count();
+        println!("Stage N2/N3 sample count: {}", stage_n2_n3_count);
+
+        let mut config = SpindleConfig::default();
+        config.freq_min = 11.0;
+        config.freq_max = 16.0;
+        let res = spindles_with_config(&recording, &config);
+        assert!(!res.events.is_empty(), "Spindles should be detected on N2/N3 data");
+    }
 }

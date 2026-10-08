@@ -81,8 +81,15 @@ class UpdateChecker {
           }
         }
       } else if (Platform.isLinux) {
-        if (name.endsWith('.deb') || name.endsWith('.rpm') || name.endsWith('.tar.gz')) {
-          return ReleaseAsset(name: rawAsset['name'], downloadUrl: url, sizeBytes: size);
+        final isRpm = _isLinuxRpm();
+        if (isRpm && name.endsWith('.rpm')) {
+          if (!name.contains('lite')) {
+            return ReleaseAsset(name: rawAsset['name'], downloadUrl: url, sizeBytes: size);
+          }
+        } else if (!isRpm && name.endsWith('.deb')) {
+          if (!name.contains('lite')) {
+            return ReleaseAsset(name: rawAsset['name'], downloadUrl: url, sizeBytes: size);
+          }
         }
       }
     }
@@ -100,12 +107,41 @@ class UpdateChecker {
       if (Platform.isWindows && name.endsWith('.exe')) {
         return ReleaseAsset(name: rawAsset['name'], downloadUrl: url, sizeBytes: size);
       }
-      if (Platform.isLinux && (name.endsWith('.deb') || name.endsWith('.rpm'))) {
-        return ReleaseAsset(name: rawAsset['name'], downloadUrl: url, sizeBytes: size);
+      if (Platform.isLinux) {
+        final isRpm = _isLinuxRpm();
+        if (isRpm && name.endsWith('.rpm')) {
+          return ReleaseAsset(name: rawAsset['name'], downloadUrl: url, sizeBytes: size);
+        } else if (!isRpm && name.endsWith('.deb')) {
+          return ReleaseAsset(name: rawAsset['name'], downloadUrl: url, sizeBytes: size);
+        }
       }
     }
 
     return null;
+  }
+
+  /// Determines if running on an RPM-based Linux distribution (AlmaLinux, RHEL, Rocky, Fedora, openSUSE).
+  static bool _isLinuxRpm() {
+    if (!Platform.isLinux) return false;
+    try {
+      if (File('/etc/os-release').existsSync()) {
+        final content = File('/etc/os-release').readAsStringSync().toLowerCase();
+        const rpmDistros = ['rhel', 'centos', 'almalinux', 'rocky', 'fedora', 'ol', 'amzn', 'suse', 'opensuse'];
+        for (final distro in rpmDistros) {
+          if (content.contains('id=$distro') ||
+              content.contains('id="$distro"') ||
+              content.contains('id_like=$distro') ||
+              content.contains('id_like="$distro"') ||
+              content.contains(distro)) {
+            return true;
+          }
+        }
+      }
+      if (File('/usr/bin/rpm').existsSync() || File('/usr/bin/dnf').existsSync()) {
+        return true;
+      }
+    } catch (_) {}
+    return false;
   }
 
   /// Creates an HttpClient configured to accept valid GitHub certificates even on
@@ -296,14 +332,116 @@ class _AppUpdateDialogState extends State<AppUpdateDialog> {
       } else if (Platform.isMacOS) {
         await _installMacOsUpdate(file);
       } else if (Platform.isLinux) {
-        Process.run('xdg-open', [file.path]);
-        setState(() {
-          _statusMessage = 'Package opened with package manager.';
-        });
+        await _installLinuxUpdate(file);
       }
     } catch (e) {
       setState(() {
         _statusMessage = 'Error launching installer: $e';
+      });
+    }
+  }
+
+  Future<void> _installLinuxUpdate(File file) async {
+    setState(() {
+      _statusMessage = 'Launching package installer (sudo required)…';
+    });
+
+    try {
+      final helperScript = File('${Directory.systemTemp.path}${Platform.pathSeparator}apply_ccs_sleep_update.sh');
+      final scriptContent = '''#!/bin/bash
+set -e
+echo "======================================================================"
+echo "          CCS Sleep Studio - Installing System Update                 "
+echo "======================================================================"
+echo "Package: ${file.path}"
+echo "Administrative (sudo) privileges are required to update this package."
+echo "Please enter your password when prompted below."
+echo "----------------------------------------------------------------------"
+
+if command -v dnf >/dev/null 2>&1; then
+  sudo dnf install -y "${file.path}"
+elif command -v yum >/dev/null 2>&1; then
+  sudo yum install -y "${file.path}"
+elif command -v rpm >/dev/null 2>&1; then
+  sudo rpm -Uvh --replacepkgs "${file.path}"
+elif command -v apt-get >/dev/null 2>&1; then
+  sudo apt-get install -y "${file.path}"
+elif command -v dpkg >/dev/null 2>&1; then
+  sudo dpkg -i "${file.path}" || sudo apt-get install -f -y
+else
+  echo "Error: Supported package manager (dnf/yum/rpm/apt-get/dpkg) not found." >&2
+  exit 1
+fi
+
+EXIT_CODE=\$?
+if [ \$EXIT_CODE -eq 0 ]; then
+  echo ""
+  echo "======================================================================"
+  echo "  CCS Sleep Studio updated successfully!                              "
+  echo "======================================================================"
+  echo "Press Enter to exit and restart the application..."
+  read -r
+else
+  echo ""
+  echo "======================================================================"
+  echo "  Update failed or sudo permission denied.                            "
+  echo "======================================================================"
+  echo "Press Enter to close this window..."
+  read -r
+fi
+''';
+      await helperScript.writeAsString(scriptContent);
+      await Process.run('chmod', ['+x', helperScript.path]);
+
+      final terminals = [
+        'xfce4-terminal',
+        'gnome-terminal',
+        'konsole',
+        'x-terminal-emulator',
+        'mate-terminal',
+        'lxterminal',
+        'xterm',
+      ];
+
+      bool launched = false;
+      for (final term in terminals) {
+        final whichRes = await Process.run('which', [term]);
+        if (whichRes.exitCode == 0) {
+          final termPath = (whichRes.stdout as String).trim();
+          if (term == 'gnome-terminal') {
+            await Process.start(termPath, ['--title=Updating CCS Sleep Studio', '--', '/bin/bash', helperScript.path], mode: ProcessStartMode.detached);
+          } else if (term == 'xfce4-terminal') {
+            await Process.start(termPath, ['--title=Updating CCS Sleep Studio', '-e', '/bin/bash ${helperScript.path}'], mode: ProcessStartMode.detached);
+          } else {
+            await Process.start(termPath, ['-e', '/bin/bash ${helperScript.path}'], mode: ProcessStartMode.detached);
+          }
+          launched = true;
+          break;
+        }
+      }
+
+      if (launched) {
+        setState(() {
+          _statusMessage = 'Installer terminal opened. Please enter your password to authorize sudo privileges.\n'
+              'Alternatively, run in terminal: sudo dnf install -y "${file.path}"';
+        });
+      } else {
+        final pkexecCheck = await Process.run('which', ['pkexec']);
+        if (pkexecCheck.exitCode == 0) {
+          Process.start('pkexec', ['/bin/bash', helperScript.path], mode: ProcessStartMode.detached);
+          setState(() {
+            _statusMessage = 'Authorization prompt requested via pkexec.';
+          });
+        } else {
+          Process.run('xdg-open', [file.path]);
+          setState(() {
+            _statusMessage = 'Package downloaded to: ${file.path}\nRun with sudo in terminal: sudo dnf install -y "${file.path}"';
+          });
+        }
+      }
+    } catch (e) {
+      setState(() {
+        _statusMessage = 'Error launching installer: $e\nRun manually: sudo dnf install -y "${file.path}"';
       });
     }
   }

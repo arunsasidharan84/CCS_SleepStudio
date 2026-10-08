@@ -2631,7 +2631,7 @@ String nlgInterpretation(Map<String, dynamic> report) {
     final n2 = _jsonNum(sw, 'N2_mean');
     final rem = _jsonNum(sw, 'REM_mean');
     final slope = _jsonNum(sw, 'NREM_slope_per_hour');
-    final c1 = _jsonNum(sw, 'C1_NREM_mean');
+    final c1 = _jsonNum(sw, 'Cyc1_NREM_mean') ?? _jsonNum(sw, 'C1_NREM_mean');
     final idx = _jsonNum(sw, 'upper_quartile_index');
     parts.add(
       'Slow-wave gain averaged ${_jsonFmt(sw, 'NREM_mean', unit: '%')} in N2+N3 sleep'

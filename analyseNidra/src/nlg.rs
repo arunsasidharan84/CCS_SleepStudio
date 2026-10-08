@@ -1423,6 +1423,7 @@ fn summarise(tr: &NlgTraces, band: &NlgBand, stages: Option<&[Stage]>, epoch_sec
         }
     }
     for (k, c) in cycles.iter().enumerate().take(5) {
+        summary.insert(format!("Cyc{}_NREM_mean", k + 1), c.nrem_gain.unwrap_or(f64::NAN));
         summary.insert(format!("C{}_NREM_mean", k + 1), c.nrem_gain.unwrap_or(f64::NAN));
     }
     NlgBandResult {

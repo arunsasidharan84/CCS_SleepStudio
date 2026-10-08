@@ -129,9 +129,57 @@ Future<String> compileRegionalCsvFiles(
       subjectId = meta[idCol] ?? '';
     }
 
+    // Look for companion CAP report (_cap.json) beside the regional CSV or the source recording
+    final capSummary = <String, String>{};
+    final candidates = <String>[];
+    var regionalStem = file.uri.pathSegments.last;
+    if (regionalStem.toLowerCase().endsWith('_analyse_regional.csv')) {
+      regionalStem = regionalStem.substring(0, regionalStem.length - '_analyse_regional.csv'.length);
+    }
+    candidates.add('${file.parent.path}${Platform.pathSeparator}${regionalStem}_cap.json');
+    final cleanPattern = RegExp(r'(_clean|_stimclean|_cleaned|_preprocessed)$', caseSensitive: false);
+    if (regionalStem.contains(cleanPattern)) {
+      final baseStem = regionalStem.replaceAll(cleanPattern, '');
+      candidates.add('${file.parent.path}${Platform.pathSeparator}${baseStem}_cap.json');
+    }
+    final srcPath = recordingPaths[path];
+    if (srcPath != null && srcPath.isNotEmpty) {
+      final srcFile = File(srcPath);
+      var srcStem = srcFile.uri.pathSegments.last;
+      final dot = srcStem.lastIndexOf('.');
+      if (dot > 0) srcStem = srcStem.substring(0, dot);
+      candidates.add('${srcFile.parent.path}${Platform.pathSeparator}${srcStem}_cap.json');
+      if (srcStem.contains(cleanPattern)) {
+        final baseStem = srcStem.replaceAll(cleanPattern, '');
+        candidates.add('${srcFile.parent.path}${Platform.pathSeparator}${baseStem}_cap.json');
+      }
+    }
+    for (final cPath in candidates) {
+      final cFile = File(cPath);
+      if (cFile.existsSync()) {
+        try {
+          final decoded = jsonDecode(await cFile.readAsString());
+          if (decoded is Map && decoded['summary'] is Map) {
+            final sum = decoded['summary'] as Map;
+            for (final e in sum.entries) {
+              final k = e.key.toString();
+              final v = e.value;
+              final col = k.toUpperCase().startsWith('CAP_') ? k : 'CAP_$k';
+              final val = v is num ? (v.isFinite ? v.toStringAsFixed(3) : '') : (v?.toString() ?? '');
+              capSummary[col] = val;
+            }
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+
     for (final row in parsed) {
       for (final key in row.keys) {
         if (!headers.contains(key)) headers.add(key);
+      }
+      for (final capKey in capSummary.keys) {
+        if (!headers.contains(capKey)) headers.add(capKey);
       }
       rows.add({
         'source_file': file.uri.pathSegments.last,
@@ -142,6 +190,7 @@ Future<String> compileRegionalCsvFiles(
         if (meta != null)
           for (final e in meta.entries) metaHeader[e.key] ?? e.key: e.value,
         ...row,
+        ...capSummary,
       });
     }
   }

@@ -133,6 +133,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       TextEditingController(text: '');
   final TextEditingController _batchScoringPostfixController =
       TextEditingController(text: '_scoring');
+  final TextEditingController _batchScoringFolderController =
+      TextEditingController();
   final TextEditingController _batchAnalyseOutDirController =
       TextEditingController();
   List<String> _lastAnalyseRegionalFiles = const [];
@@ -141,6 +143,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   bool _batchAnalyseRecursive = true;
   bool _batchAnalyseUseWildcard = false;
   bool _batchAnalyseAutoLoadScorings = true;
+  bool _batchAnalysePreferCleaned = true;
   bool _batchAnalyseSkipExisting = true;
   final TextEditingController _batchAnalyseWildcardController =
       TextEditingController(text: '*.edf');
@@ -254,6 +257,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     _batchAnalyseEegController.dispose();
     _batchAnalyseRefController.dispose();
     _batchScoringPostfixController.dispose();
+    _batchScoringFolderController.dispose();
     _batchAnalyseWildcardController.dispose();
     for (final c in [
       _batchPsgPressureController,
@@ -2339,6 +2343,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 edfPath: edfPath,
                 scoringPath: scoringPath,
                 mappedScoringPath: scoringPath,
+                originalPath: path,
               ),
             ],
             channels,
@@ -2565,36 +2570,62 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     return selected ?? const [];
   }
 
-  /// Finds a scoring file for [eegPath]: `<stem><postfix>.json`,
-  /// `<stem>_scoring.json`, `<stem>.json`, else the newest autoscoring output
-  /// (`<stem>_<algorithm>_scoring.json`) beside the recording.
+  /// Finds a scoring file for [eegPath]: checks custom scoring folder (if specified)
+  /// and recording directory for `<stem><postfix>.json`, `<stem>_scoring.json`,
+  /// `<stem>.json`, or matching CSVs, also checking the base stem if preprocessed.
   String _findScoringForRecording(String eegPath, String postfix) {
     final file = File(eegPath);
-    final dir = file.parent;
     var stem = _basename(eegPath);
     final dot = stem.lastIndexOf('.');
     if (dot > 0) stem = stem.substring(0, dot);
-    final sep = Platform.pathSeparator;
-    for (final name in [
-      if (postfix.isNotEmpty) '$stem$postfix.json',
-      '${stem}_scoring.json',
-      '$stem.json',
-    ]) {
-      final candidate = '${dir.path}$sep$name';
-      if (File(candidate).existsSync()) return candidate;
+    final cleanPattern = RegExp(r'(_clean|_stimclean|_cleaned|_preprocessed)$', caseSensitive: false);
+    final baseStem = stem.replaceAll(cleanPattern, '');
+
+    final searchDirs = <Directory>[];
+    final customFolder = _batchScoringFolderController.text.trim();
+    if (customFolder.isNotEmpty) {
+      final cDir = Directory(customFolder);
+      if (cDir.existsSync()) searchDirs.add(cDir);
     }
-    try {
-      final autos = dir
-          .listSync(followLinks: false)
-          .whereType<File>()
-          .where((f) {
-            final name = _basename(f.path);
-            return name.startsWith('${stem}_') && name.endsWith('_scoring.json');
-          })
-          .toList()
-        ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
-      if (autos.isNotEmpty) return autos.first.path;
-    } catch (_) {}
+    searchDirs.add(file.parent);
+
+    final stems = {stem, if (baseStem.isNotEmpty) baseStem};
+    final extensions = ['.json', '.csv'];
+    final sep = Platform.pathSeparator;
+
+    for (final dir in searchDirs) {
+      for (final s in stems) {
+        for (final ext in extensions) {
+          for (final name in [
+            if (postfix.isNotEmpty) '$s$postfix$ext',
+            '${s}_scoring$ext',
+            '$s$ext',
+          ]) {
+            final candidate = '${dir.path}$sep$name';
+            if (File(candidate).existsSync()) return candidate;
+          }
+        }
+      }
+      try {
+        final matches = dir
+            .listSync(followLinks: false)
+            .whereType<File>()
+            .where((f) {
+              final name = _basename(f.path).toLowerCase();
+              return stems.any((s) {
+                final sl = s.toLowerCase();
+                return (name.startsWith('${sl}_') || name.startsWith(sl)) &&
+                    (name.endsWith('_scoring.json') ||
+                        name.endsWith('_scoring.csv') ||
+                        name.endsWith('.json') ||
+                        name.endsWith('.csv'));
+              });
+            })
+            .toList()
+          ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+        if (matches.isNotEmpty) return matches.first.path;
+      } catch (_) {}
+    }
     return '';
   }
 
@@ -2615,17 +2646,33 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final postfix = _batchScoringPostfixController.text.trim();
     setState(() {
       final cleanedSuffix = '${_pipelineCleanedSuffix()}.edf'.toLowerCase();
+      final cleanRegex = RegExp(r'(_clean|_stimclean|_cleaned|_preprocessed)\.edf$', caseSensitive: false);
       final lower = files.map((f) => f.toLowerCase()).toSet();
+
       for (final f in files) {
         if (_batchAnalysePairs.any((p) => p['eegPath'] == f)) continue;
-        // A cleaned copy next to its original is an output of preprocessing, not a
-        // separate recording.
         final fl = f.toLowerCase();
-        if (fl.endsWith(cleanedSuffix) &&
-            lower.contains('${fl.substring(0, fl.length - cleanedSuffix.length)}.edf')) {
-          continue;
+        final isCleaned = fl.endsWith(cleanedSuffix) || cleanRegex.hasMatch(f);
+
+        // If preferCleaned is false, and this is a cleaned copy next to its raw original,
+        // we can let the raw file represent the recording and attach the cleaned copy.
+        // But if preferCleaned is true, we directly use the cleaned file.
+        if (isCleaned) {
+          final baseName = fl.replaceAll(cleanRegex, '.edf');
+          if (!_batchAnalysePreferCleaned && lower.contains(baseName)) {
+            continue;
+          }
+        } else if (_batchAnalysePreferCleaned) {
+          final stem = fl.replaceAll(RegExp(r'\.[^.]+$'), '');
+          final hasCleanCopy = lower.contains('${stem}_clean.edf') ||
+              lower.contains('${stem}_stimclean.edf') ||
+              lower.contains('${stem}_cleaned.edf');
+          if (hasCleanCopy) {
+            continue; // Will be added via the cleaned copy directly
+          }
         }
-        final cleaned = _pipelineCleanedPathFor(f);
+
+        final cleaned = isCleaned ? f : _pipelineCleanedPathFor(f);
         final auto = _batchAutoscorePathFor(f);
         _batchAnalysePairs.add({
           'eegPath': f,
@@ -2640,12 +2687,15 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     _autoInspectBatchAnalyseChannels();
   }
 
-  void _rematchBatchScorings() {
+  void _rematchBatchScorings({bool force = false}) {
     final postfix = _batchScoringPostfixController.text.trim();
     setState(() {
       for (final pair in _batchAnalysePairs) {
-        if ((pair['scoringPath'] ?? '').isEmpty) {
-          pair['scoringPath'] = _findScoringForRecording(pair['eegPath'] ?? '', postfix);
+        if (force || (pair['scoringPath'] ?? '').isEmpty) {
+          final found = _findScoringForRecording(pair['eegPath'] ?? '', postfix);
+          if (found.isNotEmpty) {
+            pair['scoringPath'] = found;
+          }
         }
       }
     });
@@ -2840,18 +2890,21 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         jobs: [
           for (final job in jobs)
             _CommandJob(
-              label: _basename(job.edfPath),
+              label: _basename(job.originalPath ?? job.edfPath),
               executable: executable,
               sourcePath: job.edfPath,
+              originalPath: job.originalPath,
               outputDir: outputDir,
               arguments: _analyseNidraArguments(
                 job,
                 channels,
                 references,
-                lightsOffSeconds: jobs.length == 1 && job.edfPath == _activePath
+                lightsOffSeconds: jobs.length == 1 &&
+                        (job.edfPath == _activePath || job.originalPath == _activePath)
                     ? _config.lightsOffSeconds
                     : null,
-                lightsOnSeconds: jobs.length == 1 && job.edfPath == _activePath
+                lightsOnSeconds: jobs.length == 1 &&
+                        (job.edfPath == _activePath || job.originalPath == _activePath)
                     ? _config.lightsOnSeconds
                     : null,
                 outputDir: outputDir,
@@ -2865,9 +2918,26 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         ],
         onFinished: (failed) {
           final active = _activePath;
-          if (analyseOptions.runsNlg &&
-              active != null &&
-              jobs.any((job) => job.edfPath == active)) {
+          final isCurrentActive = active != null &&
+              jobs.any((job) => job.edfPath == active || job.originalPath == active);
+
+          // Copy companion files alongside recording if needed
+          for (final job in jobs) {
+            final targetPath = job.originalPath ?? job.edfPath;
+            final base = _sidecarPath(targetPath, '');
+            final anSpindles = File('${base}_analyse_spindles.json');
+            final stdSpindles = File('${base}_spindles.json');
+            if (anSpindles.existsSync() && !stdSpindles.existsSync()) {
+              try { anSpindles.copySync(stdSpindles.path); } catch (_) {}
+            }
+            final anSlowWaves = File('${base}_analyse_slow_waves.json');
+            final stdSlowWaves = File('${base}_slow_waves.json');
+            if (anSlowWaves.existsSync() && !stdSlowWaves.existsSync()) {
+              try { anSlowWaves.copySync(stdSlowWaves.path); } catch (_) {}
+            }
+          }
+
+          if (analyseOptions.runsNlg && isCurrentActive) {
             unawaited(
               loadNlgOverlay(active, outputDir: outputDir).then((data) {
                 if (!mounted || data == null || _activePath != active) return;
@@ -2876,11 +2946,34 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               }),
             );
           }
+
+          if (isCurrentActive) {
+            unawaited(() async {
+              final newEvents = await tryLoadAllMarkers(
+                active,
+                sampleRateHz: _viewport?.sampleRateHz ?? 200.0,
+                recordingStartTime: _viewport?.recordingStartTime,
+                channelLabels: _viewport?.signalChannelLabels ?? const [],
+              );
+              if (!mounted || _activePath != active) return;
+              setState(() {
+                final v = _viewport;
+                if (v != null) {
+                  _viewport = v.copyWith(
+                    scoredEvents: newEvents,
+                    clearEventSelections: true,
+                  );
+                }
+              });
+            }());
+          }
+
           final existingRegionalFiles = <String>[];
           for (final job in jobs) {
+            final targetPath = job.originalPath ?? job.edfPath;
             final csvPath = (outputDir != null && outputDir.trim().isNotEmpty)
-                ? '${outputDir.trim()}${Platform.pathSeparator}${_basename(job.edfPath).replaceAll(RegExp(r'\.[^.]+$'), '')}_analyse_regional.csv'
-                : '${_sidecarPath(job.edfPath, '')}_analyse_regional.csv';
+                ? '${outputDir.trim()}${Platform.pathSeparator}${_basename(targetPath).replaceAll(RegExp(r'\.[^.]+$'), '')}_analyse_regional.csv'
+                : '${_sidecarPath(targetPath, '')}_analyse_regional.csv';
             if (File(csvPath).existsSync()) {
               existingRegionalFiles.add(csvPath);
             }
@@ -2897,7 +2990,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             final targetDir = (outputDir != null && outputDir.trim().isNotEmpty)
                 ? outputDir.trim()
                 : File(jobs.first.edfPath).parent.path;
-            final masterCsvPath = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
+            final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
+            final masterCsvPath = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet_$stamp.csv';
             unawaited(() async {
               try {
                 final compiled = await compileRegionalCsvFiles(
@@ -2906,6 +3000,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   recordingPaths: _regionalRecordingMap(),
                 );
                 await File(masterCsvPath).writeAsString(compiled);
+                // Also update the un-timestamped symlink/copy for any workflows expecting standard name
+                try {
+                  final latestPath = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
+                  await File(latestPath).writeAsString(compiled);
+                } catch (_) {}
                 if (mounted) {
                   _setStatus(
                     'Auto-compiled ${existingRegionalFiles.length} regional CSV(s) into ${_basename(masterCsvPath)}',
@@ -3112,9 +3211,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       return;
     }
 
+    final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
     final output = await FilePicker.saveFile(
       dialogTitle: 'Save AnalyseNidra master sheet',
-      fileName: 'AnalyseNidra_master_sheet.csv',
+      fileName: 'AnalyseNidra_master_sheet_$stamp.csv',
       type: FileType.custom,
       allowedExtensions: ['csv'],
     );
@@ -3590,9 +3690,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       return;
     }
 
+    final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
     final savePath = await FilePicker.saveFile(
       dialogTitle: 'Save Batch Scoring Comparison Master CSV',
-      fileName: 'Batch_Scoring_Comparison_Master.csv',
+      fileName: 'Batch_Scoring_Comparison_Master_$stamp.csv',
       type: FileType.custom,
       allowedExtensions: ['csv'],
     );
@@ -3786,7 +3887,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           );
 
           try {
-            final chIdx = eeg.channelLabels.indexOf(settings['channel']);
+            final targetCh = (settings['channel'] as String?)?.trim().toLowerCase() ?? '';
+            final chIdx = eeg.channelLabels.indexWhere(
+              (l) => l.trim().toLowerCase() == targetCh,
+            );
             if (chIdx < 0) throw Exception('Channel not found');
             final signal = eeg.channelSamples[chIdx];
             final sfreq = eeg.sampleRateHz;
@@ -3931,7 +4035,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           );
 
           try {
-            final chIdx = eeg.channelLabels.indexOf(settings['channel']);
+            final targetCh = (settings['channel'] as String?)?.trim().toLowerCase() ?? '';
+            final chIdx = eeg.channelLabels.indexWhere(
+              (l) => l.trim().toLowerCase() == targetCh,
+            );
             if (chIdx < 0) throw Exception('Channel not found');
             final signal = eeg.channelSamples[chIdx];
             final sfreq = eeg.sampleRateHz;
@@ -6562,6 +6669,26 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     _setStatus('All channels scale set to ${newScale.toStringAsFixed(0)}%');
   }
 
+  Future<void> _openNewAppInstance() async {
+    try {
+      if (Platform.isMacOS) {
+        // macOS open -n launches a completely new separate instance of the bundle
+        final res = await Process.run('open', ['-n', '-a', 'CCS Sleep Studio']);
+        if (res.exitCode != 0) {
+          // Fallback to running the binary directly or via bundle path
+          final exe = Platform.resolvedExecutable;
+          await Process.start(exe, [], mode: ProcessStartMode.detached);
+        }
+      } else {
+        final exe = Platform.resolvedExecutable;
+        await Process.start(exe, [], mode: ProcessStartMode.detached);
+      }
+      _setStatus('Opened new CCS Sleep Studio window');
+    } catch (e) {
+      _setStatus('Could not open new window: $e');
+    }
+  }
+
   // ─── Platform menus ───────────────────────────────────────────────────────
 
   List<PlatformMenuItem> _platformMenus() {
@@ -6584,6 +6711,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       PlatformMenu(
         label: 'Data',
         menus: [
+          PlatformMenuItem(
+            label: 'New Window (Open another file)…',
+            shortcut: const SingleActivator(LogicalKeyboardKey.keyN, meta: true),
+            onSelected: _openNewAppInstance,
+          ),
           PlatformMenuItem(
             label: 'Load EEG Recording (.edf, .eeg, .vhdr, .orb, .mat, .r09, .ebm)…',
             onSelected: () => _openRecording(kind: 'edf'),
@@ -6953,6 +7085,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         children: [
           SubmenuButton(
             menuChildren: [
+              MenuItemButton(
+                onPressed: _openNewAppInstance,
+                child: const Text('New Window (Open another file)… [Ctrl/Cmd+N]'),
+              ),
+              const Divider(height: 1),
               MenuItemButton(
                 onPressed: () => _openRecording(kind: 'edf'),
                 child: const Text('Load EEG Recording (.edf, .eeg, .vhdr, .orb, .mat, .r09, .ebm)…'),
@@ -7397,6 +7534,28 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                     onChanged: (v) => setState(() => _batchPsgPlmStandard = v ?? 'aasm'),
                   ),
                 ),
+                _batchOptionCheckbox('Cyclic alternating pattern (CAP)', _batchPsgCap,
+                    (v) => setState(() => _batchPsgCap = v)),
+                if (_batchPsgCap)
+                  SizedBox(
+                    width: 170,
+                    child: DropdownButtonFormField<String>(
+                      value: _batchPsgCapSensitivity,
+                      isExpanded: true,
+                      isDense: true,
+                      decoration: const InputDecoration(
+                        labelText: 'CAP detector',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'conservative', child: Text('Conservative')),
+                        DropdownMenuItem(value: 'standard', child: Text('Standard')),
+                        DropdownMenuItem(value: 'sensitive', child: Text('Sensitive')),
+                      ],
+                      onChanged: (v) => setState(() => _batchPsgCapSensitivity = v ?? 'standard'),
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 12),
@@ -7416,6 +7575,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 _batchPsgField(_batchPsgSpo2Controller, 'SpO₂', 'Select SpO2 channel'),
                 _batchPsgField(_batchPsgLeftLegController, 'Left leg EMG', 'Select left tibialis channel'),
                 _batchPsgField(_batchPsgRightLegController, 'Right leg EMG', 'Select right tibialis channel'),
+                _batchPsgField(_batchPsgCapEegController, 'CAP EEG (blank = auto)', 'Select EEG channel for CAP'),
               ],
             ),
             const SizedBox(height: 12),
@@ -7499,7 +7659,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final settings = _BatchPsgSettings(
       respiratory: _batchPsgRespiratory,
       plm: _batchPsgPlm,
-      cap: false,
+      cap: _batchPsgCap,
       hypopneaRule: _batchPsgHypopneaRule,
       plmStandard: _batchPsgPlmStandard,
       capSensitivity: _batchPsgCapSensitivity,
@@ -7691,6 +7851,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             if (!r.source.toLowerCase().endsWith('.edf')) {
               throw PipelineSkip('preprocessing needs an EDF recording');
             }
+            final cleanRegex = RegExp(r'(_clean|_stimclean|_cleaned|_preprocessed)\.edf$', caseSensitive: false);
+            if (r.cleaned == r.source || cleanRegex.hasMatch(r.source)) {
+              r.cleaned = r.source;
+              throw PipelineSkip('already preprocessed (${_basename(r.source)})', reused: true);
+            }
             final target = _pipelineCleanedPathFor(r.source);
             if (resume && File(target).existsSync()) {
               r.cleaned = target;
@@ -7816,12 +7981,18 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         final usable = files.where((f) => !empty.contains(f)).toList();
         if (usable.isEmpty) return 'All regional CSV files are empty; re-run feature extraction.';
         final targetDir = outDir ?? File(recs.first.source).parent.path;
-        final master = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
-        await File(master).writeAsString(await compileRegionalCsvFiles(
+        final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
+        final master = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet_$stamp.csv';
+        final compiledContent = await compileRegionalCsvFiles(
           usable,
           metadata: _batchMetadata,
           recordingPaths: recordingFor,
-        ));
+        );
+        await File(master).writeAsString(compiledContent);
+        try {
+          final latestMaster = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
+          await File(latestMaster).writeAsString(compiledContent);
+        } catch (_) {}
         if (mounted) setState(() => _lastAnalyseRegionalFiles = usable);
         return 'Compiled ${usable.length} recording(s) into ${_basename(master)}'
             '${empty.isEmpty ? '' : ' (${empty.length} empty CSV(s) left out: ${empty.map(_basename).join(', ')})'}';
@@ -8718,9 +8889,29 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-                          const Text(
-                            'Recordings and their scoring files:',
-                            style: TextStyle(fontWeight: FontWeight.bold),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Recordings and their scoring files (${_batchAnalysePairs.length}):',
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              if (_batchAnalysePairs.isNotEmpty)
+                                TextButton.icon(
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: Colors.red.shade700,
+                                    visualDensity: VisualDensity.compact,
+                                  ),
+                                  icon: const Icon(Icons.clear_all, size: 16),
+                                  label: const Text('Clear File List'),
+                                  onPressed: () {
+                                    setState(() {
+                                      _batchAnalysePairs.clear();
+                                      _batchAnalyseAvailableChannels = const [];
+                                    });
+                                  },
+                                ),
+                            ],
                           ),
                           const SizedBox(height: 8),
                           Container(
@@ -8873,6 +9064,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                             wildcardController: _batchAnalyseWildcardController,
                             extraOptions: [
                               _batchOptionCheckbox(
+                                'Prefer preprocessed files',
+                                _batchAnalysePreferCleaned,
+                                (v) => setState(() => _batchAnalysePreferCleaned = v),
+                              ),
+                              _batchOptionCheckbox(
                                 'Auto-load scorings',
                                 _batchAnalyseAutoLoadScorings,
                                 (v) {
@@ -8880,9 +9076,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                   if (v) _rematchBatchScorings();
                                 },
                               ),
-                              if (_batchAnalyseAutoLoadScorings)
+                              if (_batchAnalyseAutoLoadScorings) ...[
                                 SizedBox(
-                                  width: 170,
+                                  width: 160,
                                   child: TextField(
                                     controller: _batchScoringPostfixController,
                                     decoration: const InputDecoration(
@@ -8891,9 +9087,36 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                       isDense: true,
                                       border: OutlineInputBorder(),
                                     ),
-                                    onSubmitted: (_) => _rematchBatchScorings(),
+                                    onSubmitted: (_) => _rematchBatchScorings(force: true),
                                   ),
                                 ),
+                                SizedBox(
+                                  width: 260,
+                                  child: TextField(
+                                    controller: _batchScoringFolderController,
+                                    decoration: InputDecoration(
+                                      labelText: 'Scoring folder (optional)',
+                                      hintText: 'Folder with scorings',
+                                      isDense: true,
+                                      border: const OutlineInputBorder(),
+                                      suffixIcon: IconButton(
+                                        icon: const Icon(Icons.folder_open, size: 18),
+                                        tooltip: 'Select folder containing scorings',
+                                        onPressed: () async {
+                                          final dir = await FilePicker.getDirectoryPath(
+                                            dialogTitle: 'Select folder containing scoring files',
+                                          );
+                                          if (dir != null) {
+                                            setState(() => _batchScoringFolderController.text = dir);
+                                            _rematchBatchScorings(force: true);
+                                          }
+                                        },
+                                      ),
+                                    ),
+                                    onSubmitted: (_) => _rematchBatchScorings(force: true),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                           const SizedBox(height: 10),
@@ -9114,10 +9337,28 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                         ],
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Paired Scoring Files (Reference vs Comparison):',
-                      style: TextStyle(fontWeight: FontWeight.bold),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Paired Scoring Files (Reference vs Comparison) (${_batchComparisonPairs.length}):',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        if (_batchComparisonPairs.isNotEmpty)
+                          TextButton.icon(
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.red.shade700,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            icon: const Icon(Icons.clear_all, size: 16),
+                            label: const Text('Clear File List'),
+                            onPressed: () {
+                              setState(() {
+                                _batchComparisonPairs.clear();
+                              });
+                            },
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 8),
                     Container(
@@ -9298,18 +9539,31 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                           ],
                         ),
                       ),
-                      if (_appVersion.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: Text(
-                            'CCS Sleep Studio $_appVersion',
-                            style: const TextStyle(
-                              color: Color(0xFF555555),
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Image.asset(
+                              'assets/app_icon.png',
+                              width: 22,
+                              height: 22,
+                              errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
                             ),
-                          ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _appVersion.isNotEmpty
+                                  ? 'CCS Sleep Studio $_appVersion'
+                                  : 'CCS Sleep Studio',
+                              style: const TextStyle(
+                                color: Color(0xFF555555),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
                         ),
+                      ),
                     ],
                   ),
                 ),
@@ -9388,6 +9642,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                         _showChannelContextMenu,
                                     spectrogramEnabled:
                                         _config.spectrogramEnabled,
+                                    onOpenTimeline: _openOvernightTimeline,
                                     onAddMarkerAt: (sec, ch) => unawaited(
                                       _showAddMarkerDialog(
                                         sec,
@@ -10169,6 +10424,7 @@ class _ScoringHeroSurface extends StatefulWidget {
     this.videoCursor,
     this.onVideoCursorDrag,
     this.spectrogramEnabled = false,
+    this.onOpenTimeline,
     this.onAddMarkerAt,
   });
 
@@ -10214,6 +10470,7 @@ class _ScoringHeroSurface extends StatefulWidget {
   final bool waveformMaximized;
   final VoidCallback? onToggleMaximize;
   final bool spectrogramEnabled;
+  final VoidCallback? onOpenTimeline;
   final void Function(double clickSec, int channelIndex)? onAddMarkerAt;
 
   @override
@@ -10540,6 +10797,7 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                           onLightsMarkersChanged: widget.onLightsMarkersChanged,
                           onOverlayChanged: widget.onOverlayChanged,
                           onTimeUnitChanged: widget.onTimeUnitChanged,
+                          onOpenOvernightTimeline: widget.onOpenTimeline,
                           onTapFraction: (fx) {
                             final visibleCount = endEpoch - startEpoch;
                             final epoch =
@@ -11214,6 +11472,7 @@ class _HypnogramPainterPanel extends StatefulWidget {
     this.nlgOverlay,
     this.onOverlayChanged,
     this.onTimeUnitChanged,
+    this.onOpenOvernightTimeline,
   });
 
   final EegViewport viewport;
@@ -11228,6 +11487,7 @@ class _HypnogramPainterPanel extends StatefulWidget {
   final void Function(String overlayMode, [String? probabilityStage])?
   onOverlayChanged;
   final ValueChanged<String>? onTimeUnitChanged;
+  final VoidCallback? onOpenOvernightTimeline;
 
   @override
   State<_HypnogramPainterPanel> createState() => _HypnogramPainterPanelState();
@@ -11237,6 +11497,7 @@ class _HypnogramPainterPanelState extends State<_HypnogramPainterPanel> {
   String? _draggingMarker;
   double? _dragLightsOff;
   double? _dragLightsOn;
+  bool _showMicroEvents = true;
 
   static const double _hypLeftPadding = 48.0;
 
@@ -11379,27 +11640,74 @@ class _HypnogramPainterPanelState extends State<_HypnogramPainterPanel> {
                 _dragLightsOn = null;
               });
             },
-            child: GestureDetector(
-              onSecondaryTapUp: (details) =>
-                  _showOverlayContextMenu(context, details.globalPosition),
-              child: MouseRegion(
-                cursor: _draggingMarker == null
-                    ? SystemMouseCursors.click
-                    : SystemMouseCursors.resizeLeftRight,
-                child: ClipRect(
-                  child: CustomPaint(
-                    painter: HypnogramPainter(
-                      _effectiveViewport,
-                      swaKernelSize: widget.swaKernelSize,
-                      comparisonStages: widget.comparisonStages,
-                      nlgOverlay: widget.nlgOverlay,
-                      startEpoch: widget.startEpoch,
-                      endEpoch: widget.endEpoch,
+            child: Stack(
+              children: [
+                GestureDetector(
+                  onSecondaryTapUp: (details) =>
+                      _showOverlayContextMenu(context, details.globalPosition),
+                  child: MouseRegion(
+                    cursor: _draggingMarker == null
+                        ? SystemMouseCursors.click
+                        : SystemMouseCursors.resizeLeftRight,
+                    child: ClipRect(
+                      child: CustomPaint(
+                        painter: HypnogramPainter(
+                          _effectiveViewport,
+                          swaKernelSize: widget.swaKernelSize,
+                          comparisonStages: widget.comparisonStages,
+                          nlgOverlay: widget.nlgOverlay,
+                          startEpoch: widget.startEpoch,
+                          endEpoch: widget.endEpoch,
+                          showMicroEvents: _showMicroEvents,
+                        ),
+                        child: const SizedBox.expand(),
+                      ),
                     ),
-                    child: const SizedBox.expand(),
                   ),
                 ),
-              ),
+                if (widget.onOpenOvernightTimeline != null)
+                  Positioned(
+                    top: 2,
+                    right: 4,
+                    child: Tooltip(
+                      message: 'Open Expanded Overnight Timeline (Multi-row event tracks)',
+                      child: InkWell(
+                        onTap: widget.onOpenOvernightTimeline,
+                        borderRadius: BorderRadius.circular(4),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.85),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: Colors.black12),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Colors.black12,
+                                blurRadius: 2,
+                                offset: Offset(0, 1),
+                              ),
+                            ],
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.open_in_full, size: 11, color: Colors.black87),
+                              SizedBox(width: 3),
+                              Text(
+                                'Expand',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.black87,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
@@ -11550,10 +11858,50 @@ class _HypnogramPainterPanelState extends State<_HypnogramPainterPanel> {
             ],
           ),
         ),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          value: 'TOGGLE_MICRO',
+          child: Row(
+            children: [
+              Icon(
+                _showMicroEvents ? Icons.visibility_off : Icons.visibility,
+                size: 16,
+                color: Colors.blueGrey,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _showMicroEvents
+                    ? 'Hide Spindles & Slow Waves on Strip'
+                    : 'Show Spindles & Slow Waves on Strip',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+        if (widget.onOpenOvernightTimeline != null)
+          const PopupMenuItem(
+            value: 'OPEN_TIMELINE',
+            child: Row(
+              children: [
+                Icon(Icons.open_in_full, size: 16, color: Colors.indigo),
+                SizedBox(width: 8),
+                Text(
+                  'Expanded Overnight Timeline…',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
       ],
     ).then((val) {
       if (val == null) return;
-      if (val == 'SWA') {
+      if (val == 'OPEN_TIMELINE') {
+        widget.onOpenOvernightTimeline?.call();
+      } else if (val == 'TOGGLE_MICRO') {
+        setState(() {
+          _showMicroEvents = !_showMicroEvents;
+        });
+      } else if (val == 'SWA') {
         widget.onOverlayChanged?.call('SWA');
       } else if (val == 'NLG') {
         widget.onOverlayChanged?.call('NeuroLoopGain');
@@ -12294,10 +12642,11 @@ List<String> _analyseNidraArguments(
   bool skipExisting = false,
   AppConfig? config,
 }) {
+  final targetPath = job.originalPath ?? job.edfPath;
   final baseDir = (outputDir != null && outputDir.trim().isNotEmpty)
       ? outputDir.trim()
-      : File(job.edfPath).parent.path;
-  final fileName = File(job.edfPath).path.split(Platform.isWindows ? r'\' : '/').last;
+      : File(targetPath).parent.path;
+  final fileName = File(targetPath).path.split(Platform.isWindows ? r'\' : '/').last;
   final stem = fileName.replaceAll(RegExp(r'\.[^.]+$'), '');
   final base = '$baseDir${Platform.pathSeparator}$stem';
 
@@ -12352,11 +12701,13 @@ class _AnalyseNidraJob {
     required this.edfPath,
     required this.scoringPath,
     required this.mappedScoringPath,
+    this.originalPath,
   });
 
   final String edfPath;
   final String scoringPath;
   final String mappedScoringPath;
+  final String? originalPath;
 }
 
 class _CommandJob {
@@ -12365,6 +12716,7 @@ class _CommandJob {
     required this.executable,
     required this.arguments,
     this.sourcePath,
+    this.originalPath,
     this.outputDir,
   });
 
@@ -12372,6 +12724,7 @@ class _CommandJob {
   final String executable;
   final List<String> arguments;
   final String? sourcePath;
+  final String? originalPath;
   final String? outputDir;
 }
 
@@ -12400,6 +12753,8 @@ class _CommandBatchProgressDialogState
   int _failed = 0;
   bool _finished = false;
   String _current = '';
+  double _intraJobProgress = 0.0;
+  String _currentStepName = '';
 
   @override
   void initState() {
@@ -12435,6 +12790,8 @@ class _CommandBatchProgressDialogState
       if (!mounted) return;
       setState(() {
         _current = job.label;
+        _intraJobProgress = 0.05;
+        _currentStepName = 'Starting…';
       });
       _addLog('--- ${job.label} ---');
       final currentJobLogs = <String>[];
@@ -12443,6 +12800,37 @@ class _CommandBatchProgressDialogState
         arguments: job.arguments,
         onLine: (line) {
           currentJobLogs.add(line);
+          final lower = line.toLowerCase();
+          double? nextProgress;
+          String? nextStep;
+          if (lower.contains('loaded') && lower.contains('channels')) {
+            nextProgress = 0.12;
+            nextStep = 'Loaded EEG channels';
+          } else if (lower.contains('computed core') || lower.contains('core stage features')) {
+            nextProgress = 0.40;
+            nextStep = 'Spectral & core features';
+          } else if (lower.contains('computed pac') || lower.contains('pac results')) {
+            nextProgress = 0.60;
+            nextStep = 'Phase-Amplitude Coupling';
+          } else if (lower.contains('detected slow waves') || lower.contains('slow-wave results')) {
+            nextProgress = 0.75;
+            nextStep = 'Slow-wave detection';
+          } else if (lower.contains('detected spindles') || lower.contains('spindle results')) {
+            nextProgress = 0.88;
+            nextStep = 'Spindle detection';
+          } else if (lower.contains('neuroloopgain')) {
+            nextProgress = 0.95;
+            nextStep = 'NeuroLoopGain analysis';
+          } else if (lower.contains('wrote final regional') || lower.contains('total analysis time')) {
+            nextProgress = 1.0;
+            nextStep = 'Finalizing';
+          }
+          if (nextProgress != null && mounted) {
+            setState(() {
+              _intraJobProgress = nextProgress!;
+              _currentStepName = nextStep ?? '';
+            });
+          }
           _addLog(line);
         },
       );
@@ -12455,7 +12843,7 @@ class _CommandBatchProgressDialogState
       // Write per-file log file
       await writeBatchFileLog(
         outputFolder: logDir,
-        originalFilePath: job.sourcePath ?? job.label,
+        originalFilePath: job.originalPath ?? job.sourcePath ?? job.label,
         jobType: 'analyse',
         exitCode: exitCode,
         logLines: currentJobLogs,
@@ -12463,7 +12851,7 @@ class _CommandBatchProgressDialogState
 
       batchResults.add(
         BatchFileResult(
-          filePath: job.sourcePath ?? job.label,
+          filePath: job.originalPath ?? job.sourcePath ?? job.label,
           exitCode: exitCode,
           logs: currentJobLogs,
         ),
@@ -12472,6 +12860,8 @@ class _CommandBatchProgressDialogState
       if (!mounted) return;
       setState(() {
         _completed++;
+        _intraJobProgress = 0.0;
+        _currentStepName = '';
         if (exitCode != 0) _failed++;
       });
       _addLog(
@@ -12499,9 +12889,10 @@ class _CommandBatchProgressDialogState
 
   @override
   Widget build(BuildContext context) {
-    final progress = widget.jobs.isEmpty
+    final totalJobs = widget.jobs.length;
+    final progress = totalJobs == 0
         ? 0.0
-        : _completed / widget.jobs.length;
+        : ((_completed + _intraJobProgress).clamp(0.0, totalJobs.toDouble()) / totalJobs);
     return AlertDialog(
       title: Text(widget.title),
       content: SizedBox(
@@ -12513,7 +12904,7 @@ class _CommandBatchProgressDialogState
             Text(
               _finished
                   ? 'Finished ${widget.jobs.length} job(s)'
-                  : 'Processing $_current (${_completed + 1}/${widget.jobs.length})',
+                  : 'Processing $_current (${_completed + 1}/${widget.jobs.length})${_currentStepName.isNotEmpty ? '  •  $_currentStepName' : ''}',
             ),
             const SizedBox(height: 8),
             LinearProgressIndicator(value: _finished ? 1 : progress),
@@ -15296,7 +15687,10 @@ class _BatchPsgDialogState extends State<_BatchPsgDialog> {
         'recording',
         'scoring',
         if (widget.settings.metadata != null) ...widget.settings.metadata!.headers,
-        for (final c in _kBatchPsgColumns) '${c.$1}_${c.$3}',
+        for (final c in _kBatchPsgColumns)
+          c.$1 == 'cap'
+              ? (c.$3.toUpperCase().startsWith('CAP_') ? c.$3 : 'CAP_${c.$3}')
+              : '${c.$1}_${c.$3}',
       ];
       final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
       final csvPath = '$outDir${Platform.pathSeparator}psg_batch_summary_$stamp.csv';

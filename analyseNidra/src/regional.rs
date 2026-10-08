@@ -339,7 +339,11 @@ pub fn compile(
             for (band, result) in bands {
                 let Some(prefix) = nlg_prefix(band) else { continue };
                 for (key, stat) in NLG_STATS {
-                    row.insert(format!("NLG_{prefix}_{key}"), result.summary.get(*stat).copied().unwrap_or(f64::NAN));
+                    let v = result.summary.get(*stat).or_else(|| {
+                        let old = stat.replace("Cyc", "C");
+                        result.summary.get(&old)
+                    }).copied().unwrap_or(f64::NAN);
+                    row.insert(format!("NLG_{prefix}_{key}"), v);
                 }
             }
         }
@@ -401,11 +405,11 @@ const NLG_STATS: &[(&str, &str)] = &[
     ("NREM_slope", "NREM_slope_per_hour"),
     ("index", "upper_quartile_index"),
     ("artifact_pct", "artifact_percent"),
-    ("C1_NREM", "C1_NREM_mean"),
-    ("C2_NREM", "C2_NREM_mean"),
-    ("C3_NREM", "C3_NREM_mean"),
-    ("C4_NREM", "C4_NREM_mean"),
-    ("C5_NREM", "C5_NREM_mean"),
+    ("Cyc1_NREM", "Cyc1_NREM_mean"),
+    ("Cyc2_NREM", "Cyc2_NREM_mean"),
+    ("Cyc3_NREM", "Cyc3_NREM_mean"),
+    ("Cyc4_NREM", "Cyc4_NREM_mean"),
+    ("Cyc5_NREM", "Cyc5_NREM_mean"),
 ];
 
 fn nlg_prefix(band: &str) -> Option<&'static str> {
@@ -498,7 +502,7 @@ fn stage_dynamics_columns() -> Vec<String> {
     let mut out: Vec<String> = STAGE_DYNAMICS_COLUMNS.iter().map(|&c| c.to_string()).collect();
     for cycle in 1..=5 {
         for c in STAGE_CYCLE_COLUMNS {
-            out.push(format!("C{cycle}_{c}"));
+            out.push(format!("Cyc{cycle}_{c}"));
         }
     }
     out

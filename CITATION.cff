@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use CCS Sleep Studio in your research, please cite it using these metadata."
+type: software
+title: "CCS Sleep Studio"
+abstract: "A cross-platform desktop suite for sleep EEG visualisation, manual scoring, automated sleep staging and quantitative polysomnographic analysis."
+version: 1.27.1
+date-released: 2026-10-06
+license: MIT
+repository-code: "https://github.com/arunsasidharan84/CCS_SleepStudio"
+url: "https://github.com/arunsasidharan84/CCS_SleepStudio"
+keywords:
+  - sleep
+  - EEG
+  - polysomnography
+  - sleep staging
+  - hypnogram
+authors:
+  - family-names: Sasidharan
+    given-names: Arun
+    # orcid: "https://orcid.org/0000-0000-0000-0000"   # TODO: add ORCID
+    affiliation: "Centre for Consciousness Studies, Department of Neurophysiology, National Institute of Mental Health and Neurosciences (NIMHANS), Bengaluru, India"
+  # TODO: add co-authors who will be listed on the JOSS paper.
+# TODO: after the JOSS paper is accepted, add its DOI under preferred-citation.

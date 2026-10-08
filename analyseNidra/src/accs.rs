@@ -409,11 +409,17 @@ pub fn flatten(result: &AccsResult) -> BTreeMap<String, f64> {
     for (i, c) in result.cycles.iter().enumerate() {
         let cycle_idx = i + 1;
         for (k, v) in &c.values {
+            out.insert(format!("Cyc{cycle_idx}_{k}"), *v);
             out.insert(format!("C{cycle_idx}_{k}"), *v);
+            out.insert(format!("accs_Cyc{cycle_idx}_{k}"), *v);
             out.insert(format!("accs_C{cycle_idx}_{k}"), *v);
         }
+        out.insert(format!("Cyc{cycle_idx}_start_epoch"), result.cycle_starts[i] as f64);
+        out.insert(format!("Cyc{cycle_idx}_end_epoch"), result.cycle_ends[i] as f64);
         out.insert(format!("C{cycle_idx}_start_epoch"), result.cycle_starts[i] as f64);
         out.insert(format!("C{cycle_idx}_end_epoch"), result.cycle_ends[i] as f64);
+        out.insert(format!("accs_Cyc{cycle_idx}_start_epoch"), result.cycle_starts[i] as f64);
+        out.insert(format!("accs_Cyc{cycle_idx}_end_epoch"), result.cycle_ends[i] as f64);
         out.insert(format!("accs_C{cycle_idx}_start_epoch"), result.cycle_starts[i] as f64);
         out.insert(format!("accs_C{cycle_idx}_end_epoch"), result.cycle_ends[i] as f64);
     }
@@ -444,6 +450,10 @@ mod tests {
         assert!((r.fullnight["Stage_transitions"] - 9.818181818).abs() < 1e-6);
         assert!((r.fullnight["Stage_arousals"] - 2.201834862).abs() < 1e-6);
         assert_eq!(r.cycle_starts, vec![13, 80]);
+        let flat = flatten(&r);
+        assert!(flat.contains_key("Cyc1_Sleep_duration_cycle"));
+        assert!(flat.contains_key("C1_Sleep_duration_cycle"));
+        assert_eq!(flat["Cyc1_Sleep_duration_cycle"], flat["C1_Sleep_duration_cycle"]);
         assert_eq!(r.cycle_ends, vec![67, 134]);
         assert!((r.cycles[0].values["NREM_StageArousals_cycle"] - 5.714285714).abs() < 1e-6);
         assert_eq!(r.cycles[1].values["REM_duration_cycle"], 7.5);

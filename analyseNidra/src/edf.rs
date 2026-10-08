@@ -51,17 +51,35 @@ fn read_field_matrix(file: &mut File, count: usize, width: usize) -> Result<Vec<
     Ok(bytes.chunks_exact(width).map(<[u8]>::to_vec).collect())
 }
 
-fn canonical_channel(label: &str) -> String {
-    let mut name = label.replace("EEG ", "").replace("-Ref", "");
-    if let Some(rest) = name.strip_prefix("POL ") {
-        name = rest.to_string();
+fn strip_case_insensitive_prefix<'a>(s: &'a str, prefix: &str) -> &'a str {
+    if s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        &s[prefix.len()..]
+    } else {
+        s
     }
+}
+
+fn strip_case_insensitive_suffix<'a>(s: &'a str, suffix: &str) -> &'a str {
+    if s.len() >= suffix.len() && s[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix) {
+        &s[..s.len() - suffix.len()]
+    } else {
+        s
+    }
+}
+
+fn canonical_channel(label: &str) -> String {
+    let mut name = label.trim();
+    name = strip_case_insensitive_prefix(name, "EEG ");
+    name = strip_case_insensitive_prefix(name, "POL ");
+    name = strip_case_insensitive_suffix(name, "-Ref");
+    name = strip_case_insensitive_suffix(name, "-REF");
+    name = name.trim();
     if name.eq_ignore_ascii_case("A1") {
         "M1".into()
     } else if name.eq_ignore_ascii_case("A2") {
         "M2".into()
     } else {
-        name
+        name.to_string()
     }
 }
 
@@ -312,10 +330,32 @@ fn find_header_index(headers: &[SignalHeader], name: &str) -> Option<usize> {
         return Some(i);
     }
     let key = channel_match_key(name);
-    headers
+    if let Some(i) = headers
         .iter()
         .position(|h| channel_match_key(&h.label) == key)
         .or_else(|| headers.iter().position(|h| channel_match_key(&h.raw_label) == key))
+    {
+        return Some(i);
+    }
+    // Fallback: match by root channel (e.g. user requested "c3" and header is "C3-M2")
+    let wanted_root = key.split(['-', '_']).next().unwrap_or("");
+    if !wanted_root.is_empty() {
+        if let Some(i) = headers.iter().position(|h| {
+            let h_key = channel_match_key(&h.label);
+            let h_root = h_key.split(['-', '_']).next().unwrap_or("");
+            h_root.eq_ignore_ascii_case(wanted_root)
+        }) {
+            return Some(i);
+        }
+        if let Some(i) = headers.iter().position(|h| {
+            let h_key = channel_match_key(&h.raw_label);
+            let h_root = h_key.split(['-', '_']).next().unwrap_or("");
+            h_root.eq_ignore_ascii_case(wanted_root)
+        }) {
+            return Some(i);
+        }
+    }
+    None
 }
 
 /// Per-signal header summary (label, sampling rate, physical unit).
@@ -657,9 +697,20 @@ fn read_vhdr_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
     let selected: Vec<usize> = requested
         .iter()
         .map(|name| {
+            let wanted = canonical_channel(name).to_ascii_lowercase();
             by_name
-                .get(&canonical_channel(name).to_ascii_lowercase())
+                .get(&wanted)
                 .copied()
+                .or_else(|| {
+                    let key = channel_match_key(name);
+                    by_name.iter().find_map(|(k, &idx)| {
+                        if channel_match_key(k) == key {
+                            Some(idx)
+                        } else {
+                            None
+                        }
+                    })
+                })
                 .with_context(|| format!("VHDR channel {name} is missing"))
         })
         .collect::<Result<_>>()?;
@@ -826,3 +877,51 @@ pub fn read_signals_kemp(path: &Path, requested: &[String]) -> Result<Vec<Option
         })
         .collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_case_insensitive_channel_matching() {
+        let headers = vec![
+            SignalHeader {
+                label: "C3-M2".to_string(),
+                raw_label: "EEG C3-M2".to_string(),
+                unit: "uV".to_string(),
+                transducer: "".to_string(),
+                physical_min: -500.0,
+                physical_max: 500.0,
+                digital_min: -32768.0,
+                digital_max: 32767.0,
+                prefilter: "".to_string(),
+                samples_per_record: 256,
+            },
+            SignalHeader {
+                label: "F4-M1".to_string(),
+                raw_label: "eeg f4-ref".to_string(),
+                unit: "uV".to_string(),
+                transducer: "".to_string(),
+                physical_min: -500.0,
+                physical_max: 500.0,
+                digital_min: -32768.0,
+                digital_max: 32767.0,
+                prefilter: "".to_string(),
+                samples_per_record: 256,
+            },
+        ];
+
+        // Exact match case-insensitive
+        assert_eq!(find_header_index(&headers, "c3-m2"), Some(0));
+        assert_eq!(find_header_index(&headers, "C3-M2"), Some(0));
+        assert_eq!(find_header_index(&headers, "eeg c3-m2"), Some(0));
+        // Root match case-insensitive
+        assert_eq!(find_header_index(&headers, "c3"), Some(0));
+        assert_eq!(find_header_index(&headers, "C3"), Some(0));
+        // Second channel
+        assert_eq!(find_header_index(&headers, "f4"), Some(1));
+        assert_eq!(find_header_index(&headers, "F4"), Some(1));
+        assert_eq!(find_header_index(&headers, "f4-ref"), Some(1));
+    }
+}
+

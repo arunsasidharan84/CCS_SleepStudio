@@ -4,7 +4,7 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
-## [1.29.2]
+## [1.30.0]
 *   **Macroarchitecture Channel-Invariance:** Whole-night sleep macroarchitecture metrics (sleep efficiency, total sleep time, WASO, sleep onset latency, stage percentages/latencies, etc.) are recognized as channel-invariant global metrics. Redundant channel subdivision is eliminated, preventing sample size inflation. Macroarchitecture metrics are automatically modeled at the subject/recording level using GLM/ANOVA and rendered as clean single-factor publication plots.
 *   **2D EEG Scalp Topoplot Generator:** Automatically computes and renders 2D scalp topographic maps (topoplots) for channel-level metrics whenever at least 4 channels with sufficient spatial coverage are available (using standard 10-20 coordinates and smooth multiquadric RBF interpolation). Generates group mean topoplots and difference maps with annotated post-hoc significance markers (`*`), embedded directly into the in-app interactive viewer, Word (`.docx`), and PDF reports.
 *   **Progress Indicators for Batch Operations:** Added live, animated progress bars and status text across batch workflows:

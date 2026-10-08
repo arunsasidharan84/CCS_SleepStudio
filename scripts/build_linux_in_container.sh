@@ -21,6 +21,7 @@ echo "=== Building Linux app (Lite) ==="
 
 cp bridge/target/release/librust_sleep_eeg.so frontend/build/linux/x64/release/bundle/
 cp analyseNidra/target/release/analyse-nidra frontend/build/linux/x64/release/bundle/
+cp backend/group_stats.py frontend/build/linux/x64/release/bundle/
 test -x frontend/build/linux/x64/release/bundle/analyse-nidra
 
 mkdir -p dist
@@ -38,6 +39,7 @@ echo "=== Building Linux app (Full) ==="
 
 cp bridge/target/release/librust_sleep_eeg.so frontend/build/linux/x64/release/bundle/
 cp analyseNidra/target/release/analyse-nidra frontend/build/linux/x64/release/bundle/
+cp backend/group_stats.py frontend/build/linux/x64/release/bundle/
 mkdir -p frontend/build/linux/x64/release/bundle/assets
 cp -r analyseNidra/assets/models frontend/build/linux/x64/release/bundle/assets/
 test -x frontend/build/linux/x64/release/bundle/analyse-nidra

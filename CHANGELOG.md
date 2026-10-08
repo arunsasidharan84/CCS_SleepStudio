@@ -4,6 +4,12 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.29.1]
+*   **Bundled Group Statistics script in desktop app packages:** Fixed `can't open file '//backend/group_stats.py'` error when inspecting data or running models from installed macOS `.app`, Windows, and Linux standalone application packages. The statistical engine script is now bundled directly as an embedded Flutter asset (`assets/group_stats.py`) and automatically extracted to an isolated temporary location if external script paths are not found.
+*   **CI/CD packaging for Group Statistics:** Updated release build automation to copy `group_stats.py` into macOS app bundle resources (`Contents/Resources/`), Windows runner release outputs, and Linux `.deb`/`.rpm` install packages.
+
+---
+
 ## [1.29.0]
 *   **Group-level statistical analysis & publishing workbench:** Added a dedicated "5  Group statistics" tab in the Batch Analysis workspace. Users can interactively load any batch results master CSV (`AnalyseNidra_master_sheet.csv`) or previous runs with one click, along with optional demographic metadata.
 *   **State-of-the-art modeling (LMM & GLM):** Automatically selects Linear Mixed-Effects Models (LMM) with subject-level random intercepts for repeated measures and multi-channel metrics (`Outcome ~ Group * Channel + Covariates + (1 | Subject)`), and General Linear Models (GLM / ANOVA Type II) for single-measure macroarchitecture parameters.

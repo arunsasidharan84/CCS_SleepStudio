@@ -104,6 +104,7 @@ jobs:
       - name: Copy AnalyseNidra into macOS App bundle (Lite)
         run: |
           cp analyseNidra/target/release/analyse-nidra "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
+          cp backend/group_stats.py "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
           test -x "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/analyse-nidra"
 
       - name: Ad-hoc sign macOS app (Lite)
@@ -125,6 +126,7 @@ jobs:
         run: |
           cp analyseNidra/target/release/analyse-nidra "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
           cp -r analyseNidra/assets/models "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
+          cp backend/group_stats.py "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
           test -x "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/analyse-nidra"
 
       - name: Ad-hoc sign macOS app (Full)
@@ -219,6 +221,7 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item analyseNidra\target\release\analyse-nidra.exe frontend\build\windows\x64\runner\Release\
+          Copy-Item backend\group_stats.py frontend\build\windows\x64\runner\Release\
           if (-not (Test-Path frontend\build\windows\x64\runner\Release\analyse-nidra.exe)) { exit 1 }
 
       - name: Read app version (Windows)
@@ -240,6 +243,7 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item analyseNidra\target\release\analyse-nidra.exe frontend\build\windows\x64\runner\Release\
+          Copy-Item backend\group_stats.py frontend\build\windows\x64\runner\Release\
           # Create assets\ first: Copy-Item -Recurse into a missing folder would
           # rename models\ to assets\ instead of nesting it.
           New-Item -ItemType Directory -Force -Path frontend\build\windows\x64\runner\Release\assets | Out-Null

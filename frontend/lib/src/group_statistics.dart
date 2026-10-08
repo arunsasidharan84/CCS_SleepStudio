@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:file_picker/file_picker.dart';
 
 import 'batch_helpers.dart';
@@ -89,7 +90,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
     return null;
   }
 
-  static String _findGroupStatsScript() {
+  static Future<String> _resolveGroupStatsScript() async {
     final currentDir = Directory.current.path;
     final exeDir = File(Platform.resolvedExecutable).parent.path;
     final candidates = [
@@ -97,11 +98,21 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
       '$currentDir/../backend/group_stats.py',
       '$exeDir/backend/group_stats.py',
       '$exeDir/../Resources/backend/group_stats.py',
+      '$exeDir/../Resources/group_stats.py',
       '$exeDir/../lib/ccs-sleep-studio/backend/group_stats.py',
+      '/Users/arunsasidharan/Code/ActiveProjects/CCS_SleepStudio/backend/group_stats.py',
     ];
     for (final c in candidates) {
       if (File(c).existsSync()) return c;
     }
+
+    try {
+      final scriptContent = await rootBundle.loadString('assets/group_stats.py');
+      final tempFile = File('${Directory.systemTemp.path}${Platform.pathSeparator}ccs_group_stats.py');
+      await tempFile.writeAsString(scriptContent);
+      return tempFile.path;
+    } catch (_) {}
+
     return '$currentDir/backend/group_stats.py';
   }
 
@@ -150,7 +161,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
       if (python == null) {
         throw StateError('Python 3 environment not found. Please install Python with pandas and statsmodels.');
       }
-      final script = _findGroupStatsScript();
+      final script = await _resolveGroupStatsScript();
 
       final args = [
         script,
@@ -234,7 +245,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
       if (python == null) {
         throw StateError('Python 3 environment not found.');
       }
-      final script = _findGroupStatsScript();
+      final script = await _resolveGroupStatsScript();
 
       final args = [
         script,

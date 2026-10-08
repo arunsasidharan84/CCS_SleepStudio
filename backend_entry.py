@@ -5,7 +5,12 @@ print("PROGRESS 0.005 Packaged runtime started", flush=True)
 
 import sys
 
-if "--preprocess" in sys.argv:
+if "--group-stats" in sys.argv:
+    sys.argv.remove("--group-stats")
+    from backend.group_stats import main as group_stats_main
+    if __name__ == "__main__":
+        group_stats_main()
+elif "--preprocess" in sys.argv:
     sys.argv.remove("--preprocess")
     from backend.preprocess import main as preprocess_main
     if __name__ == "__main__":

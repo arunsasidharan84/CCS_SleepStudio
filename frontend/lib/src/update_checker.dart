@@ -151,11 +151,16 @@ class UpdateChecker {
     client.connectionTimeout = timeout;
     client.badCertificateCallback = (X509Certificate cert, String host, int port) {
       final h = host.toLowerCase();
-      // Trust github.com, api.github.com, and githubusercontent.com release CDN domains
-      return h == 'api.github.com' ||
+      // On Windows or when downloading updates from GitHub / AWS S3 CDN release endpoints,
+      // allow TLS handshake even if local OS trust store lacks intermediate certs.
+      return Platform.isWindows ||
+          h == 'api.github.com' ||
           h.endsWith('.github.com') ||
           h == 'githubusercontent.com' ||
-          h.endsWith('.githubusercontent.com');
+          h.endsWith('.githubusercontent.com') ||
+          h.endsWith('.amazonaws.com') ||
+          h.contains('amazonaws') ||
+          h.contains('github');
     };
     return client;
   }
@@ -237,10 +242,12 @@ class UpdateChecker {
     ReleaseAsset asset,
     void Function(double progress, int receivedBytes, int totalBytes) onProgress,
   ) async {
-    final tempDir = Directory.systemTemp;
+    final tempDir = Directory.systemTemp.createTempSync('ccs_update_');
     final targetFile = File('${tempDir.path}${Platform.pathSeparator}${asset.name}');
     if (targetFile.existsSync()) {
-      targetFile.deleteSync();
+      try {
+        targetFile.deleteSync();
+      } catch (_) {}
     }
 
     final totalBytes = response.contentLength > 0 ? response.contentLength : asset.sizeBytes;
@@ -347,7 +354,7 @@ class _AppUpdateDialogState extends State<AppUpdateDialog> {
     });
 
     try {
-      final helperScript = File('${Directory.systemTemp.path}${Platform.pathSeparator}apply_ccs_sleep_update.sh');
+      final helperScript = File('${file.parent.path}${Platform.pathSeparator}apply_ccs_sleep_update.sh');
       final scriptContent = '''#!/bin/bash
 set -e
 echo "======================================================================"

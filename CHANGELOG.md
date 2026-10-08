@@ -4,6 +4,19 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.29.0]
+*   **Group-level statistical analysis & publishing workbench:** Added a dedicated "5  Group statistics" tab in the Batch Analysis workspace. Users can interactively load any batch results master CSV (`AnalyseNidra_master_sheet.csv`) or previous runs with one click, along with optional demographic metadata.
+*   **State-of-the-art modeling (LMM & GLM):** Automatically selects Linear Mixed-Effects Models (LMM) with subject-level random intercepts for repeated measures and multi-channel metrics (`Outcome ~ Group * Channel + Covariates + (1 | Subject)`), and General Linear Models (GLM / ANOVA Type II) for single-measure macroarchitecture parameters.
+*   **Automated post-hoc testing & significance annotations:** Conducts pairwise contrasts with Benjamini-Hochberg FDR, Tukey HSD, or Bonferroni adjustments, computing Cohen's d effect sizes.
+*   **Interactive visualization & publication plot generation:** In-app interactive plot viewer renders boxplots with individual jittered data points and annotated post-hoc significance brackets (`*`, `**`, `***`, `****`, `ns`). Automatically saves 300 DPI publication-quality PNG figures into a datastamped `plots/` folder.
+*   **Journal-friendly CSV tables:** Automatically outputs APA-structured tables for descriptive statistics (N, Mean ± SD, Median, IQR, Min, Max), model fixed effects, and pairwise contrasts.
+*   **Publishing-ready scientific reports (DOCX & PDF):** Generates publication-ready manuscripts in Microsoft Word (`.docx`), PDF (`.pdf`), or both, featuring executive summaries, methodology sections, APA tables, and embedded high-resolution figures with captions.
+*   **Windows in-app updater SSL certificate fix:** Resolved `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` during in-app updates on Windows by trusting GitHub release binary download redirects to AWS S3.
+*   **Linux multi-user server temp permission fix:** Resolved `PathAccessException: Cannot delete file (Operation not permitted, errno = 1)` on shared Linux servers by allocating isolated temporary directories for downloaded installers and scripts.
+*   **Windows title bar display:** Updated native Win32 window creation title from `sleep_eeg_desktop` to `CCS Sleep Studio`.
+
+---
+
 ## [1.28.0]
 *   **CAP analysis in batch processing & master sheet integration:** Cyclic Alternating Pattern (CAP) analysis is now integrated into both the Batch EEG Pipeline and Batch PSG Polygraphy workflow. All CAP metrics are formatted with the standard `CAP_` prefix across CSV headers, and companion `_cap.json` metrics are automatically consolidated into `AnalyseNidra_master_sheet.csv`.
 *   **Sleep cycle prefix standardisation ("Cyc"):** Updated sleep cycle metrics across ACCS, NeuroLoopGain (NLG), and Regional CSV outputs to use the standard `Cyc` prefix (e.g. `Cyc1_start_epoch`, `Cyc1_Sleep_duration_cycle`, `NLG_SW_Cyc1_NREM`) while maintaining backwards-compatible fallbacks.

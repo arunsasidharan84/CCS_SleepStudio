@@ -38,6 +38,7 @@ import 'synced_video_panel.dart';
 import 'nihon_kohden.dart';
 import 'batch_metadata.dart';
 import 'timeline_painter.dart';
+import 'group_statistics.dart';
 
 const double _plotLeftPadding = 90.0;
 const bool buildLite = bool.fromEnvironment('LITE_BUILD', defaultValue: false);
@@ -138,6 +139,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   final TextEditingController _batchAnalyseOutDirController =
       TextEditingController();
   List<String> _lastAnalyseRegionalFiles = const [];
+  String? _lastBatchMasterSheetPath;
   List<String> _batchAnalyseAvailableChannels = const [];
   bool _batchAnalysePerChannel = false;
   bool _batchAnalyseRecursive = true;
@@ -3006,6 +3008,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   await File(latestPath).writeAsString(compiled);
                 } catch (_) {}
                 if (mounted) {
+                  setState(() => _lastBatchMasterSheetPath = masterCsvPath);
                   _setStatus(
                     'Auto-compiled ${existingRegionalFiles.length} regional CSV(s) into ${_basename(masterCsvPath)}',
                   );
@@ -7993,7 +7996,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           final latestMaster = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
           await File(latestMaster).writeAsString(compiledContent);
         } catch (_) {}
-        if (mounted) setState(() => _lastAnalyseRegionalFiles = usable);
+        if (mounted) {
+          setState(() {
+            _lastAnalyseRegionalFiles = usable;
+            _lastBatchMasterSheetPath = master;
+          });
+        }
         return 'Compiled ${usable.length} recording(s) into ${_basename(master)}'
             '${empty.isEmpty ? '' : ' (${empty.length} empty CSV(s) left out: ${empty.map(_basename).join(', ')})'}';
       };
@@ -8065,6 +8073,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       (Icons.account_tree_outlined, '2  EEG analysis'),
       (Icons.monitor_heart_outlined, '3  Polygraphy: OSA & PLM'),
       (Icons.compare_arrows, '4  Scoring comparison'),
+      (Icons.analytics_outlined, '5  Group statistics'),
     ];
     final scored = _batchAnalysePairs.where((p) => (p['scoringPath'] ?? '').isNotEmpty).length;
     return Column(
@@ -8105,23 +8114,25 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _pipelineStepCard(
-                      number: 0,
-                      title: 'Recordings',
-                      subtitle: _batchAnalysePairs.isEmpty
-                          ? 'Shared by all batch analyses — add recordings; their scorings are found automatically'
-                          : '${_batchAnalysePairs.length} recording(s) · $scored with a scoring · '
-                                '${_batchAnalysePairs.where((p) => (p['autoScoringPath'] ?? '').isNotEmpty).length} autoscored',
-                      initiallyExpanded: _batchAnalysePairs.isEmpty,
-                      body: _buildPipelineRecordingsPanel(),
-                    ),
+                    if (_batchSection != 4)
+                      _pipelineStepCard(
+                        number: 0,
+                        title: 'Recordings',
+                        subtitle: _batchAnalysePairs.isEmpty
+                            ? 'Shared by all batch analyses — add recordings; their scorings are found automatically'
+                            : '${_batchAnalysePairs.length} recording(s) · $scored with a scoring · '
+                                  '${_batchAnalysePairs.where((p) => (p['autoScoringPath'] ?? '').isNotEmpty).length} autoscored',
+                        initiallyExpanded: _batchAnalysePairs.isEmpty,
+                        body: _buildPipelineRecordingsPanel(),
+                      ),
                     KeyedSubtree(
                       key: ValueKey('batch-section-$_batchSection'),
                       child: switch (buildLite && _batchSection == 0 ? 1 : _batchSection) {
                         0 => _buildAutoscoreSection(),
                         1 => _buildEegPipelineSection(),
                         2 => _buildBatchPsgCard(),
-                        _ => _buildBatchComparisonCard(),
+                        3 => _buildBatchComparisonCard(),
+                        _ => _buildGroupStatisticsSection(),
                       },
                     ),
                   ],
@@ -8131,6 +8142,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildGroupStatisticsSection() {
+    return GroupStatisticsWorkbench(
+      initialCsvPath: _lastBatchMasterSheetPath,
+      initialMetadataPath: _batchMetadata?.sourcePath,
     );
   }
 

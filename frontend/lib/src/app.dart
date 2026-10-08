@@ -3713,7 +3713,110 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
 
     int count = 0;
-    for (final pair in _batchComparisonPairs) {
+    int currentIdx = 0;
+    final total = _batchComparisonPairs.length;
+    bool cancelled = false;
+
+    // Show Progress Dialog
+    StateSetter? dialogSetState;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          dialogSetState = setDialogState;
+          final pct = total == 0 ? 1.0 : (currentIdx / total).clamp(0.0, 1.0);
+          final activePair = (currentIdx < total) ? _batchComparisonPairs[currentIdx] : null;
+          return AlertDialog(
+            title: Row(
+              children: const [
+                Icon(Icons.compare_arrows, color: Colors.deepOrange),
+                SizedBox(width: 8),
+                Text('Batch Scoring Comparison'),
+              ],
+            ),
+            content: SizedBox(
+              width: 440,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: pct,
+                      minHeight: 8,
+                      backgroundColor: Colors.grey.shade200,
+                      valueColor: const AlwaysStoppedAnimation<Color>(Colors.deepOrange),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Comparing $currentIdx of $total pair(s)…',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      Text(
+                        '${(pct * 100).toInt()}%',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.deepOrange),
+                      ),
+                    ],
+                  ),
+                  if (activePair != null) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Ref: ${_basename(activePair['fileA'] ?? '')}',
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Cmp: ${_basename(activePair['fileB'] ?? '')}',
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  cancelled = true;
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('Cancel'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+
+    for (var i = 0; i < _batchComparisonPairs.length; i++) {
+      if (cancelled || !mounted) break;
+      final pair = _batchComparisonPairs[i];
+      currentIdx = i + 1;
+      dialogSetState?.call(() {});
+
       final fileA = pair['fileA'];
       final fileB = pair['fileB'];
       if (fileA == null || fileB == null || fileA.isEmpty || fileB.isEmpty) continue;
@@ -3747,6 +3850,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       } catch (e) {
         debugPrint('Error comparing $fileA vs $fileB: $e');
       }
+    }
+
+    if (mounted && !cancelled && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
     }
 
     final csvFile = File(savePath);
@@ -9320,6 +9427,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                           icon: const Icon(Icons.add, size: 16),
                           label: const Text('Add Pair'),
                         ),
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          onPressed: _batchComparisonPairs.isEmpty
+                              ? null
+                              : () => setState(() => _batchComparisonPairs.clear()),
+                          icon: const Icon(Icons.clear_all, size: 16),
+                          label: const Text('Clear All'),
+                        ),
                       ],
                     ),
                     const Divider(height: 24),
@@ -9369,7 +9484,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                               visualDensity: VisualDensity.compact,
                             ),
                             icon: const Icon(Icons.clear_all, size: 16),
-                            label: const Text('Clear File List'),
+                            label: const Text('Clear All'),
                             onPressed: () {
                               setState(() {
                                 _batchComparisonPairs.clear();

@@ -28,6 +28,8 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
 
   bool _isInspecting = false;
   bool _isAnalyzing = false;
+  double _analysisProgress = 0.0;
+  String _progressStatus = '';
   String _statusMessage = '';
   final List<String> _consoleLogs = [];
 
@@ -48,6 +50,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
   Map<String, dynamic>? _analysisResults;
   String? _selectedResultMetric;
   int _activeResultTabIndex = 0; // 0: Plot, 1: Model Effects, 2: Post-Hoc, 3: Descriptives
+  int _activePlotView = 0; // 0: Box & Post-Hoc Plot, 1: Scalp Topoplot
 
   @override
   void initState() {
@@ -236,6 +239,8 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
 
     setState(() {
       _isAnalyzing = true;
+      _analysisProgress = 0.0;
+      _progressStatus = 'Initializing statistical models…';
       _statusMessage = 'Running group statistical analysis…';
       _consoleLogs.clear();
     });
@@ -284,6 +289,20 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
 
       process.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
         stderrBuffer.writeln(line);
+        if (line.startsWith('PROGRESS ')) {
+          final rest = line.substring(9).trim();
+          final spIdx = rest.indexOf(' ');
+          if (spIdx > 0) {
+            final frac = double.tryParse(rest.substring(0, spIdx));
+            final msg = rest.substring(spIdx + 1).trim();
+            if (frac != null) {
+              setState(() {
+                _analysisProgress = frac.clamp(0.0, 1.0);
+                _progressStatus = msg;
+              });
+            }
+          }
+        }
         setState(() {
           _consoleLogs.add('[stderr] $line');
           if (_consoleLogs.length > 50) _consoleLogs.removeAt(0);
@@ -807,6 +826,36 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                 ),
               ],
             ),
+            if (_isAnalyzing) ...[
+              const SizedBox(height: 14),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: _analysisProgress > 0 ? _analysisProgress : null,
+                  minHeight: 8,
+                  backgroundColor: Colors.grey.shade200,
+                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF1F4E79)),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      _progressStatus.isNotEmpty ? _progressStatus : 'Running group analysis models…',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.blueGrey.shade800),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (_analysisProgress > 0)
+                    Text(
+                      '${(_analysisProgress * 100).toInt()}%',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.blueGrey.shade800),
+                    ),
+                ],
+              ),
+            ],
             if (_isAnalyzing || _consoleLogs.isNotEmpty) ...[
               const SizedBox(height: 12),
               Container(
@@ -946,7 +995,12 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
 
   Widget _buildPlotTab(Map<String, dynamic> res) {
     final plotPath = res['plot_path'] as String? ?? '';
-    final file = File(plotPath);
+    final topoPath = res['topoplot_path'] as String? ?? '';
+    final isMacro = res['is_macroarchitecture'] == true;
+
+    final hasTopo = topoPath.isNotEmpty && File(topoPath).existsSync();
+    final currentPath = (_activePlotView == 1 && hasTopo) ? topoPath : plotPath;
+    final file = File(currentPath);
 
     return Container(
       width: double.infinity,
@@ -957,16 +1011,50 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
       ),
       padding: const EdgeInsets.all(12),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Text(
-                '${res['metric']} · Model: ${res['model_type']} · N=${res['n_obs']}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF1F4E79)),
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      '${res['metric']} · Model: ${res['model_type']} · N=${res['n_obs']}',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF1F4E79)),
+                    ),
+                    if (isMacro)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.shade100,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.amber.shade400),
+                        ),
+                        child: Text(
+                          'Macroarchitecture (Subject-Level; Channel-Invariant)',
+                          style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Colors.amber.shade900),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-              const Spacer(),
+              if (hasTopo)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: SegmentedButton<int>(
+                    segments: const [
+                      ButtonSegment(value: 0, icon: Icon(Icons.bar_chart, size: 14), label: Text('Boxplot & Post-hoc')),
+                      ButtonSegment(value: 1, icon: Icon(Icons.pie_chart, size: 14), label: Text('Scalp Topoplot')),
+                    ],
+                    selected: {_activePlotView},
+                    onSelectionChanged: (s) => setState(() => _activePlotView = s.first),
+                  ),
+                ),
               TextButton.icon(
-                onPressed: file.existsSync() ? () => _openPath(plotPath) : null,
+                onPressed: file.existsSync() ? () => _openPath(currentPath) : null,
                 icon: const Icon(Icons.zoom_in, size: 16),
                 label: const Text('View Full Image'),
               ),
@@ -974,21 +1062,23 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
           ),
           const SizedBox(height: 8),
           if (file.existsSync())
-            InkWell(
-              onTap: () => _openPath(plotPath),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: Image.file(
-                  file,
-                  height: 400,
-                  fit: BoxFit.contain,
+            Center(
+              child: InkWell(
+                onTap: () => _openPath(currentPath),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: Image.file(
+                    file,
+                    height: 420,
+                    fit: BoxFit.contain,
+                  ),
                 ),
               ),
             )
           else
             const Padding(
               padding: EdgeInsets.all(32),
-              child: Text('Plot image not found.'),
+              child: Center(child: Text('Plot image not found.')),
             ),
         ],
       ),

@@ -4,6 +4,17 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.29.2]
+*   **Macroarchitecture Channel-Invariance:** Whole-night sleep macroarchitecture metrics (sleep efficiency, total sleep time, WASO, sleep onset latency, stage percentages/latencies, etc.) are recognized as channel-invariant global metrics. Redundant channel subdivision is eliminated, preventing sample size inflation. Macroarchitecture metrics are automatically modeled at the subject/recording level using GLM/ANOVA and rendered as clean single-factor publication plots.
+*   **2D EEG Scalp Topoplot Generator:** Automatically computes and renders 2D scalp topographic maps (topoplots) for channel-level metrics whenever at least 4 channels with sufficient spatial coverage are available (using standard 10-20 coordinates and smooth multiquadric RBF interpolation). Generates group mean topoplots and difference maps with annotated post-hoc significance markers (`*`), embedded directly into the in-app interactive viewer, Word (`.docx`), and PDF reports.
+*   **Progress Indicators for Batch Operations:** Added live, animated progress bars and status text across batch workflows:
+    - Group Statistical Analysis now tracks model computation and report generation progress in real-time (`0%–100%`) above execution logs.
+    - Batch Scoring Comparison displays a dedicated progress dialog with a progress bar, current pair counter, and cancel control.
+*   **Clear All in Batch Scoring Comparison:** Added a "Clear All" action button to the Batch Scoring Comparison top action bar alongside "Auto-Pair 2 Folders…" and "Add Pair", as well as consistent clear controls in list headers.
+*   **Enhanced Nomenclature & Flexible Metadata Support:** Fully supports newer CSV nomenclature (`groupID`, `ageID`, `napID`, `Subject_Code`, `Cyc*`, `CAP_*`, datastamped files) and improved automatic classification of categorical factors vs continuous numeric variables.
+
+---
+
 ## [1.29.1]
 *   **Bundled Group Statistics script in desktop app packages:** Fixed `can't open file '//backend/group_stats.py'` error when inspecting data or running models from installed macOS `.app`, Windows, and Linux standalone application packages. The statistical engine script is now bundled directly as an embedded Flutter asset (`assets/group_stats.py`) and automatically extracted to an isolated temporary location if external script paths are not found.
 *   **CI/CD packaging for Group Statistics:** Updated release build automation to copy `group_stats.py` into macOS app bundle resources (`Contents/Resources/`), Windows runner release outputs, and Linux `.deb`/`.rpm` install packages.

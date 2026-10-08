@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy import stats
+import scipy.interpolate
 
 try:
     import statsmodels.api as sm
@@ -110,40 +111,108 @@ def calc_cohen_d(x: np.ndarray, y: np.ndarray) -> float:
 # ─── DATA INSPECTION & PREPROCESSING ────────────────────────────────────────
 
 SUBJECT_CANDIDATE_NAMES = [
-    "subject identifier", "subject_code", "subject code", "subjname",
-    "subject", "subjid", "subject id", "napid", "mappingcode", "sl.no."
+    "subject identifier", "subject_code", "subject code", "subjname", "subject_name",
+    "subject", "subjid", "subject id", "napid", "nap_id", "mappingcode", "sl.no.",
+    "participant_id", "participant", "patient_id", "patient"
 ]
 
 GROUP_CANDIDATE_NAMES = [
     "group", "groupid", "group_id", "status", "psgtype", "condition",
-    "cohort", "arm", "treatment"
+    "cohort", "arm", "treatment", "diagnosis", "dx", "slept_well"
 ]
 
 SUBGROUP_CANDIDATE_NAMES = [
-    "chan", "channel", "electrode", "derivation", "ageid", "age_id",
-    "session", "session_id", "visit", "time_point", "epoch"
+    "chan", "channel", "electrode", "derivation", "eeg channel", "ageid", "age_id",
+    "session", "session_id", "visit", "time_point", "timepoint", "epoch"
 ]
 
 COVARIATE_CANDIDATE_NAMES = [
-    "age", "gender", "sex", "education", "practiceyears", "bmi", "trt"
+    "age", "gender", "sex", "education", "practiceyears", "bmi", "trt", "date_of_birth"
 ]
+
+# Standard 10-20 and 10-10 scalp EEG derivations normalized to circle of radius 0.5 (Nose = +Y)
+ELECTRODE_COORDS_2D: dict[str, tuple[float, float]] = {
+    # Frontal Polar
+    "FP1": (-0.15, 0.45), "FP2": (0.15, 0.45), "FPZ": (0.0, 0.47),
+    # Anterior Frontal
+    "AF3": (-0.18, 0.35), "AF4": (0.18, 0.35), "AF7": (-0.35, 0.35), "AF8": (0.35, 0.35), "AFZ": (0.0, 0.36),
+    # Frontal
+    "F3": (-0.22, 0.22), "F4": (0.22, 0.22), "FZ": (0.0, 0.24),
+    "F1": (-0.11, 0.23), "F2": (0.11, 0.23),
+    "F7": (-0.42, 0.22), "F8": (0.42, 0.22),
+    # Fronto-Central
+    "FC1": (-0.13, 0.11), "FC2": (0.13, 0.11), "FCZ": (0.0, 0.12),
+    "FC3": (-0.26, 0.11), "FC4": (0.26, 0.11),
+    "FC5": (-0.42, 0.11), "FC6": (0.42, 0.11),
+    # Central
+    "C3": (-0.24, 0.0), "C4": (0.24, 0.0), "CZ": (0.0, 0.0),
+    "C1": (-0.12, 0.0), "C2": (0.12, 0.0),
+    # Temporal
+    "T3": (-0.45, 0.0), "T4": (0.45, 0.0),
+    "T7": (-0.45, 0.0), "T8": (0.45, 0.0),
+    "T5": (-0.38, -0.28), "T6": (0.38, -0.28),
+    "P7": (-0.38, -0.28), "P8": (0.38, -0.28),
+    "FT7": (-0.44, 0.12), "FT8": (0.44, 0.12),
+    "TP7": (-0.44, -0.12), "TP8": (0.44, -0.12),
+    # Centro-Parietal
+    "CP1": (-0.13, -0.11), "CP2": (0.13, -0.11), "CPZ": (0.0, -0.12),
+    "CP3": (-0.26, -0.11), "CP4": (0.26, -0.11),
+    "CP5": (-0.42, -0.11), "CP6": (0.42, -0.11),
+    # Parietal
+    "P3": (-0.22, -0.22), "P4": (0.22, -0.22), "PZ": (0.0, -0.24),
+    "P1": (-0.11, -0.23), "P2": (0.11, -0.23),
+    # Parieto-Occipital
+    "PO3": (-0.18, -0.35), "PO4": (0.18, -0.35), "PO7": (-0.35, -0.35), "PO8": (0.35, -0.35), "POZ": (0.0, -0.36),
+    # Occipital
+    "O1": (-0.15, -0.45), "O2": (0.15, -0.45), "OZ": (0.0, -0.47),
+}
+
+
+def normalize_channel_name(ch: str) -> str:
+    """Normalizes channel name string for 10-20 mapping."""
+    c = str(ch).upper().strip()
+    c = re.sub(r"^EEG[\s\-_]?", "", c)
+    c = re.sub(r"[\-_:](REF|AVG|LE|M1|M2|A1|A2)$", "", c)
+    return c
+
+
+def check_topoplot_suitability(channels: list[str]) -> tuple[bool, dict[str, tuple[float, float]]]:
+    """Checks if recognized 10-20 EEG channels are of sufficient count and spatial distribution."""
+    matched: dict[str, tuple[float, float]] = {}
+    for ch in channels:
+        norm = normalize_channel_name(ch)
+        if norm in ELECTRODE_COORDS_2D:
+            matched[ch] = ELECTRODE_COORDS_2D[norm]
+
+    # Require at least 4 recognized scalp channels
+    if len(matched) < 4:
+        return False, {}
+
+    xs = [coord[0] for coord in matched.values()]
+    ys = [coord[1] for coord in matched.values()]
+    # Must have both lateral (X) and anterior-posterior (Y) coverage
+    if (max(xs) - min(xs) < 0.22) or (max(ys) - min(ys) < 0.22):
+        return False, {}
+
+    return True, matched
 
 
 def detect_columns(df: pd.DataFrame) -> dict[str, Any]:
     cols = list(df.columns)
-    cols_lower = {c: c.lower().strip() for c in cols}
+    # Strip optional "Metadata: " prefix and lowercase
+    cols_clean = {c: re.sub(r"^metadata:\s*", "", c.lower().strip()) for c in cols}
 
     # Subject ID
     subject_id = None
     for cand in SUBJECT_CANDIDATE_NAMES:
-        for c, cl in cols_lower.items():
+        for c, cl in cols_clean.items():
             if cl == cand:
                 subject_id = c
                 break
         if subject_id:
             break
     if not subject_id:
-        for c, cl in cols_lower.items():
+        for c, cl in cols_clean.items():
             if "subject" in cl:
                 subject_id = c
                 break
@@ -151,18 +220,26 @@ def detect_columns(df: pd.DataFrame) -> dict[str, Any]:
     # Categorical columns
     categorical_cols = []
     for c in cols:
-        cl = cols_lower[c]
+        cl = cols_clean[c]
         if cl in ("source_file", "source_path", "recording date"):
             continue
+        # Check if numeric
+        s_num = pd.to_numeric(df[c], errors="coerce")
+        is_predominantly_numeric = s_num.notna().sum() >= max(3, len(df) * 0.70)
+        is_known_factor_or_id = any(
+            cand == cl for cand in (SUBJECT_CANDIDATE_NAMES + GROUP_CANDIDATE_NAMES + SUBGROUP_CANDIDATE_NAMES)
+        )
         nunique = df[c].nunique(dropna=True)
-        if df[c].dtype == "object" or (1 < nunique <= 12 and nunique < len(df) * 0.5):
-            categorical_cols.append(c)
+
+        if not is_predominantly_numeric or is_known_factor_or_id:
+            if df[c].dtype == "object" or (1 < nunique <= 12 and nunique < len(df) * 0.5):
+                categorical_cols.append(c)
 
     # Primary group
     group_col = None
     for cand in GROUP_CANDIDATE_NAMES:
         for c in categorical_cols:
-            if cols_lower[c] == cand:
+            if cols_clean[c] == cand:
                 group_col = c
                 break
         if group_col:
@@ -174,7 +251,7 @@ def detect_columns(df: pd.DataFrame) -> dict[str, Any]:
     subgroup_col = None
     for cand in SUBGROUP_CANDIDATE_NAMES:
         for c in categorical_cols:
-            if c != group_col and cols_lower[c] == cand:
+            if c != group_col and cols_clean[c] == cand:
                 subgroup_col = c
                 break
         if subgroup_col:
@@ -183,7 +260,7 @@ def detect_columns(df: pd.DataFrame) -> dict[str, Any]:
     # Covariates
     covariates = []
     for c in cols:
-        cl = cols_lower[c]
+        cl = cols_clean[c]
         if cl in ("source_file", "source_path") or c in (group_col, subgroup_col, subject_id):
             continue
         if any(cand == cl for cand in COVARIATE_CANDIDATE_NAMES):
@@ -196,9 +273,8 @@ def detect_columns(df: pd.DataFrame) -> dict[str, Any]:
             continue
         if c in covariates:
             continue
-        # Check if numeric
         s = pd.to_numeric(df[c], errors="coerce")
-        if s.notna().sum() >= 5 and s.nunique() > 5:
+        if s.notna().sum() >= 3 and s.nunique() >= 2:
             metric_cols.append(c)
 
     return {
@@ -212,6 +288,37 @@ def detect_columns(df: pd.DataFrame) -> dict[str, Any]:
         "total_columns": len(cols),
         "unique_subjects": int(df[subject_id].nunique(dropna=True)) if subject_id else len(df),
     }
+
+
+def is_macroarchitecture_or_channel_invariant(
+    metric: str,
+    df: pd.DataFrame,
+    subject_id: str | None,
+    subgroup_col: str | None,
+) -> bool:
+    """Determines whether a sleep metric represents global macroarchitecture that is redundant across channels."""
+    ml = metric.lower().strip()
+    macro_keywords = [
+        "sleep_efficiency", "sleepefficiency", "tst", "trt", "waso", "sol", "spt",
+        "sleep_maintenance_efficiency", "sleep_latency", "rem_latency", "w_onset",
+        "w_duration", "n1_duration", "n2_duration", "n3_duration", "r_duration", "rem_duration",
+        "nrem_duration", "n1_percentage", "n2_percentage", "n3_percentage", "r_percentage", "rem_percentage",
+        "wake_percentage", "wake_duration", "stage_transitions", "stage_arousals", "shortawakenings"
+    ]
+    if any(k == ml or ml.startswith(k + "_") or ml.endswith("_" + k) for k in macro_keywords):
+        return True
+    if any(k in ml for k in ["sleep_efficiency", "sleepefficiency", "tst", "trt", "waso", "sol", "spt"]):
+        return True
+
+    # Empirical invariance check across subgroup (channels)
+    if subject_id and subject_id in df.columns and subgroup_col and subgroup_col in df.columns:
+        sub = df[[subject_id, subgroup_col, metric]].dropna()
+        if len(sub) > 0:
+            grouped = sub.groupby(subject_id)[metric].nunique()
+            if (grouped <= 1).mean() > 0.90:
+                return True
+
+    return False
 
 
 def categorize_metrics(metrics: list[str]) -> dict[str, list[str]]:
@@ -228,20 +335,20 @@ def categorize_metrics(metrics: list[str]) -> dict[str, list[str]]:
 
     for m in metrics:
         ml = m.lower()
-        if any(k in ml for k in ["trt", "tst", "spt", "waso", "sol", "efficiency", "percentage", "onset", "_duration", "streak"]) and not any(k in ml for k in ["sp_", "sw_", "psd", "fooof", "cap_"]):
-            categories["Macroarchitecture"].append(m)
+        if "cap_" in ml or ml.startswith("cap") or "cyclic" in ml:
+            categories["CAP (Cyclic Alternating Pattern)"].append(m)
+        elif "cyc" in ml or "cycle" in ml or re.match(r"^c[1-5]_.*cycle", ml):
+            categories["Sleep Cycles"].append(m)
         elif "sp_" in ml or "spindle" in ml:
             categories["Spindles"].append(m)
         elif "sw_" in ml or "slow" in ml:
             categories["Slow Waves"].append(m)
         elif any(k in ml for k in ["psd", "relpower", "abspower", "delta", "theta", "alpha", "sigma", "beta", "gamma"]) and "fooof" not in ml and "irasa" not in ml:
             categories["Spectral Power"].append(m)
-        elif any(k in ml for k in ["fooof", "irasa", "exponent", "offset", "knee", "lzc", "dfa", "entropy"]):
+        elif any(k in ml for k in ["fooof", "irasa", "exponent", "offset", "knee", "lzc", "dfa", "entropy", "nonlinear", "acw"]):
             categories["Aperiodic & Complexity"].append(m)
-        elif "cap_" in ml or "cap" in ml:
-            categories["CAP (Cyclic Alternating Pattern)"].append(m)
-        elif "cyc" in ml or "cycle" in ml:
-            categories["Sleep Cycles"].append(m)
+        elif any(k in ml for k in ["trt", "tst", "spt", "waso", "sol", "efficiency", "percentage", "onset", "latency", "duration", "streak", "transition", "arousal", "awakening", "slept_well"]):
+            categories["Macroarchitecture"].append(m)
         else:
             categories["Other Regional"].append(m)
 
@@ -269,8 +376,11 @@ def fit_statistical_model(
     posthoc_method: str = "fdr",     # 'tukey', 'fdr', 'bonferroni'
 ) -> dict[str, Any] | None:
     """Fits LMM or GLM to the metric and calculates post-hoc contrasts."""
+    is_macro = is_macroarchitecture_or_channel_invariant(metric, df, subject_id, subgroup_col)
+    effective_subgroup_col = None if is_macro else subgroup_col
+
     needed_cols = []
-    for c in [metric, group_col, subgroup_col, subject_id] + [cv for cv in covariates if cv != metric]:
+    for c in [metric, group_col, effective_subgroup_col, subject_id] + [cv for cv in covariates if cv != metric]:
         if c and c in df.columns and c not in needed_cols:
             needed_cols.append(c)
 
@@ -280,6 +390,10 @@ def fit_statistical_model(
         if cov != metric and cov in sub_df.columns:
             sub_df[cov] = pd.to_numeric(sub_df[cov], errors="coerce")
     sub_df = sub_df.dropna(subset=[metric, group_col]).copy()
+
+    # For macroarchitecture metrics (invariant across channels), collapse to one observation per subject
+    if is_macro and subject_id and subject_id in sub_df.columns:
+        sub_df = sub_df.drop_duplicates(subset=[subject_id]).copy()
 
     # Drop groups with < 2 observations
     group_counts = sub_df[group_col].value_counts()
@@ -293,14 +407,16 @@ def fit_statistical_model(
 
     # Check repeated measures per subject
     has_repeated_measures = False
-    if subject_id and subject_id in sub_df.columns:
+    if not is_macro and subject_id and subject_id in sub_df.columns:
         n_obs = len(sub_df)
         n_subj = sub_df[subject_id].nunique()
         if n_obs > n_subj * 1.1:
             has_repeated_measures = True
 
-    # Determine model type
-    if preferred_model == "lmm":
+    # Determine model type (Macroarchitecture always uses GLM/ANOVA to avoid redundant channel effects)
+    if is_macro:
+        use_lmm = False
+    elif preferred_model == "lmm":
         use_lmm = True
     elif preferred_model == "glm":
         use_lmm = False
@@ -309,8 +425,8 @@ def fit_statistical_model(
 
     # Rename columns to safe patsy names
     rename_map = {metric: "DEP_VAR", group_col: "GRP_VAR"}
-    if subgroup_col and subgroup_col in sub_df.columns:
-        rename_map[subgroup_col] = "SUBGRP_VAR"
+    if effective_subgroup_col and effective_subgroup_col in sub_df.columns:
+        rename_map[effective_subgroup_col] = "SUBGRP_VAR"
     if subject_id and subject_id in sub_df.columns:
         rename_map[subject_id] = "SUBJ_ID"
     valid_covs = []
@@ -500,9 +616,9 @@ def fit_statistical_model(
 
     # If subgroup exists, perform between-group contrasts within each subgroup level
     # and between-subgroup contrasts within each group level
-    if has_subgroup and subgroup_col:
+    if has_subgroup and effective_subgroup_col:
         for sg in subgroup_levels:
-            sg_mask = sub_df[subgroup_col].astype(str) == sg
+            sg_mask = sub_df[effective_subgroup_col].astype(str) == sg
             sg_df = sub_df[sg_mask]
             for i in range(len(group_levels)):
                 for j in range(i + 1, len(group_levels)):
@@ -514,7 +630,7 @@ def fit_statistical_model(
                         d = calc_cohen_d(v1, v2)
                         posthoc_contrasts.append({
                             "contrast_type": "Group within Subgroup",
-                            "factor": subgroup_col,
+                            "factor": effective_subgroup_col,
                             "level": sg,
                             "group1": g1,
                             "group2": g2,
@@ -565,7 +681,9 @@ def fit_statistical_model(
     return {
         "metric": metric,
         "group_col": group_col,
-        "subgroup_col": subgroup_col if has_subgroup else None,
+        "subgroup_col": effective_subgroup_col if has_subgroup else None,
+        "subject_id": subject_id,
+        "is_macroarchitecture": is_macro,
         "covariates": valid_covs,
         "model_type": model_type,
         "formula": formula,
@@ -597,9 +715,16 @@ def generate_publication_plot(
     needed = [metric, group_col]
     if subgroup_col:
         needed.append(subgroup_col)
+    subjid = result.get("subject_id")
+    if subjid and subjid in raw_df.columns and subjid not in needed:
+        needed.append(subjid)
+
     clean = raw_df[needed].dropna().copy()
     clean[metric] = pd.to_numeric(clean[metric], errors="coerce")
     clean = clean.dropna(subset=[metric])
+
+    if result.get("is_macroarchitecture") and subjid and subjid in clean.columns:
+        clean = clean.drop_duplicates(subset=[subjid]).copy()
 
     groups = sorted([str(g) for g in clean[group_col].unique()])
     palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
@@ -742,11 +867,177 @@ def generate_publication_plot(
     clean_metric_title = metric.replace("_", " ")
     ax.set_ylabel(clean_metric_title, fontsize=11, fontweight="bold", labelpad=8)
     model_type = result["model_type"]
-    ax.set_title(f"{clean_metric_title} by {group_col}{f' across {subgroup_col}' if has_subgroup else ''}\n({model_type}, N={result['n_obs']})", fontsize=12, fontweight="bold", pad=12)
+    if result.get("is_macroarchitecture"):
+        ax.set_title(
+            f"{clean_metric_title} by {group_col}\n({model_type}, N={result['n_obs']}) — [Whole-Night Global Metric; Invariant across Channels]",
+            fontsize=10.5,
+            fontweight="bold",
+            pad=12,
+        )
+    else:
+        ax.set_title(
+            f"{clean_metric_title} by {group_col}{f' across {subgroup_col}' if has_subgroup else ''}\n({model_type}, N={result['n_obs']})",
+            fontsize=12,
+            fontweight="bold",
+            pad=12,
+        )
 
     plt.tight_layout()
     output_png_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_png_path, dpi=300)
+    plt.close(fig)
+    return output_png_path
+
+
+# ─── 2D EEG TOPOGRAPHIC SCALP DISTRIBUTION (TOPOPLOT) ────────────────────────
+
+def generate_topoplot(
+    raw_df: pd.DataFrame,
+    metric: str,
+    group_col: str,
+    channel_col: str,
+    posthoc_contrasts: list[dict[str, Any]],
+    output_png_path: Path,
+) -> Path | None:
+    """Renders 2D EEG topographic scalp distribution map (Topoplot) across channels for each group and differences."""
+    needed = [metric, group_col, channel_col]
+    clean = raw_df[needed].dropna().copy()
+    clean[metric] = pd.to_numeric(clean[metric], errors="coerce")
+    clean = clean.dropna(subset=[metric])
+    if len(clean) < 6:
+        return None
+
+    channels = sorted([str(c) for c in clean[channel_col].unique()])
+    is_ok, matched = check_topoplot_suitability(channels)
+    if not is_ok or len(matched) < 4:
+        return None
+
+    clean = clean[clean[channel_col].astype(str).isin(matched.keys())].copy()
+    groups = sorted([str(g) for g in clean[group_col].unique()])
+    if len(groups) < 1:
+        return None
+
+    # Calculate group means per channel
+    group_means: dict[str, dict[str, float]] = {}
+    for g in groups:
+        g_df = clean[clean[group_col].astype(str) == g]
+        means = g_df.groupby(channel_col)[metric].mean()
+        group_means[g] = {ch: float(means.get(ch, np.nan)) for ch in matched.keys()}
+
+    # Check for significant channels in post-hoc contrasts
+    sig_channels = set()
+    for c in posthoc_contrasts:
+        p_val = c.get("p_adj", c.get("p_raw", 1.0))
+        if p_val < 0.05 and c.get("contrast_type") == "Group within Subgroup":
+            level = str(c.get("level", ""))
+            if level in matched:
+                sig_channels.add(level)
+
+    # Grid for interpolation
+    r = 0.5
+    xi, yi = np.mgrid[-0.55:0.55:120j, -0.55:0.55:120j]
+    mask = (xi**2 + yi**2) <= r**2
+
+    # Global min and max across groups for shared color scale
+    all_vals = [v for g in groups for v in group_means[g].values() if not math.isnan(v)]
+    if not all_vals:
+        return None
+    g_min, g_max = min(all_vals), max(all_vals)
+    if g_min == g_max:
+        g_min -= 0.1
+        g_max += 0.1
+
+    show_diff = len(groups) == 2
+    n_plots = 3 if show_diff else len(groups)
+
+    fig_w = max(3.8 * n_plots, 8.0)
+    fig, axes = plt.subplots(1, n_plots, figsize=(fig_w, 4.2), dpi=300)
+    if n_plots == 1:
+        axes = [axes]
+
+    pts = np.array([matched[ch] for ch in matched.keys()])
+
+    # Plot groups
+    for idx, g in enumerate(groups[:2] if show_diff else groups):
+        ax = axes[idx]
+        vals = np.array([group_means[g][ch] for ch in matched.keys()])
+
+        try:
+            rbf = scipy.interpolate.Rbf(pts[:, 0], pts[:, 1], vals, function="multiquadric", smooth=0.01)
+            zi = rbf(xi, yi)
+        except Exception:
+            zi = scipy.interpolate.griddata(pts, vals, (xi, yi), method="nearest")
+
+        zi[~mask] = np.nan
+        cf = ax.contourf(xi, yi, zi, levels=25, cmap="viridis", vmin=g_min, vmax=g_max)
+        ax.contour(xi, yi, zi, levels=6, colors="k", linewidths=0.4, alpha=0.3)
+
+        # Head outline
+        circle = plt.Circle((0, 0), r, color="black", fill=False, linewidth=2.0)
+        ax.add_patch(circle)
+        # Nose
+        ax.plot([-0.05, 0.0, 0.05], [0.49, 0.54, 0.49], color="black", linewidth=2.0)
+        # Ears
+        ax.plot([-0.505, -0.525, -0.505], [0.05, 0.0, -0.05], color="black", linewidth=1.5)
+        ax.plot([0.505, 0.525, 0.505], [0.05, 0.0, -0.05], color="black", linewidth=1.5)
+
+        # Electrode dots and labels
+        ax.scatter(pts[:, 0], pts[:, 1], color="black", s=28, zorder=5)
+        for ch, (x, y) in matched.items():
+            ax.text(x, y + 0.035, normalize_channel_name(ch), fontsize=8, ha="center", va="bottom", fontweight="bold")
+
+        ax.set_title(f"{g} (Mean)", fontsize=11, fontweight="bold", pad=8)
+        ax.set_xlim(-0.6, 0.6)
+        ax.set_ylim(-0.6, 0.6)
+        ax.set_aspect("equal")
+        ax.axis("off")
+        cbar = plt.colorbar(cf, ax=ax, fraction=0.046, pad=0.04)
+        cbar.ax.tick_params(labelsize=8)
+
+    # Difference plot if 2 groups
+    if show_diff:
+        ax = axes[2]
+        g1, g2 = groups[0], groups[1]
+        diff_vals = np.array([group_means[g2][ch] - group_means[g1][ch] for ch in matched.keys()])
+
+        max_abs = max(1e-4, float(np.max(np.abs(diff_vals))))
+        try:
+            rbf = scipy.interpolate.Rbf(pts[:, 0], pts[:, 1], diff_vals, function="multiquadric", smooth=0.01)
+            zi = rbf(xi, yi)
+        except Exception:
+            zi = scipy.interpolate.griddata(pts, diff_vals, (xi, yi), method="nearest")
+
+        zi[~mask] = np.nan
+        cf = ax.contourf(xi, yi, zi, levels=25, cmap="RdBu_r", vmin=-max_abs, vmax=max_abs)
+        ax.contour(xi, yi, zi, levels=6, colors="k", linewidths=0.4, alpha=0.3)
+
+        circle = plt.Circle((0, 0), r, color="black", fill=False, linewidth=2.0)
+        ax.add_patch(circle)
+        ax.plot([-0.05, 0.0, 0.05], [0.49, 0.54, 0.49], color="black", linewidth=2.0)
+        ax.plot([-0.505, -0.525, -0.505], [0.05, 0.0, -0.05], color="black", linewidth=1.5)
+        ax.plot([0.505, 0.525, 0.505], [0.05, 0.0, -0.05], color="black", linewidth=1.5)
+
+        ax.scatter(pts[:, 0], pts[:, 1], color="black", s=28, zorder=5)
+        for ch, (x, y) in matched.items():
+            norm_ch = normalize_channel_name(ch)
+            is_sig = ch in sig_channels or norm_ch in sig_channels
+            label = f"{norm_ch} *" if is_sig else norm_ch
+            color = "#d95f02" if is_sig else "black"
+            ax.text(x, y + 0.035, label, fontsize=8, ha="center", va="bottom", fontweight="bold", color=color)
+
+        ax.set_title(f"Difference ({g2} - {g1})", fontsize=11, fontweight="bold", pad=8)
+        ax.set_xlim(-0.6, 0.6)
+        ax.set_ylim(-0.6, 0.6)
+        ax.set_aspect("equal")
+        ax.axis("off")
+        cbar = plt.colorbar(cf, ax=ax, fraction=0.046, pad=0.04)
+        cbar.ax.tick_params(labelsize=8)
+
+    clean_metric_title = metric.replace("_", " ")
+    plt.suptitle(f"Topographic Scalp Distribution (Topoplot): {clean_metric_title}", fontsize=12, fontweight="bold", y=0.98)
+    plt.tight_layout()
+    output_png_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(str(output_png_path), dpi=300, bbox_inches="tight")
     plt.close(fig)
     return output_png_path
 
@@ -906,11 +1197,28 @@ def generate_docx_report(
 
             cap_p = doc.add_paragraph()
             cap_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            cap_p.paragraph_format.space_after = Pt(10)
-            cap_run = cap_p.add_run(f"Figure {idx}: Distribution and post-hoc pairwise comparisons for {clean_name}.")
+            cap_p.paragraph_format.space_after = Pt(8)
+            cap_run = cap_p.add_run(f"Figure {idx}A: Distribution and post-hoc pairwise comparisons for {clean_name}.")
             cap_run.font.size = Pt(8.5)
             cap_run.font.italic = True
             cap_run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+        # Embedded Topoplot (if generated)
+        topo_path = res.get("topoplot_path")
+        if topo_path and Path(topo_path).exists():
+            t_img_p = doc.add_paragraph()
+            t_img_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            t_img_p.paragraph_format.space_before = Pt(4)
+            t_img_p.paragraph_format.space_after = Pt(2)
+            doc.add_picture(str(topo_path), width=Inches(5.8))
+
+            t_cap_p = doc.add_paragraph()
+            t_cap_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            t_cap_p.paragraph_format.space_after = Pt(10)
+            t_cap_run = t_cap_p.add_run(f"Figure {idx}B: Topographic scalp distribution (Topoplot) across EEG derivations for {clean_name}.")
+            t_cap_run.font.size = Pt(8.5)
+            t_cap_run.font.italic = True
+            t_cap_run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
 
         # Model Effects Table (APA Style)
         if effects:
@@ -1088,8 +1396,14 @@ def generate_pdf_report(
         # Plot Image
         plot_path = plot_paths.get(metric)
         if plot_path and plot_path.exists():
-            story.append(RLImage(str(plot_path), width=5.2 * inch, height=3.2 * inch))
-            story.append(Paragraph(f"Figure {idx}: Distribution and post-hoc pairwise significance for {clean_name}.", caption_style))
+            story.append(RLImage(str(plot_path), width=5.2 * inch, height=3.0 * inch))
+            story.append(Paragraph(f"Figure {idx}A: Distribution and post-hoc pairwise significance for {clean_name}.", caption_style))
+
+        # Topoplot Image (if available)
+        topo_path = res.get("topoplot_path")
+        if topo_path and Path(topo_path).exists():
+            story.append(RLImage(str(topo_path), width=5.2 * inch, height=2.2 * inch))
+            story.append(Paragraph(f"Figure {idx}B: Topographic scalp distribution (Topoplot) across EEG derivations for {clean_name}.", caption_style))
 
         # Model Effects Table
         effects = res.get("model_effects", [])
@@ -1204,7 +1518,19 @@ def run_group_analysis(
     all_posthoc_contrasts: list[dict[str, Any]] = []
     all_descriptives: list[dict[str, Any]] = []
 
-    for m in target_metrics:
+    # Check topoplot feasibility once across the whole dataset
+    is_topo_feasible = False
+    if final_subgroup_col and final_subgroup_col in df.columns:
+        channels_in_df = [str(c) for c in df[final_subgroup_col].dropna().unique()]
+        is_topo_feasible, _ = check_topoplot_suitability(channels_in_df)
+
+    total_metrics = len(target_metrics)
+    for idx, m in enumerate(target_metrics):
+        fraction = (idx + 1) / max(1, total_metrics)
+        clean_name = m.replace("_", " ")
+        sys.stderr.write(f"PROGRESS {fraction:.2f} Analyzing {idx+1}/{total_metrics}: {clean_name}\n")
+        sys.stderr.flush()
+
         res = fit_statistical_model(
             df=df,
             metric=m,
@@ -1221,6 +1547,20 @@ def run_group_analysis(
             plot_file = plots_dir / f"{m}_plot.png"
             generate_publication_plot(res, df, plot_file)
             plot_paths[m] = plot_file
+
+            # Generate topoplot if channel distribution is suitable and not invariant macroarchitecture
+            if is_topo_feasible and not res.get("is_macroarchitecture", False):
+                topo_file = plots_dir / f"{m}_topoplot.png"
+                topo_res = generate_topoplot(
+                    raw_df=df,
+                    metric=m,
+                    group_col=final_group_col,
+                    channel_col=final_subgroup_col,
+                    posthoc_contrasts=res.get("posthoc_contrasts", []),
+                    output_png_path=topo_file,
+                )
+                if topo_res and topo_res.exists():
+                    res["topoplot_path"] = str(topo_res)
 
             for eff in res.get("model_effects", []):
                 all_model_effects.append({"metric": m, **eff})
@@ -1267,6 +1607,8 @@ def run_group_analysis(
     for r in analysis_results:
         clean_r = {k: v for k, v in r.items() if k != "data_sample"}
         clean_r["plot_path"] = str(plot_paths.get(r["metric"], ""))
+        if "topoplot_path" in r:
+            clean_r["topoplot_path"] = str(r["topoplot_path"])
         json_results.append(clean_r)
 
     final_payload = {

@@ -15,6 +15,18 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/arunsasidharan84/CCS_SleepStudio?style=for-the-badge&color=2563eb&label=RELEASE"></a>
+  <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/actions/workflows/build.yml"><img alt="Desktop build" src="https://img.shields.io/github/actions/workflow/status/arunsasidharan84/CCS_SleepStudio/build.yml?style=for-the-badge&label=BUILD"></a>
+  <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/arunsasidharan84/CCS_SleepStudio/total?style=for-the-badge&color=16a34a&label=DOWNLOADS"></a>
+</p>
+
+<p align="center">
+  <b>Current version: 1.30.0</b> ·
+  <a href="CHANGELOG.md">Detailed changelog</a> ·
+  <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/issues">Report a problem</a>
+</p>
+
+<p align="center">
   <a href="#-quick-download"><b>📥 Download App</b></a> &nbsp;•&nbsp;
   <a href="#about"><b>About</b></a> &nbsp;•&nbsp;
   <a href="#-key-features"><b>Key Features</b></a> &nbsp;•&nbsp;
@@ -29,20 +41,35 @@
 
 Pre-built standalone desktop installers and application bundles are published through GitHub Releases:
 
-| Platform | Variant | Package Type | Direct Download Link |
-| :--- | :--- | :--- | :--- |
-| **macOS** | **Full** | Universal ZIP | [CCSSleepStudio-macos.zip](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-macos.zip) |
-| | **Lite** | Universal ZIP | [CCSSleepStudio-lite-macos.zip](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-lite-macos.zip) |
-| **Windows** | **Full** | x64 Installer EXE | [CCSSleepStudio-Installer.exe](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-Installer.exe) |
-| | **Lite** | x64 Installer EXE | [CCSSleepStudio-lite-Installer.exe](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-lite-Installer.exe) |
-| **Linux (Debian / Ubuntu)** | **Full** | x64 DEB Installer | [CCSSleepStudio-linux-amd64.deb](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-linux-amd64.deb) |
-| | **Lite** | x64 DEB Installer | [CCSSleepStudio-lite-linux-amd64.deb](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-lite-linux-amd64.deb) |
-| **Linux (RHEL / AlmaLinux)** | **Full** | x86_64 RPM Installer | [CCSSleepStudio-linux-x86_64.rpm](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-linux-x86_64.rpm) |
-| | **Lite** | x86_64 RPM Installer | [CCSSleepStudio-lite-linux-x86_64.rpm](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-lite-linux-x86_64.rpm) |
+| Platform | Variant | Package Type | Extracted App / Binary | Direct Download Link |
+| :--- | :--- | :--- | :--- | :--- |
+| **macOS** | **Full** | Universal ZIP | **`CCS Sleep Studio.app`** | [CCSSleepStudio-macos.zip](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-macos.zip) |
+| | **Lite** | Universal ZIP | **`CCS Sleep Studio.app`** | [CCSSleepStudio-lite-macos.zip](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-lite-macos.zip) |
+| **Windows** | **Full** | x64 Installer EXE | `CCSSleepStudio-Installer.exe` | [CCSSleepStudio-Installer.exe](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-Installer.exe) |
+| | **Lite** | x64 Installer EXE | `CCSSleepStudio-lite-Installer.exe` | [CCSSleepStudio-lite-Installer.exe](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-lite-Installer.exe) |
+| **Linux (Debian / Ubuntu)** | **Full** | x64 DEB Installer | `ccs-sleep-studio` | [CCSSleepStudio-linux-amd64.deb](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-linux-amd64.deb) |
+| | **Lite** | x64 DEB Installer | `ccs-sleep-studio` | [CCSSleepStudio-lite-linux-amd64.deb](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-lite-linux-amd64.deb) |
+| **Linux (RHEL / AlmaLinux)** | **Full** | x86_64 RPM Installer | `ccs-sleep-studio` | [CCSSleepStudio-linux-x86_64.rpm](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-linux-x86_64.rpm) |
+| | **Lite** | x86_64 RPM Installer | `ccs-sleep-studio` | [CCSSleepStudio-lite-linux-x86_64.rpm](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest/download/CCSSleepStudio-lite-linux-x86_64.rpm) |
 
 > 📦 **All Releases & Checksums:** View all published packages and assets on the **[GitHub Releases Page](https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest)**.  
-> 🐧 **Automated Linux Workstations:** For one-line multi-user server installation, see [Quick Install for Linux](#-quick-install-for-linux-servers--multi-user-workstations).  
-> 🍏 **macOS Gatekeeper:** For first-time launch instructions, see [macOS Gatekeeper Setup](#for-macos-users).
+> 🐧 **Automated Linux Workstations:** For one-line multi-user server installation, see [Quick Install for Linux](#-quick-install-for-linux-servers--multi-user-workstations).
+
+#### 🍏 First-Time Launch for macOS Users (Gatekeeper Setup)
+
+When extracting `CCSSleepStudio-macos.zip` (or the Lite zip), macOS extracts **`CCS Sleep Studio.app`** into your `~/Downloads` folder. Because development builds are ad-hoc signed, macOS Gatekeeper blocks opening them by default.
+
+To enable the app, run the following in **Terminal**:
+
+```sh
+# 1. Clear Gatekeeper quarantine on the downloaded app:
+xattr -rd com.apple.quarantine ~/Downloads/CCS\ Sleep\ Studio.app
+
+# 2. Move to Applications folder:
+mv ~/Downloads/CCS\ Sleep\ Studio.app /Applications/
+```
+
+> **Tip (Finder alternative):** In Finder, **Right-click (or Control-click)** `CCS Sleep Studio.app` → select **Open** → click **Open** on the security confirmation prompt. You only need to do this once.
 
 <p align="center">
   <img src="screenshots/main.png" width="920" alt="CCS Sleep Studio Main Window">
@@ -63,14 +90,13 @@ Built from the ground up using **Flutter** for a lightweight, fluid UI and a nat
 
 ---
 
-## 🌟 What's New in Version 1.26.0
+## 🌟 What's New in Version 1.30.0
 
-* **Markers stay on screen after filtering:** Applying or changing display filters (or other settings) no longer removes markers and events from the waveform and hypnogram canvas.
-* **Instantaneous display filtering:** Display filters are calculated only for the active visible window (with a real-signal buffer to prevent edge artifacts) using flat, allocation-free buffers and cached filter designs. Window redraws are instant with zero scrolling freeze on multi-channel recordings.
-* **On-demand full-night spectrogram:** The full-night spectrogram (and its associated SWA trace) is toggleable via the toolbar **spectrogram [ON/OFF]** button, keeping initial file loading lightning fast while epoch spectra remain active.
-* **Duration indicators under selection boxes:** When multiple regions are selected with the mouse, each box displays its individual duration underneath, with cumulative duration ($\Sigma$) shown under the final selection box.
-* **Right-click channel management:** Right-click any channel trace or label to hide it, restore hidden channels individually or collectively, or jump straight to channel settings.
-* **Direct filter settings shortcut:** Dedicated toolbar button opens the Filters configuration tab with one click.
+* **Macroarchitecture Channel-Invariance:** Whole-night sleep macroarchitecture metrics (sleep efficiency, total sleep time, WASO, sleep onset latency, stage percentages/latencies) are recognized as channel-invariant global metrics, preventing sample size inflation. Automatically modeled at the subject/recording level using GLM/ANOVA with single-factor publication plots.
+* **2D EEG Scalp Topoplot Generator:** Automatically computes and renders 2D scalp topographic maps (topoplots) for channel-level metrics whenever at least 4 channels with sufficient spatial coverage are available (10-20 system, multiquadric RBF interpolation). Generates group mean topoplots and difference maps with annotated significance markers (`*`), embedded directly into the in-app interactive viewer, Word (`.docx`), and PDF reports.
+* **Live Progress Indicators for Batch Operations:** Animated progress bars and real-time status tracking (`0%–100%`) across Group Statistical Analysis and Batch Scoring Comparison dialogs.
+* **Batch Scoring "Clear All":** Added one-click "Clear All" action to the Batch Scoring Comparison top action bar alongside "Auto-Pair 2 Folders…" and "Add Pair".
+* **Flexible Nomenclature & Metadata:** Full support for newer CSV nomenclature (`groupID`, `ageID`, `napID`, `Subject_Code`, `Cyc*`, `CAP_*`, datastamped files) and intelligent classification of categorical vs continuous variables.
 
 > 📜 For older release highlights and detailed historical changes, see the complete **[CHANGELOG.md](CHANGELOG.md)**.
 

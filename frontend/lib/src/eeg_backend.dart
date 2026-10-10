@@ -1018,12 +1018,14 @@ class AppConfig {
     if (channelCount == 9 && (index == 1 || index == 3 || index == 5)) {
       display = false;
     }
-    return ChannelConfig(
+    final ch = ChannelConfig(
       name: name,
       sourceIndex: index,
       color: color,
       displayOnScreen: display,
     );
+    applyAasmFiltersToChannel(ch);
+    return ch;
   }
 
   static ChannelConfig _defaultChannelConfig(
@@ -1148,6 +1150,13 @@ class AppConfig {
       channel.filterHpOrder = channel.filterHpOrder.clamp(1, 10);
       channel.filterLpOrder = channel.filterLpOrder.clamp(1, 10);
       channel.filterNotchOrder = channel.filterNotchOrder.clamp(1, 10);
+    }
+
+    final hasAnyFilterConfigured = channels.any(
+      (c) => c.filterHpEnabled || c.filterLpEnabled,
+    );
+    if (!hasAnyFilterConfigured) {
+      applyAasmFiltersToAll(channels);
     }
 
     if (channels.isNotEmpty) {
@@ -3367,14 +3376,17 @@ class EegBackend {
     }
     if (cfg.filterLpEnabled &&
         cfg.filterLpCutoff > 0.1 &&
-        cfg.filterLpCutoff < nyquist) {
-      sos.addAll(sp.designCheby2SOS(
-        order: cfg.filterLpOrder,
-        rs: 60.0,
-        cutoff: cfg.filterLpCutoff.clamp(0.1, nyquist - 0.5).toDouble(),
-        sampleRate: sampleRate,
-        btype: 'lowpass',
-      ));
+        nyquist > 1.0) {
+      final safeCutoff = math.min(cfg.filterLpCutoff, nyquist - 0.5);
+      if (safeCutoff > 0.1) {
+        sos.addAll(sp.designCheby2SOS(
+          order: cfg.filterLpOrder,
+          rs: 60.0,
+          cutoff: safeCutoff,
+          sampleRate: sampleRate,
+          btype: 'lowpass',
+        ));
+      }
     }
     if (cfg.filterNotchEnabled &&
         cfg.filterNotchCutoff > 1.0 &&

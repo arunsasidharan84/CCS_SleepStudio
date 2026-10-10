@@ -925,8 +925,12 @@ ChannelModality detectChannelModality(String rawLabel) {
       lower.startsWith('chin') ||
       lower.startsWith('submental') ||
       lower.startsWith('leg') ||
+      lower.startsWith('lat') ||
+      lower.startsWith('rat') ||
+      lower.startsWith('tib') ||
       lower.contains('chin') ||
-      lower.contains('emg')) {
+      lower.contains('emg') ||
+      lower.contains('tibial')) {
     return ChannelModality.emg;
   }
   if (lower.startsWith('ecg') ||
@@ -1003,5 +1007,50 @@ String channelModalityLabel(ChannelModality modality) {
     ChannelModality.respiratory => 'Respiratory',
     ChannelModality.other => 'Same-Type',
   };
+}
+
+/// Configures high-pass and low-pass display filters according to AASM guidelines:
+/// - EEG: 0.3 Hz HP, 35.0 Hz LP
+/// - EOG: 0.3 Hz HP, 35.0 Hz LP
+/// - ECG: 0.3 Hz HP, 35.0 Hz LP
+/// - EMG: 10.0 Hz HP, 100.0 Hz LP
+/// - Respiratory / other: left disabled to avoid baseline distortion
+void applyAasmFiltersToChannel(ChannelConfig channel) {
+  var modality = detectChannelModality(channel.name);
+  if (modality == ChannelModality.other && channel.sourceChannel != null) {
+    modality = detectChannelModality(channel.sourceChannel!);
+  }
+  switch (modality) {
+    case ChannelModality.eeg:
+    case ChannelModality.eog:
+    case ChannelModality.ecg:
+      channel.filterHpEnabled = true;
+      channel.filterHpCutoff = 0.3;
+      channel.filterHpOrder = 4;
+      channel.filterLpEnabled = true;
+      channel.filterLpCutoff = 35.0;
+      channel.filterLpOrder = 4;
+      break;
+    case ChannelModality.emg:
+      channel.filterHpEnabled = true;
+      channel.filterHpCutoff = 10.0;
+      channel.filterHpOrder = 4;
+      channel.filterLpEnabled = true;
+      channel.filterLpCutoff = 100.0;
+      channel.filterLpOrder = 4;
+      break;
+    case ChannelModality.respiratory:
+    case ChannelModality.other:
+      channel.filterHpEnabled = false;
+      channel.filterLpEnabled = false;
+      break;
+  }
+}
+
+/// Applies AASM guideline display filters to all channels in [channels].
+void applyAasmFiltersToAll(Iterable<ChannelConfig> channels) {
+  for (final channel in channels) {
+    applyAasmFiltersToChannel(channel);
+  }
 }
 

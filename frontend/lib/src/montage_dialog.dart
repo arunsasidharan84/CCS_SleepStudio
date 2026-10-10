@@ -931,6 +931,9 @@ List<ChannelConfig> generateMontagePresetChannels({
   }
 
   if (newChannels.isNotEmpty) {
+    for (final ch in newChannels) {
+      applyAasmFiltersToChannel(ch);
+    }
     // Keep non-montage channels at the bottom with displayOnScreen = false
     // so that ONLY the clean montage channels are displayed on screen.
     for (final orig in baseList) {

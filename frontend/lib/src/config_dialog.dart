@@ -2154,8 +2154,8 @@ class _FilterDialogState extends State<FilterDialog> {
                     SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'ℹ High-pass, low-pass, or notch-filter a given EEG channel using a Chebyshev Type 2 filter. '
-                        'Filters affect only the displayed EEG signal, not any power computations.',
+                        'ℹ Display filters follow AASM guidelines: 0.3–35 Hz for EEG, EOG, and ECG; 10–100 Hz for EMG. '
+                        'Filters use zero-phase Chebyshev Type 2 filtering and affect displayed waveforms only, not power computations.',
                         style: TextStyle(fontSize: 12, color: Colors.black87),
                       ),
                     ),
@@ -2163,16 +2163,37 @@ class _FilterDialogState extends State<FilterDialog> {
                 ),
               ),
             ),
-            CheckboxListTile(
-              dense: true,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-              title: const Text('Apply changes to all channels'),
-              value: _applyAllChannels,
-              onChanged: (v) {
-                setState(() {
-                  _applyAllChannels = v ?? false;
-                });
-              },
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Apply manual edits to all channels'),
+                      value: _applyAllChannels,
+                      onChanged: (v) {
+                        setState(() {
+                          _applyAllChannels = v ?? false;
+                        });
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  FilledButton.tonalIcon(
+                    icon: const Icon(Icons.auto_fix_high, size: 16),
+                    label: const Text(
+                      'Auto-apply AASM Guidelines (0.3–35 Hz EEG/EOG/ECG, 10–100 Hz EMG)',
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        applyAasmFiltersToAll(_working.channels);
+                      });
+                    },
+                  ),
+                ],
+              ),
             ),
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 12),

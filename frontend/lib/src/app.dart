@@ -15620,7 +15620,7 @@ class _ShortcutsHelpDialog extends StatelessWidget {
                   ('V', 'Toggle Synchronized Video playback panel'),
                   ('M', 'Open Markers & Annotations Manager'),
                   ('Ctrl+C / Cmd+C', 'Open Configuration dialog'),
-                  ('Ctrl+F / Cmd+F', 'Open Filters dialog'),
+                  ('Ctrl+F / Cmd+F', 'Open Filters dialog (AASM 0.3–35 Hz EEG/EOG/ECG, 10–100 Hz EMG auto-applied)'),
                   ('Ctrl+K / Cmd+K', 'Run K-Complex auto-detection'),
                   ('Ctrl+Shift+S', 'Run Sleep Spindle auto-detection'),
                   ('Ctrl+H / ?', 'Open this Keyboard Shortcuts & Controls help'),

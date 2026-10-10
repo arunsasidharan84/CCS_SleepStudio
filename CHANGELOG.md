@@ -4,6 +4,24 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.30.1]
+*   **Windows In-App Updater Resilience & Certificate Bypass:**
+    - Resolved `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` during in-app updates on Windows by supporting SSL cert bypass for GitHub/AWS domains, chained HTTP redirects (up to 10 redirects), and built-in `curl.exe -L -k` / PowerShell `Invoke-WebRequest` fallback.
+    - Added a prominent "Download via Browser" button in the update dialog so users can download releases directly via their default web browser if firewall or SSL proxies block native downloads.
+*   **CAP Analysis Metrics in Individual Regional CSVs:**
+    - Fixed missing CAP analysis metrics in individual regional CSVs (`*_analyse_regional.csv`). Companion `*_cap.json` metrics (`CAP_rate`, `CAP_A_index`, `CAP_A1_index`, etc.) are now automatically injected into individual regional CSVs upon completion as well as compiled master sheets.
+    - Fallback automatically to the first Central or Frontal channel (`C3/C4/F3/F4`) when `--eeg` is blank for CAP analysis.
+    - Added companion `_cap.json` auto-discovery and merging in `group_stats.py`.
+*   **Re-organized Batch Analysis Workspace (Inspired by CCS_EEGStudio):**
+    - Added a workspace top banner with queue status chips (`X recordings queued`, `Y scored`, `Z preprocessed`, `Master sheet ready`).
+    - Added quick action controls: `[Master CSV]`, `[Output Folder]`, `[Group Statistics]`, and `[Run Full Pipeline]`.
+    - Elevated and streamlined the workflow stages with clear stage switching and pipeline execution.
+*   **Channel Montage & Referencing Manager Accessibility:**
+    - Added a dedicated "Channel Montage & Referencing Manager" accessible with 1 click directly from the main toolbar (`Montage` button) and from the `Configuration` and `Data` menus without needing to navigate complex config settings.
+    - Features standard clinical presets (AASM Sleep Standard, Longitudinal Bipolar / Double Banana, Transverse Bipolar, Contralateral Mastoids, Monopolar Reset), quick derivation builder with active/reference channel selection and polarity invert, and Save/Load custom montage presets (`.json`).
+
+---
+
 ## [1.30.0]
 *   **Macroarchitecture Channel-Invariance:** Whole-night sleep macroarchitecture metrics (sleep efficiency, total sleep time, WASO, sleep onset latency, stage percentages/latencies, etc.) are recognized as channel-invariant global metrics. Redundant channel subdivision is eliminated, preventing sample size inflation. Macroarchitecture metrics are automatically modeled at the subject/recording level using GLM/ANOVA and rendered as clean single-factor publication plots.
 *   **2D EEG Scalp Topoplot Generator:** Automatically computes and renders 2D scalp topographic maps (topoplots) for channel-level metrics whenever at least 4 channels with sufficient spatial coverage are available (using standard 10-20 coordinates and smooth multiquadric RBF interpolation). Generates group mean topoplots and difference maps with annotated post-hoc significance markers (`*`), embedded directly into the in-app interactive viewer, Word (`.docx`), and PDF reports.

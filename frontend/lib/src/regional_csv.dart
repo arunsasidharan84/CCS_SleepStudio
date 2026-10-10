@@ -174,6 +174,12 @@ Future<String> compileRegionalCsvFiles(
       }
     }
 
+    // Also persist CAP metrics directly into the individual regional CSV
+    // so standalone inspections of *_analyse_regional.csv contain CAP data.
+    if (capSummary.isNotEmpty) {
+      await updateRegionalCsvWithCapMetrics(file, capSummary);
+    }
+
     for (final row in parsed) {
       for (final key in row.keys) {
         if (!headers.contains(key)) headers.add(key);
@@ -202,6 +208,38 @@ Future<String> compileRegionalCsvFiles(
     );
   }
   return buffer.toString();
+}
+
+/// Injects or updates companion CAP metrics directly into a regional CSV file.
+Future<void> updateRegionalCsvWithCapMetrics(
+  File file,
+  Map<String, String> capSummary,
+) async {
+  if (capSummary.isEmpty || !file.existsSync()) return;
+  try {
+    final raw = await file.readAsString();
+    final parsed = parseCsvTable(raw);
+    if (parsed.isEmpty) return;
+    if (parsed.first.containsKey('CAP_rate') &&
+        (parsed.first['CAP_rate'] ?? '').isNotEmpty) {
+      return; // Already present with valid data
+    }
+
+    final existingHeaders = parsed.first.keys.toList();
+    final newHeaders = <String>[...existingHeaders];
+    for (final k in capSummary.keys) {
+      if (!newHeaders.contains(k)) newHeaders.add(k);
+    }
+
+    final buf = StringBuffer()..writeln(newHeaders.map(_escapeCsv).join(','));
+    for (final row in parsed) {
+      final combined = {...row, ...capSummary};
+      buf.writeln(newHeaders.map((h) => _escapeCsv(combined[h] ?? '')).join(','));
+    }
+    await file.writeAsString(buf.toString());
+  } catch (e) {
+    stderr.writeln('Could not update regional CSV with CAP metrics: $e');
+  }
 }
 
 String resolveRegionalCsvEdfPath(

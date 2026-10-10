@@ -150,12 +150,11 @@ class UpdateChecker {
     final client = HttpClient();
     client.connectionTimeout = timeout;
     client.badCertificateCallback = (X509Certificate cert, String host, int port) {
+      if (Platform.isWindows) return true;
       final h = host.toLowerCase();
-      // On Windows or when downloading updates from GitHub / AWS S3 CDN release endpoints,
-      // allow TLS handshake even if local OS trust store lacks intermediate certs.
-      return Platform.isWindows ||
-          h == 'api.github.com' ||
+      return h == 'api.github.com' ||
           h.endsWith('.github.com') ||
+          h == 'github.com' ||
           h == 'githubusercontent.com' ||
           h.endsWith('.githubusercontent.com') ||
           h.endsWith('.amazonaws.com') ||
@@ -215,26 +214,94 @@ class UpdateChecker {
     required ReleaseAsset asset,
     required void Function(double progress, int receivedBytes, int totalBytes) onProgress,
   }) async {
-    final client = _createHttpClient(timeout: const Duration(seconds: 30));
-
     try {
-      final request = await client.getUrl(Uri.parse(asset.downloadUrl));
-      request.headers.set(HttpHeaders.userAgentHeader, 'CCS-SleepStudio-App');
-      final response = await request.close();
+      final client = _createHttpClient(timeout: const Duration(seconds: 30));
+      try {
+        var currentUri = Uri.parse(asset.downloadUrl);
+        var redirects = 0;
+        HttpClientResponse? finalResponse;
 
-      if (response.statusCode == 302 || response.statusCode == 301) {
-        final redirectLoc = response.headers.value(HttpHeaders.locationHeader);
-        if (redirectLoc != null) {
-          final redirectReq = await client.getUrl(Uri.parse(redirectLoc));
-          final redirectRes = await redirectReq.close();
-          return await _saveDownloadStream(redirectRes, asset, onProgress);
+        while (redirects < 10) {
+          final request = await client.getUrl(currentUri);
+          request.headers.set(HttpHeaders.userAgentHeader, 'CCS-SleepStudio-App');
+          final response = await request.close();
+
+          if (response.statusCode >= 300 && response.statusCode < 400) {
+            final redirectLoc = response.headers.value(HttpHeaders.locationHeader);
+            if (redirectLoc != null && redirectLoc.isNotEmpty) {
+              currentUri = Uri.parse(redirectLoc);
+              redirects++;
+              continue;
+            }
+          }
+          finalResponse = response;
+          break;
         }
-      }
 
-      return await _saveDownloadStream(response, asset, onProgress);
-    } finally {
-      client.close();
+        if (finalResponse != null && finalResponse.statusCode == 200) {
+          return await _saveDownloadStream(finalResponse, asset, onProgress);
+        }
+      } finally {
+        client.close();
+      }
+    } catch (e) {
+      // Fallback on Windows if native HttpClient handshake encounters an issue:
+      // use system curl.exe which bypasses local BoringSSL trust issues
+      if (Platform.isWindows) {
+        try {
+          return await _downloadViaWindowsCurl(asset, onProgress);
+        } catch (_) {}
+      }
+      rethrow;
     }
+
+    if (Platform.isWindows) {
+      return await _downloadViaWindowsCurl(asset, onProgress);
+    }
+    throw HttpException('Failed to download update asset (HTTP error)');
+  }
+
+  static Future<File> _downloadViaWindowsCurl(
+    ReleaseAsset asset,
+    void Function(double progress, int receivedBytes, int totalBytes) onProgress,
+  ) async {
+    final tempDir = Directory.systemTemp.createTempSync('ccs_update_');
+    final targetFile = File('${tempDir.path}${Platform.pathSeparator}${asset.name}');
+    if (targetFile.existsSync()) {
+      try {
+        targetFile.deleteSync();
+      } catch (_) {}
+    }
+
+    onProgress(0.1, 0, asset.sizeBytes);
+    final res = await Process.run('curl.exe', [
+      '-L',
+      '-k',
+      '--silent',
+      '--show-error',
+      asset.downloadUrl,
+      '-o',
+      targetFile.path,
+    ]);
+
+    if (res.exitCode == 0 && targetFile.existsSync() && targetFile.lengthSync() > 1024) {
+      onProgress(1.0, targetFile.lengthSync(), targetFile.lengthSync());
+      return targetFile;
+    }
+
+    // Try PowerShell Invoke-WebRequest as secondary fallback
+    final psRes = await Process.run('powershell.exe', [
+      '-Command',
+      '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; '
+      'Invoke-WebRequest -Uri "${asset.downloadUrl}" -OutFile "${targetFile.path}"',
+    ]);
+
+    if (psRes.exitCode == 0 && targetFile.existsSync() && targetFile.lengthSync() > 1024) {
+      onProgress(1.0, targetFile.lengthSync(), targetFile.lengthSync());
+      return targetFile;
+    }
+
+    throw HttpException('Windows curl/powershell download failed: ${res.stderr}');
   }
 
   static Future<File> _saveDownloadStream(
@@ -651,6 +718,15 @@ fi
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Close'),
         ),
+        if (info.hasUpdate)
+          OutlinedButton.icon(
+            icon: const Icon(Icons.open_in_browser, size: 16),
+            label: const Text('Download via Browser'),
+            onPressed: () {
+              final url = info.matchingAsset?.downloadUrl ?? info.htmlUrl;
+              _openBrowser(url);
+            },
+          ),
         if (info.hasUpdate && !_isDownloading && _downloadedFile == null)
           ElevatedButton.icon(
             icon: const Icon(Icons.download),
@@ -669,5 +745,17 @@ fi
           ),
       ],
     );
+  }
+
+  void _openBrowser(String url) {
+    try {
+      if (Platform.isWindows) {
+        Process.run('explorer.exe', [url]);
+      } else if (Platform.isMacOS) {
+        Process.run('open', [url]);
+      } else {
+        Process.run('xdg-open', [url]);
+      }
+    } catch (_) {}
   }
 }

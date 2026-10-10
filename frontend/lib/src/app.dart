@@ -39,6 +39,7 @@ import 'nihon_kohden.dart';
 import 'batch_metadata.dart';
 import 'timeline_painter.dart';
 import 'group_statistics.dart';
+import 'montage_dialog.dart';
 
 const double _plotLeftPadding = 90.0;
 const bool buildLite = bool.fromEnvironment('LITE_BUILD', defaultValue: false);
@@ -6120,6 +6121,51 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
+  void _openMontageDialog() {
+    final eeg = _loadedEeg;
+    final available = eeg?.channelLabels ??
+        (_config.channels.isNotEmpty
+            ? _config.channels.map((c) => c.name).toList()
+            : const <String>[]);
+    showDialog<void>(
+      context: context,
+      builder: (_) => MontageDialog(
+        config: _config,
+        availableChannels: available,
+        onApply: (newCfg) {
+          final oldCfg = _config;
+          setState(() {
+            _config = newCfg;
+          });
+          if (_activePath != null) {
+            unawaited(saveAutoConfig(_activePath!, newCfg));
+          }
+          final eeg = _loadedEeg;
+          final v = _viewport;
+          if (eeg != null && v != null) {
+            final displayChanged = !_sameChannelConfig(oldCfg.channels, newCfg.channels);
+            if (displayChanged) _backend.clearDisplayCache();
+            final current = _viewport ?? v;
+            final base = displayChanged
+                ? _backend.rebuildViewportForEpochSync(
+                    current,
+                    eeg,
+                    current.currentEpoch,
+                    config: newCfg,
+                  )
+                : current;
+            setState(() {
+              _viewport = base;
+              _status = 'Montage applied (${newCfg.channels.where((c) => c.displayOnScreen).length} visible channels)';
+            });
+          } else {
+            _setStatus('Montage configuration updated');
+          }
+        },
+      ),
+    );
+  }
+
   bool _configRequiresDisplayRecompute(AppConfig oldCfg, AppConfig newCfg) {
     if (!_sameNightChannelConfig(oldCfg.channels, newCfg.channels)) return true;
     return oldCfg.spectrogramEnabled != newCfg.spectrogramEnabled ||
@@ -6873,6 +6919,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             },
           ),
           PlatformMenuItem(
+            label: 'Montage & Bipolar Derivations…',
+            onSelected: _openMontageDialog,
+          ),
+          PlatformMenuItem(
             label: 'Close Current File',
             onSelected: _closeCurrentFile,
           ),
@@ -7083,6 +7133,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             onSelected: _openConfigDialog,
           ),
           PlatformMenuItem(
+            label: 'Channel Montage & Referencing Manager…',
+            onSelected: _openMontageDialog,
+          ),
+          PlatformMenuItem(
             label: 'Feature Selection & Parameter Configuration…',
             onSelected: _openFeatureSelectionAndConfigDialog,
           ),
@@ -7245,6 +7299,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   }
                 },
                 child: const Text('Reload Companion Video Series'),
+              ),
+              const Divider(height: 1),
+              MenuItemButton(
+                onPressed: _openMontageDialog,
+                child: const Text('Montage & Bipolar Derivations…'),
               ),
               const Divider(height: 1),
               MenuItemButton(
@@ -7458,6 +7517,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               MenuItemButton(
                 onPressed: _openConfigDialog,
                 child: const Text('Open Settings Dialog [Ctrl+,]'),
+              ),
+              MenuItemButton(
+                onPressed: _openMontageDialog,
+                child: const Text('Channel Montage & Referencing Manager…'),
               ),
               MenuItemButton(
                 onPressed: _openFeatureSelectionAndConfigDialog,
@@ -8038,6 +8101,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       }
       if (_batchPsgCap) {
         final capEeg = _batchPsgCapEegController.text.trim();
+        final effectiveCapEeg = capEeg.isNotEmpty
+            ? capEeg
+            : (chans.isNotEmpty
+                ? chans.firstWhere(
+                    (c) => RegExp(r'(C|F)[z0-9]', caseSensitive: false).hasMatch(c),
+                    orElse: () => chans.first,
+                  )
+                : '');
         steps.add(
           PipelineStep(
             key: 'cap',
@@ -8047,6 +8118,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 throw PipelineSkip('no scoring file');
               }
               final input = featureInput(r);
+              final capOutPath = '${outDir ?? File(r.source).parent.path}${Platform.pathSeparator}'
+                  '${_basename(r.source).replaceAll(RegExp(r'\.[^.]+$'), '')}_cap.json';
               return [
                 '--cap',
                 input,
@@ -8054,14 +8127,44 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 r.scoring,
                 '--sensitivity',
                 _batchPsgCapSensitivity,
-                if (capEeg.isNotEmpty) ...['--eeg', capEeg],
+                if (effectiveCapEeg.isNotEmpty) ...['--eeg', effectiveCapEeg],
                 if (outDir != null) ...['--out-dir', outDir],
                 // Name the result after the original recording so the
                 // viewer finds it even when CAP ran on the cleaned copy.
                 '--out',
-                '${outDir ?? File(r.source).parent.path}${Platform.pathSeparator}'
-                    '${_basename(r.source).replaceAll(RegExp(r'\.[^.]+$'), '')}_cap.json',
+                capOutPath,
               ];
+            },
+            onSuccess: (r, log) {
+              final capOut = pipelineOutputFromLog(log, 'CAP') ??
+                  '${outDir ?? File(r.source).parent.path}${Platform.pathSeparator}'
+                  '${_basename(r.source).replaceAll(RegExp(r'\.[^.]+$'), '')}_cap.json';
+              final regPath = r.regional ??
+                  (() {
+                    final input = featureInput(r);
+                    final stem = _basename(input).replaceAll(RegExp(r'\.[^.]+$'), '');
+                    final dir = outDir ?? File(input).parent.path;
+                    return '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
+                  })();
+              final cFile = File(capOut);
+              final rFile = File(regPath);
+              if (cFile.existsSync() && rFile.existsSync()) {
+                try {
+                  final decoded = jsonDecode(cFile.readAsStringSync());
+                  if (decoded is Map && decoded['summary'] is Map) {
+                    final sum = decoded['summary'] as Map;
+                    final capMap = <String, String>{};
+                    for (final e in sum.entries) {
+                      final k = e.key.toString();
+                      final v = e.value;
+                      final col = k.toUpperCase().startsWith('CAP_') ? k : 'CAP_$k';
+                      final val = v is num ? (v.isFinite ? v.toStringAsFixed(3) : '') : (v?.toString() ?? '');
+                      capMap[col] = val;
+                    }
+                    unawaited(updateRegionalCsvWithCapMetrics(rFile, capMap));
+                  }
+                } catch (_) {}
+              }
             },
           ),
         );
@@ -8182,13 +8285,231 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       (Icons.compare_arrows, '4  Scoring comparison'),
       (Icons.analytics_outlined, '5  Group statistics'),
     ];
+    final totalQueued = _batchAnalysePairs.length;
     final scored = _batchAnalysePairs.where((p) => (p['scoringPath'] ?? '').isNotEmpty).length;
+    final autoscored = _batchAnalysePairs.where((p) => (p['autoScoringPath'] ?? '').isNotEmpty).length;
+    final cleaned = _batchAnalysePairs.where((p) {
+      final c = p['cleanedPath'] ?? '';
+      final e = p['eegPath'] ?? '';
+      return (c.isNotEmpty && File(c).existsSync()) ||
+          (e.isNotEmpty && File(_pipelineCleanedPathFor(e)).existsSync());
+    }).length;
+    final hasMaster = _lastBatchMasterSheetPath != null &&
+        File(_lastBatchMasterSheetPath!).existsSync();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // Workspace Top Banner inspired by CCS_EEGStudio
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+          decoration: const BoxDecoration(
+            color: Color(0xFF0F172A),
+            border: Border(bottom: BorderSide(color: Color(0xFF1E293B))),
+          ),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(5),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF38BDF8).withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                  child: const Icon(
+                    Icons.queue_play_next,
+                    size: 16,
+                    color: Color(0xFF38BDF8),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                const Text(
+                  'BATCH WORKSPACE',
+                  style: TextStyle(
+                    color: Color(0xFF38BDF8),
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.9,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Status badges
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
+                  decoration: BoxDecoration(
+                    color: totalQueued > 0 ? const Color(0xFF1E293B) : const Color(0xFF334155),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF475569)),
+                  ),
+                  child: Text(
+                    '$totalQueued queued',
+                    style: const TextStyle(
+                      color: Color(0xFFF1F5F9),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                if (totalQueued > 0) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
+                    decoration: BoxDecoration(
+                      color: scored == totalQueued ? const Color(0x2210B981) : const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: scored == totalQueued ? const Color(0xFF10B981) : const Color(0xFF475569),
+                      ),
+                    ),
+                    child: Text(
+                      '$scored scored',
+                      style: TextStyle(
+                        color: scored == totalQueued ? const Color(0xFF34D399) : const Color(0xFF94A3B8),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                if (cleaned > 0) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF475569)),
+                    ),
+                    child: Text(
+                      '$cleaned cleaned',
+                      style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+                    ),
+                  ),
+                ],
+                if (autoscored > 0) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF475569)),
+                    ),
+                    child: Text(
+                      '$autoscored autoscored',
+                      style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+                    ),
+                  ),
+                ],
+                if (hasMaster) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
+                    decoration: BoxDecoration(
+                      color: const Color(0x22059669),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF10B981)),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.check_circle, size: 12, color: Color(0xFF34D399)),
+                        SizedBox(width: 4),
+                        Text(
+                          'Master sheet ready',
+                          style: TextStyle(
+                            color: Color(0xFF34D399),
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+              const SizedBox(width: 24),
+              // Quick Actions
+              if (hasMaster) ...[
+                OutlinedButton.icon(
+                  onPressed: () => _openFile(_lastBatchMasterSheetPath!),
+                  icon: const Icon(Icons.table_chart_outlined, size: 14),
+                  label: const Text('Master CSV', style: TextStyle(fontSize: 11.5)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF38BDF8),
+                    side: const BorderSide(color: Color(0xFF0284C7)),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
+              if (_pipelineOutDir() != null || totalQueued > 0) ...[
+                OutlinedButton.icon(
+                  onPressed: () {
+                    final out = _pipelineOutDir();
+                    if (out != null && Directory(out).existsSync()) {
+                      _openFile(out);
+                    } else if (_batchAnalysePairs.isNotEmpty) {
+                      final first = _batchAnalysePairs.first['eegPath'] ?? '';
+                      if (first.isNotEmpty) {
+                        final parent = File(first).parent.path;
+                        if (Directory(parent).existsSync()) _openFile(parent);
+                      }
+                    }
+                  },
+                  icon: const Icon(Icons.folder_open_outlined, size: 14),
+                  label: const Text('Output Folder', style: TextStyle(fontSize: 11.5)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF94A3B8),
+                    side: const BorderSide(color: Color(0xFF475569)),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
+              TextButton.icon(
+                onPressed: () => setState(() => _batchSection = 4),
+                icon: const Icon(Icons.analytics_outlined, size: 15),
+                label: const Text('Group Statistics', style: TextStyle(fontSize: 11.5)),
+                style: TextButton.styleFrom(
+                  foregroundColor: _batchSection == 4 ? const Color(0xFF38BDF8) : const Color(0xFFCBD5E1),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: totalQueued == 0
+                    ? null
+                    : () {
+                        setState(() => _batchSection = 1);
+                        _runEegPipeline(
+                          {'preprocess', 'features', 'compile'},
+                          autoscoreMissingOnly: true,
+                        );
+                      },
+                icon: const Icon(Icons.play_circle_filled, size: 15),
+                label: const Text(
+                  'Run Full Pipeline',
+                  style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold),
+                ),
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF10B981),
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: const Color(0xFF334155),
+                  padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      // Section Navigation
         Container(
           color: Colors.white,
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          padding: const EdgeInsets.fromLTRB(16, 9, 16, 9),
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
@@ -9727,6 +10048,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                         onDisagreement: _jumpNextDisagreement,
                         hasComparison: _comparisonStages != null,
                         onConfig: _openConfigDialog,
+                        onMontage: _openMontageDialog,
                         swaSlider: _swaSlider,
                         onSwaSlider: (v) => setState(() => _swaSlider = v),
                         onToggleUncertainty: _toggleUncertainty,
@@ -9994,6 +10316,7 @@ class _Toolbar extends StatefulWidget {
     required this.onToggleWavelet,
     this.spectrogramEnabled = false,
     this.onToggleSpectrogram,
+    this.onMontage,
     this.onFilter,
     this.onOverlayChanged,
     this.onOpenMarkers,
@@ -10033,6 +10356,9 @@ class _Toolbar extends StatefulWidget {
   final VoidCallback onToggleWavelet;
   final bool spectrogramEnabled;
   final VoidCallback? onToggleSpectrogram;
+
+  /// Opens the dedicated Channel Montage & Referencing Manager dialog.
+  final VoidCallback? onMontage;
 
   /// Opens the configuration dialog on its Filters tab.
   final VoidCallback? onFilter;
@@ -10460,6 +10786,12 @@ class _ToolbarState extends State<_Toolbar> {
                 tooltip: 'Toggle uncertainty for current epoch',
                 enabled: enabled,
                 onPressed: widget.onToggleUncertainty,
+              ),
+              _ToolButton(
+                label: 'montage',
+                tooltip: 'Channel Montage & Referencing Manager (AASM sleep, bipolar double banana, CAR, custom derivations)',
+                enabled: enabled && widget.onMontage != null,
+                onPressed: widget.onMontage ?? () {},
               ),
               _ToolButton(
                 label: 'config',

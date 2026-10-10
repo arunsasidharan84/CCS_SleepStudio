@@ -1441,6 +1441,41 @@ def generate_pdf_report(
 
 # ─── MAIN ORCHESTRATION ─────────────────────────────────────────────────────
 
+def load_and_merge_cap_sidecars(df: pd.DataFrame, csv_path: Path) -> pd.DataFrame:
+    """Discovers companion *_cap.json files beside regional CSV or recording files and merges CAP metrics."""
+    if any(c.startswith("CAP_") for c in df.columns):
+        return df
+
+    cap_candidates = []
+    stem = csv_path.name
+    if stem.lower().endswith("_analyse_regional.csv"):
+        base_stem = stem[:-len("_analyse_regional.csv")]
+        clean_base = re.sub(r"(_clean|_stimclean|_cleaned|_preprocessed)$", "", base_stem, flags=re.I)
+        cap_candidates.extend([
+            csv_path.parent / f"{base_stem}_cap.json",
+            csv_path.parent / f"{clean_base}_cap.json",
+        ])
+    else:
+        stem_no_ext = csv_path.stem
+        cap_candidates.append(csv_path.parent / f"{stem_no_ext}_cap.json")
+
+    for cand in cap_candidates:
+        if cand.exists():
+            try:
+                with open(cand, "r", encoding="utf-8") as f:
+                    cap_data = json.load(f)
+                summary = cap_data.get("summary", {})
+                if summary:
+                    for k, v in summary.items():
+                        col = k if k.upper().startswith("CAP_") else f"CAP_{k}"
+                        df[col] = v
+                    break
+            except Exception:
+                pass
+
+    return df
+
+
 def run_group_analysis(
     csv_path: Path,
     output_dir: Path | None = None,
@@ -1459,6 +1494,7 @@ def run_group_analysis(
     """Runs the complete group-level analysis pipeline."""
     df = pd.read_csv(csv_path)
     df = df.loc[:, ~df.columns.duplicated()].copy()
+    df = load_and_merge_cap_sidecars(df, csv_path)
 
     # Optional metadata merge
     if metadata_csv_path and metadata_csv_path.exists():
@@ -1685,6 +1721,8 @@ def main() -> None:
 
     if inspect_only:
         df = pd.read_csv(csv_file)
+        df = df.loc[:, ~df.columns.duplicated()].copy()
+        df = load_and_merge_cap_sidecars(df, csv_file)
         detected = detect_columns(df)
         categorized = categorize_metrics(detected["metric_columns"])
         detected["categorized_metrics"] = categorized

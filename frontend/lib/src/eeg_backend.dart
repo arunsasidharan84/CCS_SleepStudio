@@ -416,6 +416,8 @@ class AppConfig {
   List<ChannelConfig> channels;
   Map<int, String> customEventNames;
 
+  AppConfig copy() => AppConfig.fromJson(toJson());
+
   Map<String, dynamic> toJson() {
     return {
       'spectrogramChannelIndex': spectrogramChannelIndex,

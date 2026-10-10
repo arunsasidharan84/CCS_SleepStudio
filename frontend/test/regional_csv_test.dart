@@ -62,4 +62,21 @@ void main() {
     expect(compiled, contains('45.200'));
     expect(compiled, contains('12.300'));
   });
+
+  test('updateRegionalCsvWithCapMetrics injects CAP metrics into individual regional CSV', () async {
+    final directory = await Directory.systemTemp.createTemp('regional_cap_');
+    final regional = await File(
+      '${directory.path}/rec02_analyse_regional.csv',
+    ).writeAsString('Chan,N2_ACW\nCentral,0.12\nFrontal,0.18\n');
+
+    await updateRegionalCsvWithCapMetrics(regional, {
+      'CAP_rate': '48.5',
+      'CAP_A1_index': '14.2',
+    });
+
+    final updated = await regional.readAsString();
+    expect(updated, contains('Chan,N2_ACW,CAP_rate,CAP_A1_index'));
+    expect(updated, contains('Central,0.12,48.5,14.2'));
+    expect(updated, contains('Frontal,0.18,48.5,14.2'));
+  });
 }

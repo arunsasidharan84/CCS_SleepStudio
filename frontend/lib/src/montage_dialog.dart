@@ -22,6 +22,79 @@ class MontagePreset {
   final List<(String, String)> derivations;
 }
 
+const List<MontagePreset> builtInMontagePresets = [
+  MontagePreset(
+    name: 'AASM Sleep Standard',
+    description: 'Standard AASM clinical PSG derivation: F4-M1, C4-M1, O2-M1, F3-M2, C3-M2, O1-M2, EOGs, EMG',
+    derivations: [
+      ('F4', 'M1'),
+      ('C4', 'M1'),
+      ('O2', 'M1'),
+      ('F3', 'M2'),
+      ('C3', 'M2'),
+      ('O1', 'M2'),
+      ('E1', 'M2'),
+      ('E2', 'M1'),
+      ('CHIN1', 'CHIN2'),
+    ],
+  ),
+  MontagePreset(
+    name: 'Longitudinal Bipolar (Double Banana)',
+    description: 'Anterior-to-posterior longitudinal chains covering temporal and parasagittal columns',
+    derivations: [
+      ('FP1', 'F7'),
+      ('F7', 'T3'),
+      ('T3', 'T5'),
+      ('T5', 'O1'),
+      ('FP2', 'F8'),
+      ('F8', 'T4'),
+      ('T4', 'T6'),
+      ('T6', 'O2'),
+      ('FP1', 'F3'),
+      ('F3', 'C3'),
+      ('C3', 'P3'),
+      ('P3', 'O1'),
+      ('FP2', 'F4'),
+      ('F4', 'C4'),
+      ('C4', 'P4'),
+      ('P4', 'O2'),
+      ('FZ', 'CZ'),
+      ('CZ', 'PZ'),
+    ],
+  ),
+  MontagePreset(
+    name: 'Transverse Bipolar',
+    description: 'Coronal chains across frontal, central, and parietal regions',
+    derivations: [
+      ('F7', 'FP1'),
+      ('FP1', 'FP2'),
+      ('FP2', 'F8'),
+      ('T3', 'C3'),
+      ('C3', 'CZ'),
+      ('CZ', 'C4'),
+      ('C4', 'T4'),
+      ('T5', 'P3'),
+      ('P3', 'PZ'),
+      ('PZ', 'P4'),
+      ('P4', 'T6'),
+    ],
+  ),
+  MontagePreset(
+    name: 'Contralateral Mastoids',
+    description: 'Left hemisphere electrodes referenced to M2/A2, right hemisphere referenced to M1/A1',
+    derivations: [
+      ('F3', 'M2'),
+      ('C3', 'M2'),
+      ('P3', 'M2'),
+      ('O1', 'M2'),
+      ('F4', 'M1'),
+      ('C4', 'M1'),
+      ('P4', 'M1'),
+      ('O2', 'M1'),
+    ],
+  ),
+];
+
 class MontageDialog extends StatefulWidget {
   const MontageDialog({
     super.key,
@@ -46,78 +119,7 @@ class _MontageDialogState extends State<MontageDialog> {
   bool _flipPolarity = false;
   String _statusMsg = '';
 
-  static const List<MontagePreset> _builtInPresets = [
-    MontagePreset(
-      name: 'AASM Sleep Standard',
-      description: 'Standard AASM clinical PSG derivation: F4-M1, C4-M1, O2-M1, F3-M2, C3-M2, O1-M2, EOGs, EMG',
-      derivations: [
-        ('F4', 'M1'),
-        ('C4', 'M1'),
-        ('O2', 'M1'),
-        ('F3', 'M2'),
-        ('C3', 'M2'),
-        ('O1', 'M2'),
-        ('E1', 'M2'),
-        ('E2', 'M1'),
-        ('CHIN1', 'CHIN2'),
-      ],
-    ),
-    MontagePreset(
-      name: 'Longitudinal Bipolar (Double Banana)',
-      description: 'Anterior-to-posterior longitudinal chains covering temporal and parasagittal columns',
-      derivations: [
-        ('FP1', 'F7'),
-        ('F7', 'T3'),
-        ('T3', 'T5'),
-        ('T5', 'O1'),
-        ('FP2', 'F8'),
-        ('F8', 'T4'),
-        ('T4', 'T6'),
-        ('T6', 'O2'),
-        ('FP1', 'F3'),
-        ('F3', 'C3'),
-        ('C3', 'P3'),
-        ('P3', 'O1'),
-        ('FP2', 'F4'),
-        ('F4', 'C4'),
-        ('C4', 'P4'),
-        ('P4', 'O2'),
-        ('FZ', 'CZ'),
-        ('CZ', 'PZ'),
-      ],
-    ),
-    MontagePreset(
-      name: 'Transverse Bipolar',
-      description: 'Coronal chains across frontal, central, and parietal regions',
-      derivations: [
-        ('F7', 'FP1'),
-        ('FP1', 'FP2'),
-        ('FP2', 'F8'),
-        ('T3', 'C3'),
-        ('C3', 'CZ'),
-        ('CZ', 'C4'),
-        ('C4', 'T4'),
-        ('T5', 'P3'),
-        ('P3', 'PZ'),
-        ('PZ', 'P4'),
-        ('P4', 'T6'),
-      ],
-    ),
-    MontagePreset(
-      name: 'Contralateral Mastoids',
-      description: 'Left hemisphere electrodes referenced to M2/A2, right hemisphere referenced to M1/A1',
-      derivations: [
-        ('F3', 'M2'),
-        ('C3', 'M2'),
-        ('P3', 'M2'),
-        ('O1', 'M2'),
-        ('F4', 'M1'),
-        ('C4', 'M1'),
-        ('P4', 'M1'),
-        ('O2', 'M1'),
-      ],
-    ),
-  ];
+  static const List<MontagePreset> _builtInPresets = builtInMontagePresets;
 
   @override
   void initState() {
@@ -148,69 +150,27 @@ class _MontageDialogState extends State<MontageDialog> {
     }
   }
 
-  String? _findMatchingElectrode(String target, List<String> available) {
-    final cleanTarget = target.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
-    for (final ch in available) {
-      final cleanCh = ch.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
-      if (cleanCh == cleanTarget || cleanCh.startsWith(cleanTarget)) {
-        return ch;
-      }
-    }
-    // Check aliases like A1 -> M1, A2 -> M2
-    if (cleanTarget == 'M1') return _findMatchingElectrode('A1', available);
-    if (cleanTarget == 'M2') return _findMatchingElectrode('A2', available);
-    if (cleanTarget == 'A1') return _findMatchingElectrode('M1', available);
-    if (cleanTarget == 'A2') return _findMatchingElectrode('M2', available);
-    return null;
-  }
+  String? _findMatchingElectrode(String target, List<String> available) =>
+      findMatchingElectrode(target, available);
 
   void _applyBuiltInPreset(MontagePreset preset) {
-    final allAvailable = widget.availableChannels;
-    int matchedCount = 0;
-    final newChannels = <ChannelConfig>[];
+    final newChannels = generateMontagePresetChannels(
+      preset: preset,
+      availableChannels: widget.availableChannels,
+      existingChannels: _channels,
+    );
 
-    for (final pair in preset.derivations) {
-      final active = _findMatchingElectrode(pair.$1, allAvailable);
-      final ref = _findMatchingElectrode(pair.$2, allAvailable);
-
-      if (active != null) {
-        matchedCount++;
-        final existing = _channels.firstWhere(
-          (c) => c.name.equalsIgnoreCase(active) || c.sourceChannel?.equalsIgnoreCase(active) == true,
-          orElse: () => ChannelConfig(name: active, sourceChannel: active),
-        );
-
-        final label = ref != null ? '$active-$ref' : active;
-        newChannels.add(ChannelConfig(
-          name: label,
-          sourceChannel: active,
-          reReference: ref ?? 'None',
-          derived: ref != null,
-          displayOnScreen: true,
-          color: existing.color,
-          scalingFactor: existing.scalingFactor,
-          verticalShift: existing.verticalShift,
-          displayMode: existing.displayMode,
-        ));
-      }
-    }
-
-    if (newChannels.isNotEmpty) {
+    if (newChannels.any((c) => c.displayOnScreen)) {
+      final matchedCount = newChannels.where((c) => c.displayOnScreen).length;
       setState(() {
-        // Keep non-matching channels at the bottom (e.g. ECG, respiration, EMG) hidden or visible
-        for (final orig in _channels) {
-          if (!newChannels.any((n) => n.sourceChannel == orig.name || n.name == orig.name)) {
-            final copy = orig.copy();
-            copy.displayOnScreen = false;
-            newChannels.add(copy);
-          }
-        }
         _channels = newChannels;
-        _statusMsg = 'Applied "${preset.name}" ($matchedCount derivation(s) created).';
+        _statusMsg =
+            'Applied "${preset.name}" ($matchedCount derivation(s) created).';
       });
     } else {
       setState(() {
-        _statusMsg = 'Could not find electrodes matching preset "${preset.name}".';
+        _statusMsg =
+            'Could not find electrodes matching preset "${preset.name}".';
       });
     }
   }
@@ -684,4 +644,307 @@ class _MontageDialogState extends State<MontageDialog> {
 
 extension on String {
   bool equalsIgnoreCase(String other) => toLowerCase() == other.toLowerCase();
+}
+
+String? findMatchingElectrode(String target, List<String> available) {
+  // 1. Direct case-insensitive match
+  for (final ch in available) {
+    if (ch.equalsIgnoreCase(target)) return ch;
+  }
+
+  String clean(String s) {
+    return s
+        .toUpperCase()
+        .replaceAll(RegExp(r'^(EEG\s*|POL\s*)'), '')
+        .replaceAll(RegExp(r'(-REF|\s*REF)$'), '')
+        .replaceAll(RegExp(r'[^A-Z0-9]'), '');
+  }
+
+  final targetClean = clean(target);
+  for (final ch in available) {
+    if (clean(ch) == targetClean) return ch;
+  }
+
+  // 2. Clinical aliases, mastoids, EOG, EMG, and 10-20 <-> 10-10 equivalences
+  final aliases = <String, List<String>>{
+    // Mastoids / Auricular references
+    'M1': ['A1', 'TP9', 'M1REF', 'A1REF'],
+    'M2': ['A2', 'TP10', 'M2REF', 'A2REF'],
+    'A1': ['M1', 'TP9', 'M1REF', 'A1REF'],
+    'A2': ['M2', 'TP10', 'M2REF', 'A2REF'],
+
+    // 10-20 to 10-10 equivalences
+    'T3': ['T7'],
+    'T7': ['T3'],
+    'T4': ['T8'],
+    'T8': ['T4'],
+    'T5': ['P7'],
+    'P7': ['T5'],
+    'T6': ['P8'],
+    'P8': ['T6'],
+
+    // EOG / Eye channels
+    'E1': [
+      'EOG1',
+      'LOC',
+      'EOGL',
+      'LEOG',
+      'EOGLEFT',
+      'LEFTEOG',
+      'EYE1',
+      'EYEL',
+      'EOG1REF',
+    ],
+    'EOG1': [
+      'E1',
+      'LOC',
+      'EOGL',
+      'LEOG',
+      'EOGLEFT',
+      'LEFTEOG',
+      'EYE1',
+      'EYEL',
+    ],
+    'LOC': ['E1', 'EOG1', 'EOGL', 'LEOG', 'EOGLEFT', 'LEFTEOG'],
+    'E2': [
+      'EOG2',
+      'ROC',
+      'EOGR',
+      'REOG',
+      'EOGRIGHT',
+      'RIGHTEOG',
+      'EYE2',
+      'EYER',
+      'EOG2REF',
+    ],
+    'EOG2': [
+      'E2',
+      'ROC',
+      'EOGR',
+      'REOG',
+      'EOGRIGHT',
+      'RIGHTEOG',
+      'EYE2',
+      'EYER',
+    ],
+    'ROC': ['E2', 'EOG2', 'EOGR', 'REOG', 'EOGRIGHT', 'RIGHTEOG'],
+
+    // EMG / Chin channels
+    'CHIN1': [
+      'EMG1',
+      'CHINL',
+      'CHINLEFT',
+      'EMGL',
+      'SUBMENTAL1',
+      'CHIN',
+      'EMG',
+    ],
+    'EMG1': [
+      'CHIN1',
+      'CHINL',
+      'CHINLEFT',
+      'EMGL',
+      'SUBMENTAL1',
+      'CHIN',
+      'EMG',
+    ],
+    'CHIN2': ['EMG2', 'CHINR', 'CHINRIGHT', 'EMGR', 'CHINZ', 'SUBMENTAL2'],
+    'EMG2': ['CHIN2', 'CHINR', 'CHINRIGHT', 'EMGR', 'CHINZ', 'SUBMENTAL2'],
+    'CHIN': ['EMG', 'CHIN1', 'EMG1', 'SUBMENTAL'],
+    'EMG': ['CHIN', 'EMG1', 'CHIN1', 'SUBMENTAL'],
+
+    // ECG / EKG
+    'ECG': ['EKG', 'ECG1', 'EKG1', 'HEART'],
+    'EKG': ['ECG', 'ECG1', 'EKG1', 'HEART'],
+  };
+
+  final candList = aliases[targetClean];
+  if (candList != null) {
+    for (final cand in candList) {
+      for (final ch in available) {
+        if (clean(ch) == cand) return ch;
+      }
+    }
+  }
+
+  return null;
+}
+
+List<ChannelConfig> generateMontagePresetChannels({
+  required MontagePreset preset,
+  required List<String> availableChannels,
+  List<ChannelConfig>? existingChannels,
+}) {
+  final baseList = existingChannels ??
+      availableChannels
+          .map((name) => ChannelConfig(name: name, sourceChannel: name))
+          .toList();
+  final newChannels = <ChannelConfig>[];
+  final isAasm = preset.name.contains('AASM');
+
+  for (final pair in preset.derivations) {
+    final active = findMatchingElectrode(pair.$1, availableChannels);
+    final ref = findMatchingElectrode(pair.$2, availableChannels);
+
+    // In bipolar or differential montages, BOTH active and reference must exist and not be identical
+    if (active != null && ref != null && !active.equalsIgnoreCase(ref)) {
+      final existing = baseList.firstWhere(
+        (c) =>
+            c.name.equalsIgnoreCase(active) ||
+            c.sourceChannel?.equalsIgnoreCase(active) == true,
+        orElse: () => ChannelConfig(name: active, sourceChannel: active),
+      );
+
+      final label = '$active-$ref';
+      newChannels.add(
+        ChannelConfig(
+          name: label,
+          sourceChannel: active,
+          reReference: ref,
+          derived: true,
+          displayOnScreen: true,
+          color: existing.color,
+          scalingFactor: existing.scalingFactor,
+          verticalShift: existing.verticalShift,
+          displayMode: existing.displayMode,
+        ),
+      );
+    }
+  }
+
+  // Comprehensive AASM standard: ensure EOG and Chin EMG are included
+  if (isAasm) {
+    // 1. EOG channels (if not already added by derivations above)
+    final hasEog = newChannels.any(
+      (c) => detectChannelModality(c.name) == ChannelModality.eog,
+    );
+    if (!hasEog) {
+      final e1 = findMatchingElectrode('E1', availableChannels);
+      final e2 = findMatchingElectrode('E2', availableChannels);
+      final m1 = findMatchingElectrode('M1', availableChannels);
+      final m2 = findMatchingElectrode('M2', availableChannels);
+      if (e1 != null) {
+        final ref = m2 ?? m1;
+        final existing = baseList.firstWhere(
+          (c) => c.name.equalsIgnoreCase(e1),
+          orElse: () => ChannelConfig(name: e1),
+        );
+        final label =
+            ref != null && !ref.equalsIgnoreCase(e1) ? '$e1-$ref' : e1;
+        newChannels.add(
+          ChannelConfig(
+            name: label,
+            sourceChannel: e1,
+            reReference:
+                ref != null && !ref.equalsIgnoreCase(e1) ? ref : 'None',
+            derived: ref != null && !ref.equalsIgnoreCase(e1),
+            displayOnScreen: true,
+            color: existing.color,
+            scalingFactor: existing.scalingFactor,
+          ),
+        );
+      }
+      if (e2 != null) {
+        final ref = m1 ?? m2;
+        final existing = baseList.firstWhere(
+          (c) => c.name.equalsIgnoreCase(e2),
+          orElse: () => ChannelConfig(name: e2),
+        );
+        final label =
+            ref != null && !ref.equalsIgnoreCase(e2) ? '$e2-$ref' : e2;
+        newChannels.add(
+          ChannelConfig(
+            name: label,
+            sourceChannel: e2,
+            reReference:
+                ref != null && !ref.equalsIgnoreCase(e2) ? ref : 'None',
+            derived: ref != null && !ref.equalsIgnoreCase(e2),
+            displayOnScreen: true,
+            color: existing.color,
+            scalingFactor: existing.scalingFactor,
+          ),
+        );
+      }
+    }
+
+    // 2. Chin EMG channels (if not already added)
+    final hasEmg = newChannels.any(
+      (c) => detectChannelModality(c.name) == ChannelModality.emg,
+    );
+    if (!hasEmg) {
+      final chin1 = findMatchingElectrode('CHIN1', availableChannels);
+      final chin2 = findMatchingElectrode('CHIN2', availableChannels);
+      if (chin1 != null && chin2 != null && !chin1.equalsIgnoreCase(chin2)) {
+        final existing = baseList.firstWhere(
+          (c) => c.name.equalsIgnoreCase(chin1),
+          orElse: () => ChannelConfig(name: chin1),
+        );
+        newChannels.add(
+          ChannelConfig(
+            name: '$chin1-$chin2',
+            sourceChannel: chin1,
+            reReference: chin2,
+            derived: true,
+            displayOnScreen: true,
+            color: existing.color,
+            scalingFactor: existing.scalingFactor,
+          ),
+        );
+      } else if (chin1 != null) {
+        final existing = baseList.firstWhere(
+          (c) => c.name.equalsIgnoreCase(chin1),
+          orElse: () => ChannelConfig(name: chin1),
+        );
+        newChannels.add(
+          ChannelConfig(
+            name: chin1,
+            sourceChannel: chin1,
+            reReference: 'None',
+            derived: false,
+            displayOnScreen: true,
+            color: existing.color,
+            scalingFactor: existing.scalingFactor,
+          ),
+        );
+      }
+    }
+
+    // 3. ECG channel if present
+    final ecg = findMatchingElectrode('ECG', availableChannels);
+    if (ecg != null && !newChannels.any((c) => c.name.equalsIgnoreCase(ecg))) {
+      final existing = baseList.firstWhere(
+        (c) => c.name.equalsIgnoreCase(ecg),
+        orElse: () => ChannelConfig(name: ecg),
+      );
+      newChannels.add(
+        ChannelConfig(
+          name: ecg,
+          sourceChannel: ecg,
+          reReference: 'None',
+          derived: false,
+          displayOnScreen: true,
+          color: existing.color,
+          scalingFactor: existing.scalingFactor,
+        ),
+      );
+    }
+  }
+
+  if (newChannels.isNotEmpty) {
+    // Keep non-montage channels at the bottom with displayOnScreen = false
+    // so that ONLY the clean montage channels are displayed on screen.
+    for (final orig in baseList) {
+      final baseName = orig.sourceChannel ?? orig.name;
+      if (!newChannels.any(
+        (n) =>
+            n.name.equalsIgnoreCase(orig.name) ||
+            (n.derived && n.name.startsWith('$baseName-')),
+      )) {
+        final copy = orig.copy();
+        copy.displayOnScreen = false;
+        newChannels.add(copy);
+      }
+    }
+  }
+  return newChannels;
 }

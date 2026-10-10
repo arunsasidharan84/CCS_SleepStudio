@@ -902,3 +902,106 @@ List<BandConfig> defaultFrequencyBands() => [
   BandConfig(label: 'Gamma', low: 30.0, high: 40.0),
 ];
 
+/// Physiological modality classification for channels in clinical polysomnography / EEG.
+enum ChannelModality { eeg, eog, emg, ecg, respiratory, other }
+
+/// Infers the physiological modality of [rawLabel].
+ChannelModality detectChannelModality(String rawLabel) {
+  final label = rawLabel
+      .replaceAll(RegExp(r'^(EEG\s*|POL\s*)', caseSensitive: false), '')
+      .replaceAll(RegExp(r'(-Ref|-REF|\s*Ref)$', caseSensitive: false), '')
+      .trim();
+  final lower = label.toLowerCase();
+  if (lower.startsWith('eog') ||
+      lower.startsWith('loc') ||
+      lower.startsWith('roc') ||
+      lower.startsWith('e1') ||
+      lower.startsWith('e2') ||
+      lower.contains('eye') ||
+      lower.contains('eog')) {
+    return ChannelModality.eog;
+  }
+  if (lower.startsWith('emg') ||
+      lower.startsWith('chin') ||
+      lower.startsWith('submental') ||
+      lower.startsWith('leg') ||
+      lower.contains('chin') ||
+      lower.contains('emg')) {
+    return ChannelModality.emg;
+  }
+  if (lower.startsWith('ecg') ||
+      lower.startsWith('ekg') ||
+      lower.startsWith('heart') ||
+      lower.contains('ecg') ||
+      lower.contains('ekg')) {
+    return ChannelModality.ecg;
+  }
+  if (lower.startsWith('resp') ||
+      lower.startsWith('thor') ||
+      lower.contains('thorax') ||
+      lower.startsWith('chest') ||
+      lower.startsWith('abd') ||
+      lower.contains('abdomen') ||
+      lower.startsWith('airflow') ||
+      lower.startsWith('flow') ||
+      lower.startsWith('nasal') ||
+      lower.startsWith('therm') ||
+      lower.startsWith('cflow') ||
+      lower.startsWith('spo2') ||
+      lower.startsWith('sao2') ||
+      lower.startsWith('pleth') ||
+      lower.startsWith('snore') ||
+      lower.startsWith('sound') ||
+      lower.startsWith('mic') ||
+      lower.startsWith('cannula')) {
+    return ChannelModality.respiratory;
+  }
+  final cleanName = lower.replaceAll(RegExp(r'[^a-z0-9]'), '');
+  final eegPattern = RegExp(
+    r'^(fp[12z]|af[1-9z]|f[1-9z]|fc[1-6z]|ft[7-9]|ft10|c[1-6z]|t[3-8]|tp[7-9]|tp10|cp[1-6z]|p[1-9z]|po[1-9z]|o[12z]|oz|cz|fz|pz|iz)$',
+    caseSensitive: false,
+  );
+  if (eegPattern.hasMatch(cleanName) ||
+      cleanName.startsWith('c3') ||
+      cleanName.startsWith('c4') ||
+      cleanName.startsWith('f3') ||
+      cleanName.startsWith('f4') ||
+      cleanName.startsWith('o1') ||
+      cleanName.startsWith('o2') ||
+      cleanName.startsWith('fp1') ||
+      cleanName.startsWith('fp2') ||
+      cleanName.startsWith('cz') ||
+      cleanName.startsWith('fz') ||
+      cleanName.startsWith('pz') ||
+      cleanName.startsWith('t3') ||
+      cleanName.startsWith('t4') ||
+      cleanName.startsWith('t5') ||
+      cleanName.startsWith('t6') ||
+      cleanName.startsWith('t7') ||
+      cleanName.startsWith('t8') ||
+      cleanName.startsWith('p7') ||
+      cleanName.startsWith('p8') ||
+      lower.contains('eeg')) {
+    return ChannelModality.eeg;
+  }
+
+  final firstToken = lower.split(RegExp(r'[\s\-_/]+')).first;
+  if (eegPattern.hasMatch(firstToken)) {
+    return ChannelModality.eeg;
+  }
+
+  return ChannelModality.other;
+}
+
+/// Human-readable label for [modality] suitable for popup menus and tooltips.
+String channelModalityLabel(ChannelModality modality) {
+  return switch (modality) {
+    ChannelModality.eeg => 'EEG',
+    ChannelModality.eog => 'EOG',
+    ChannelModality.emg => 'EMG',
+    ChannelModality.ecg => 'ECG',
+    ChannelModality.respiratory => 'Respiratory',
+    ChannelModality.other => 'Same-Type',
+  };
+}
+

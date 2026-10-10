@@ -3863,26 +3863,15 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     _setStatus('Batch comparison complete: $count pair(s) processed. Master CSV saved to ${csvFile.uri.pathSegments.last}');
   }
 
-  void _showSelectionHelp() {
+  void _showShortcutsHelp() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Signal selection box'),
-        content: const Text(
-          'Drag on the signal panel to draw one or more selection boxes. '
-          'The total duration is shown in the upper right of the signal view. '
-          'Press A for Artifact or F1-F12 for Event 1-12 to convert the drawn boxes into events. '
-          'Press Backspace to erase existing events inside drawn boxes. '
-          'Press Q to toggle uncertainty for the current epoch.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
+      builder: (context) => const _ShortcutsHelpDialog(),
     );
+  }
+
+  void _showSelectionHelp() {
+    _showShortcutsHelp();
   }
 
   void _showDownloadStats() {
@@ -6825,6 +6814,61 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     _setStatus('All channels scale set to ${newScale.toStringAsFixed(0)}%');
   }
 
+  void _adjustAllChannelsScale(double multiplier) {
+    final eeg = _loadedEeg;
+    if (eeg == null) return;
+    if (_config.channels.isEmpty) {
+      _config.channels = [
+        for (var i = 0; i < eeg.channelSamples.length; i++)
+          AppConfig.defaultChannelConfig(
+            eeg.channelLabels[i],
+            i,
+            eeg.channelSamples.length,
+          ),
+      ];
+    }
+    for (final ch in _config.channels) {
+      ch.scalingFactor = (ch.scalingFactor * multiplier).clamp(5.0, 5000.0);
+    }
+    _previewDisplayConfig(_config);
+    final pctChange = multiplier > 1.0 ? 'increased (+20%)' : 'decreased (-20%)';
+    _setStatus('All channels scale $pctChange');
+  }
+
+  void _applyScaleToChannelsOfSameType(int visibleIndex, double newScale) {
+    final v = _viewport;
+    final eeg = _loadedEeg;
+    if (v == null || eeg == null) return;
+    final labels = v.signalChannelLabels;
+    if (visibleIndex < 0 || visibleIndex >= labels.length) return;
+    final sourceLabel = labels[visibleIndex];
+    final targetModality = detectChannelModality(sourceLabel);
+    final modLabel = channelModalityLabel(targetModality);
+
+    if (_config.channels.isEmpty) {
+      _config.channels = [
+        for (var i = 0; i < eeg.channelSamples.length; i++)
+          AppConfig.defaultChannelConfig(
+            eeg.channelLabels[i],
+            i,
+            eeg.channelSamples.length,
+          ),
+      ];
+    }
+
+    var affectedCount = 0;
+    for (final ch in _config.channels) {
+      if (detectChannelModality(ch.name) == targetModality) {
+        ch.scalingFactor = newScale.clamp(5.0, 5000.0);
+        affectedCount++;
+      }
+    }
+    _previewDisplayConfig(_config);
+    _setStatus(
+      'Applied ${newScale.toStringAsFixed(0)}% to all $modLabel channels ($affectedCount)',
+    );
+  }
+
   Future<void> _openNewAppInstance() async {
     try {
       if (Platform.isMacOS) {
@@ -7225,8 +7269,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             onSelected: _checkForUpdates,
           ),
           PlatformMenuItem(
-            label: 'Signal selection box  [Ctrl+H]',
-            onSelected: _showSelectionHelp,
+            label: 'Keyboard Shortcuts & Controls…  [Ctrl+H / ?]',
+            onSelected: _showShortcutsHelp,
           ),
           PlatformMenuItem(
             label: 'Release Download Statistics',
@@ -7589,8 +7633,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               ),
               const Divider(height: 1),
               MenuItemButton(
-                onPressed: _showSelectionHelp,
-                child: const Text('Signal selection box  [Ctrl+H]'),
+                onPressed: _showShortcutsHelp,
+                child: const Text('Keyboard Shortcuts & Controls…  [Ctrl+H / ?]'),
               ),
               MenuItemButton(
                 onPressed: _showDownloadStats,
@@ -9956,6 +10000,18 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 return null;
               },
             ),
+            _ScaleUpWaveformIntent: CallbackAction<_ScaleUpWaveformIntent>(
+              onInvoke: (_) => _adjustAllChannelsScale(1.2),
+            ),
+            _ScaleDownWaveformIntent: CallbackAction<_ScaleDownWaveformIntent>(
+              onInvoke: (_) => _adjustAllChannelsScale(0.8),
+            ),
+            _HelpShortcutsIntent: CallbackAction<_HelpShortcutsIntent>(
+              onInvoke: (_) {
+                _showShortcutsHelp();
+                return null;
+              },
+            ),
           },
           child: Focus(
             focusNode: _viewerFocusNode,
@@ -10093,6 +10149,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                     onChannelScaleSet: _setChannelScale,
                                     onChannelScaleApplyAll:
                                         _applyScaleToAllChannels,
+                                    onChannelScaleApplySameType:
+                                        _applyScaleToChannelsOfSameType,
                                     onChannelContextMenu:
                                         _showChannelContextMenu,
                                     spectrogramEnabled:
@@ -10882,6 +10940,7 @@ class _ScoringHeroSurface extends StatefulWidget {
     this.onChannelScaleAdjust,
     this.onChannelScaleSet,
     this.onChannelScaleApplyAll,
+    this.onChannelScaleApplySameType,
     this.onChannelContextMenu,
     this.onTimeUnitChanged,
     this.waveformMaximized = false,
@@ -10927,6 +10986,7 @@ class _ScoringHeroSurface extends StatefulWidget {
   final void Function(int channelIndex, double multiplier)? onChannelScaleAdjust;
   final void Function(int channelIndex, double newScale)? onChannelScaleSet;
   final void Function(double newScale)? onChannelScaleApplyAll;
+  final void Function(int channelIndex, double newScale)? onChannelScaleApplySameType;
 
   /// Right-click on a channel (its label or its trace) or waveform.
   final void Function(int channelIndex, Offset globalPosition, {double? clickSec})?
@@ -11539,6 +11599,7 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                           onAdjustScale: widget.onChannelScaleAdjust,
                           onSetScale: widget.onChannelScaleSet,
                           onApplyAll: widget.onChannelScaleApplyAll,
+                          onApplySameType: widget.onChannelScaleApplySameType,
                           onContextMenu: widget.onChannelContextMenu != null
                               ? (ch, pos) => widget.onChannelContextMenu!(ch, pos)
                               : null,
@@ -12421,6 +12482,7 @@ class _ElectrodeScaleColumn extends StatelessWidget {
     required this.onAdjustScale,
     required this.onSetScale,
     required this.onApplyAll,
+    this.onApplySameType,
     this.onContextMenu,
   });
 
@@ -12430,6 +12492,7 @@ class _ElectrodeScaleColumn extends StatelessWidget {
   final void Function(int channelIndex, double multiplier)? onAdjustScale;
   final void Function(int channelIndex, double newScale)? onSetScale;
   final void Function(double newScale)? onApplyAll;
+  final void Function(int channelIndex, double newScale)? onApplySameType;
 
   @override
   Widget build(BuildContext context) {
@@ -12453,6 +12516,7 @@ class _ElectrodeScaleColumn extends StatelessWidget {
               onAdjustScale: onAdjustScale,
               onSetScale: onSetScale,
               onApplyAll: onApplyAll,
+              onApplySameType: onApplySameType,
               onContextMenu: onContextMenu,
             ),
           ),
@@ -12471,6 +12535,7 @@ class _ChannelScaleTile extends StatefulWidget {
     required this.onAdjustScale,
     required this.onSetScale,
     required this.onApplyAll,
+    this.onApplySameType,
     this.onContextMenu,
   });
 
@@ -12485,6 +12550,7 @@ class _ChannelScaleTile extends StatefulWidget {
   final void Function(int channelIndex, double multiplier)? onAdjustScale;
   final void Function(int channelIndex, double newScale)? onSetScale;
   final void Function(double newScale)? onApplyAll;
+  final void Function(int channelIndex, double newScale)? onApplySameType;
 
   @override
   State<_ChannelScaleTile> createState() => _ChannelScaleTileState();
@@ -12535,37 +12601,50 @@ class _ChannelScaleTileState extends State<_ChannelScaleTile> {
                       widget.onApplyAll?.call(widget.scalePercent);
                     } else if (val == -2.0) {
                       widget.onApplyAll?.call(100.0);
+                    } else if (val == -3.0) {
+                      widget.onApplySameType?.call(
+                        widget.channelIndex,
+                        widget.scalePercent,
+                      );
                     } else {
                       widget.onSetScale?.call(widget.channelIndex, val);
                     }
                   },
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(
-                      value: 50.0,
-                      child: Text('50% (Zoom Out)'),
-                    ),
-                    const PopupMenuItem(value: 75.0, child: Text('75%')),
-                    const PopupMenuItem(
-                      value: 100.0,
-                      child: Text('100% (Reset Default)'),
-                    ),
-                    const PopupMenuItem(value: 125.0, child: Text('125%')),
-                    const PopupMenuItem(
-                      value: 150.0,
-                      child: Text('150% (Zoom In)'),
-                    ),
-                    const PopupMenuItem(value: 200.0, child: Text('200%')),
-                    const PopupMenuItem(value: 300.0, child: Text('300%')),
-                    const PopupMenuDivider(),
-                    PopupMenuItem(
-                      value: -1.0,
-                      child: Text('Apply $scaleStr to All Channels'),
-                    ),
-                    const PopupMenuItem(
-                      value: -2.0,
-                      child: Text('Reset All Channels to 100%'),
-                    ),
-                  ],
+                  itemBuilder: (context) {
+                    final modality = detectChannelModality(widget.channelName);
+                    final modLabel = channelModalityLabel(modality);
+                    return [
+                      const PopupMenuItem(
+                        value: 50.0,
+                        child: Text('50% (Zoom Out)'),
+                      ),
+                      const PopupMenuItem(value: 75.0, child: Text('75%')),
+                      const PopupMenuItem(
+                        value: 100.0,
+                        child: Text('100% (Reset Default)'),
+                      ),
+                      const PopupMenuItem(value: 125.0, child: Text('125%')),
+                      const PopupMenuItem(
+                        value: 150.0,
+                        child: Text('150% (Zoom In)'),
+                      ),
+                      const PopupMenuItem(value: 200.0, child: Text('200%')),
+                      const PopupMenuItem(value: 300.0, child: Text('300%')),
+                      const PopupMenuDivider(),
+                      PopupMenuItem(
+                        value: -3.0,
+                        child: Text('Apply $scaleStr to All $modLabel Channels'),
+                      ),
+                      PopupMenuItem(
+                        value: -1.0,
+                        child: Text('Apply $scaleStr to All Channels'),
+                      ),
+                      const PopupMenuItem(
+                        value: -2.0,
+                        child: Text('Reset All Channels to 100%'),
+                      ),
+                    ];
+                  },
                   child: !isCompact
                       ? Column(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -12890,10 +12969,39 @@ class _ToggleWaveformMaximizeIntent extends Intent {
   const _ToggleWaveformMaximizeIntent();
 }
 
+class _ScaleUpWaveformIntent extends Intent {
+  const _ScaleUpWaveformIntent();
+}
+
+class _ScaleDownWaveformIntent extends Intent {
+  const _ScaleDownWaveformIntent();
+}
+
+class _HelpShortcutsIntent extends Intent {
+  const _HelpShortcutsIntent();
+}
+
 final _shortcuts = <ShortcutActivator, Intent>{
   // Waveform maximize toggle
   const SingleActivator(LogicalKeyboardKey.keyF):
       const _ToggleWaveformMaximizeIntent(),
+  // Waveform scaling shortcuts (+ and -)
+  const SingleActivator(LogicalKeyboardKey.equal):
+      const _ScaleUpWaveformIntent(),
+  const SingleActivator(LogicalKeyboardKey.equal, shift: true):
+      const _ScaleUpWaveformIntent(),
+  const SingleActivator(LogicalKeyboardKey.add):
+      const _ScaleUpWaveformIntent(),
+  const SingleActivator(LogicalKeyboardKey.numpadAdd):
+      const _ScaleUpWaveformIntent(),
+  const SingleActivator(LogicalKeyboardKey.minus):
+      const _ScaleDownWaveformIntent(),
+  const SingleActivator(LogicalKeyboardKey.minus, shift: true):
+      const _ScaleDownWaveformIntent(),
+  const SingleActivator(LogicalKeyboardKey.underscore):
+      const _ScaleDownWaveformIntent(),
+  const SingleActivator(LogicalKeyboardKey.numpadSubtract):
+      const _ScaleDownWaveformIntent(),
   // Stage scoring
   const SingleActivator(LogicalKeyboardKey.keyW): const _ScoreIntent(
     SleepStage.wake,
@@ -12949,12 +13057,20 @@ final _shortcuts = <ShortcutActivator, Intent>{
   // Detections
   const SingleActivator(LogicalKeyboardKey.keyK, control: true):
       const _KComplexDetectionIntent(),
+  const SingleActivator(LogicalKeyboardKey.keyK, meta: true):
+      const _KComplexDetectionIntent(),
   const SingleActivator(LogicalKeyboardKey.keyS, control: true, shift: true):
+      const _SpindleDetectionIntent(),
+  const SingleActivator(LogicalKeyboardKey.keyS, meta: true, shift: true):
       const _SpindleDetectionIntent(),
   // Configuration & Filters
   const SingleActivator(LogicalKeyboardKey.keyC, control: true):
       const _ConfigIntent(),
+  const SingleActivator(LogicalKeyboardKey.keyC, meta: true):
+      const _ConfigIntent(),
   const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+      const _FilterIntent(),
+  const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
       const _FilterIntent(),
   // Navigation
   const SingleActivator(LogicalKeyboardKey.arrowRight):
@@ -12966,6 +13082,13 @@ final _shortcuts = <ShortcutActivator, Intent>{
       const _ToggleUncertaintyIntent(),
   const SingleActivator(LogicalKeyboardKey.keyU):
       const _ToggleUncertaintyIntent(),
+  // Help & Shortcuts
+  const SingleActivator(LogicalKeyboardKey.keyH, control: true):
+      const _HelpShortcutsIntent(),
+  const SingleActivator(LogicalKeyboardKey.keyH, meta: true):
+      const _HelpShortcutsIntent(),
+  const SingleActivator(LogicalKeyboardKey.slash, shift: true):
+      const _HelpShortcutsIntent(),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -15409,6 +15532,184 @@ class _BatchProgressDialogState extends State<BatchProgressDialog> {
                 }
               : null,
           child: Text(_isFinished ? 'Close' : 'Processing…'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ShortcutsHelpDialog extends StatelessWidget {
+  const _ShortcutsHelpDialog({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.keyboard_outlined, color: Colors.blueAccent),
+          SizedBox(width: 10),
+          Text(
+            'Keyboard Shortcuts & Controls',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 680,
+        height: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildCategory(
+                title: 'Waveform Scaling & Channel Controls',
+                color: Colors.blue.shade700,
+                rows: const [
+                  ('+', 'Increase waveform amplitude (+20%) across all channels'),
+                  ('-', 'Decrease waveform amplitude (-20%) across all channels'),
+                  ('Mouse Scroll', 'Scroll over channel label badge to zoom channel in / out'),
+                  ('Click Label', 'Open presets (50%–300%), Apply to all of same type, or Reset 100%'),
+                  ('Right-Click Label / Trace', 'Channel context menu (Reference, Polarity, Color, Visibility, Scale)'),
+                  ('Drag Splitter', 'Adjust channel labels sidebar width (70 – 240 px)'),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _buildCategory(
+                title: 'Sleep Staging',
+                color: Colors.indigo.shade700,
+                rows: const [
+                  ('W', 'Score current epoch as Wake'),
+                  ('1', 'Score current epoch as N1 (NREM 1)'),
+                  ('2', 'Score current epoch as N2 (NREM 2)'),
+                  ('3', 'Score current epoch as N3 (Slow Wave Sleep)'),
+                  ('R', 'Score current epoch as REM'),
+                  ('I', 'Score current epoch as Inconclusive'),
+                  ('0 / N / Del', 'Clear stage score / set to Unknown'),
+                  ('Q / U', 'Toggle stage uncertainty flag for current epoch'),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _buildCategory(
+                title: 'Navigation & Epochs',
+                color: Colors.teal.shade700,
+                rows: const [
+                  ('→ (Right Arrow)', 'Advance to next epoch'),
+                  ('← (Left Arrow)', 'Go back to previous epoch'),
+                  ('Click Hypnogram', 'Jump directly to clicked epoch or time'),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _buildCategory(
+                title: 'Event Tagging & Signal Selection',
+                color: Colors.deepOrange.shade700,
+                rows: const [
+                  ('Drag on Signal', 'Draw selection box (displays duration at top right)'),
+                  ('A', 'Convert active selection boxes to Artifact events'),
+                  ('F1 – F12', 'Convert active selection boxes to Event 1 – 12'),
+                  ('Backspace', 'Erase existing events within active selection boxes'),
+                  ('Z', 'Zoom view into selected time range'),
+                  ('Esc', 'Clear all active selection boxes'),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _buildCategory(
+                title: 'Panels & Analysis Tools',
+                color: Colors.purple.shade700,
+                rows: const [
+                  ('F', 'Toggle Maximize Waveform Plot (focus mode)'),
+                  ('V', 'Toggle Synchronized Video playback panel'),
+                  ('M', 'Open Markers & Annotations Manager'),
+                  ('Ctrl+C / Cmd+C', 'Open Configuration dialog'),
+                  ('Ctrl+F / Cmd+F', 'Open Filters dialog'),
+                  ('Ctrl+K / Cmd+K', 'Run K-Complex auto-detection'),
+                  ('Ctrl+Shift+S', 'Run Sleep Spindle auto-detection'),
+                  ('Ctrl+H / ?', 'Open this Keyboard Shortcuts & Controls help'),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCategory({
+    required String title,
+    required Color color,
+    required List<(String, String)> rows,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(4),
+            border: Border(left: BorderSide(color: color, width: 3)),
+          ),
+          child: Text(
+            title,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Table(
+          columnWidths: const {
+            0: FixedColumnWidth(190),
+            1: FlexColumnWidth(),
+          },
+          defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+          children: [
+            for (final row in rows)
+              TableRow(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF0F2F5),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: const Color(0xFFD0D7DE)),
+                      ),
+                      child: Text(
+                        row.$1,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF24292F),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 3,
+                      horizontal: 8,
+                    ),
+                    child: Text(
+                      row.$2,
+                      style: const TextStyle(fontSize: 12, color: Colors.black87),
+                    ),
+                  ),
+                ],
+              ),
+          ],
         ),
       ],
     );

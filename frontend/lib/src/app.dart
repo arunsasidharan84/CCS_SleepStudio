@@ -7887,7 +7887,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       leftLeg: opt(_batchPsgLeftLegController),
       rightLeg: opt(_batchPsgRightLegController),
       capEeg: opt(_batchPsgCapEegController),
-      outputDir: opt(_batchPsgOutDirController),
+      outputDir: opt(_batchPsgOutDirController) ?? _pipelineOutDir(),
       metadata: _batchMetadata,
     );
     showDialog<void>(
@@ -7906,6 +7906,33 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   // ─── Batch tab: EEG analysis pipeline, polygraphy, scoring comparison ─────
 
+  Future<void> _selectBatchOutputFolder() async {
+    final dir = await FilePicker.getDirectoryPath(
+      dialogTitle: 'Select Batch Output Folder',
+      initialDirectory: _pipelineOutDir(),
+    );
+    if (dir != null && dir.trim().isNotEmpty && mounted) {
+      final chosen = dir.trim();
+      setState(() {
+        _batchAnalyseOutDirController.text = chosen;
+        _batchStagingOutDirController.text = chosen;
+        _batchPreprocessOutDirController.text = chosen;
+        _batchPsgOutDirController.text = chosen;
+      });
+      _setStatus('Batch output folder set to: $chosen');
+    }
+  }
+
+  void _clearBatchOutputFolder() {
+    setState(() {
+      _batchAnalyseOutDirController.clear();
+      _batchStagingOutDirController.clear();
+      _batchPreprocessOutDirController.clear();
+      _batchPsgOutDirController.clear();
+    });
+    _setStatus('Batch output folder reset to default (beside source recordings)');
+  }
+
   String? get _pipelineFirstRecording {
     for (final p in _batchAnalysePairs) {
       final e = p['eegPath'] ?? '';
@@ -7916,7 +7943,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   String? _pipelineOutDir() {
     final t = _batchAnalyseOutDirController.text.trim();
-    return t.isEmpty ? null : t;
+    if (t.isNotEmpty) return t;
+    final s = _batchStagingOutDirController.text.trim();
+    if (s.isNotEmpty) return s;
+    final p = _batchPreprocessOutDirController.text.trim();
+    if (p.isNotEmpty) return p;
+    final psg = _batchPsgOutDirController.text.trim();
+    if (psg.isNotEmpty) return psg;
+    return null;
   }
 
   String? _pipelineCleanedDir() {
@@ -8007,7 +8041,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     if (selected.contains('autoscore') && !buildLite) {
       final algorithm = canonicalAutoscoreAlgorithm(_batchStagingAlgorithm);
       final scoringDir = _batchStagingOutDirController.text.trim().isEmpty
-          ? null
+          ? outDir
           : _batchStagingOutDirController.text.trim();
       steps.add(
         PipelineStep(
@@ -8500,8 +8534,44 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 ),
                 const SizedBox(width: 6),
               ],
+              Tooltip(
+                message: _pipelineOutDir() != null
+                    ? 'Batch output folder: ${_pipelineOutDir()!}\n(Click to choose a different folder)'
+                    : 'Choose batch output folder (default: beside each source recording)',
+                child: OutlinedButton.icon(
+                  onPressed: _selectBatchOutputFolder,
+                  icon: Icon(
+                    _pipelineOutDir() != null ? Icons.folder : Icons.create_new_folder_outlined,
+                    size: 14,
+                  ),
+                  label: Text(
+                    _pipelineOutDir() != null
+                        ? 'Output: ${_basename(_pipelineOutDir()!)}'
+                        : 'Output Folder',
+                    style: const TextStyle(fontSize: 11.5),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _pipelineOutDir() != null
+                        ? const Color(0xFF38BDF8)
+                        : const Color(0xFFCBD5E1),
+                    side: BorderSide(
+                      color: _pipelineOutDir() != null
+                          ? const Color(0xFF0284C7)
+                          : const Color(0xFF475569),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ),
               if (_pipelineOutDir() != null || totalQueued > 0) ...[
-                OutlinedButton.icon(
+                const SizedBox(width: 2),
+                IconButton(
+                  tooltip: 'Open output folder in file manager',
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+                  padding: EdgeInsets.zero,
+                  icon: const Icon(Icons.open_in_new, size: 14, color: Color(0xFF94A3B8)),
                   onPressed: () {
                     final out = _pipelineOutDir();
                     if (out != null && Directory(out).existsSync()) {
@@ -8514,17 +8584,19 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                       }
                     }
                   },
-                  icon: const Icon(Icons.folder_open_outlined, size: 14),
-                  label: const Text('Output Folder', style: TextStyle(fontSize: 11.5)),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF94A3B8),
-                    side: const BorderSide(color: Color(0xFF475569)),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    visualDensity: VisualDensity.compact,
-                  ),
                 ),
-                const SizedBox(width: 6),
               ],
+              if (_pipelineOutDir() != null) ...[
+                IconButton(
+                  tooltip: 'Reset output folder (save beside source recordings)',
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+                  padding: EdgeInsets.zero,
+                  icon: const Icon(Icons.close, size: 14, color: Color(0xFF94A3B8)),
+                  onPressed: _clearBatchOutputFolder,
+                ),
+              ],
+              const SizedBox(width: 6),
               TextButton.icon(
                 onPressed: () => setState(() => _batchSection = 4),
                 icon: const Icon(Icons.analytics_outlined, size: 15),
@@ -9743,22 +9815,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                     isDense: true,
                                     border: OutlineInputBorder(),
                                   ),
+                                  onChanged: (_) => setState(() {}),
                                 ),
                               ),
                               const SizedBox(width: 4),
                               IconButton(
                                 icon: const Icon(Icons.folder_open),
                                 tooltip: 'Select Output Directory',
-                                onPressed: () async {
-                                  final dir = await FilePicker.getDirectoryPath(
-                                    dialogTitle: 'Select Output Folder for Analyse Outputs and Logs',
-                                  );
-                                  if (dir != null) {
-                                    setState(() {
-                                      _batchAnalyseOutDirController.text = dir;
-                                    });
-                                  }
-                                },
+                                onPressed: _selectBatchOutputFolder,
                               ),
                             ],
                           ),

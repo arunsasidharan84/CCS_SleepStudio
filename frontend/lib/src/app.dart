@@ -2999,7 +2999,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             final targetDir = (outputDir != null && outputDir.trim().isNotEmpty)
                 ? outputDir.trim()
                 : File(jobs.first.edfPath).parent.path;
-            final masterCsvPath = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
+            final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
+            final masterCsvPath = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet_$stamp.csv';
             unawaited(() async {
               try {
                 final compiled = await compileRegionalCsvFiles(
@@ -8253,7 +8254,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         final usable = files.where((f) => !empty.contains(f)).toList();
         if (usable.isEmpty) return 'All regional CSV files are empty; re-run feature extraction.';
         final targetDir = outDir ?? File(recs.first.source).parent.path;
-        final master = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
+        final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
+        final master = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet_$stamp.csv';
         final compiledContent = await compileRegionalCsvFiles(
           usable,
           metadata: _batchMetadata,

@@ -1246,7 +1246,11 @@ pub struct NlgOptions {
 impl Default for NlgOptions {
     fn default() -> Self {
         Self {
-            bands: vec![NlgBand::slow_wave(0.01666), NlgBand::sigma(0.01666)],
+            bands: vec![
+                NlgBand::slow_wave(0.01666),
+                NlgBand::sigma(0.01666),
+                NlgBand::alpha(0.01666),
+            ],
             undersampler: 0,
             lp_hz: None,
             keep_series: true,
@@ -1445,9 +1449,9 @@ fn summarise(tr: &NlgTraces, band: &NlgBand, stages: Option<&[Stage]>, epoch_sec
 
 fn unit_scale(unit: &str) -> f64 {
     match unit.trim() {
-        "V" | "v" => 1e6,
-        "mV" | "mv" | "MV" => 1e3,
-        "nV" | "nv" => 1e-3,
+        "V" | "v" | "Volt" | "volt" | "VOLT" | "Volts" | "volts" => 1e6,
+        "mV" | "mv" | "MV" | "mVolt" | "mvolt" => 1e3,
+        "nV" | "nv" | "NV" => 1e-3,
         _ => 1.0,
     }
 }

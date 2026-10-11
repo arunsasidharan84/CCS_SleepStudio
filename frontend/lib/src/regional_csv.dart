@@ -137,10 +137,17 @@ Future<String> compileRegionalCsvFiles(
       regionalStem = regionalStem.substring(0, regionalStem.length - '_analyse_regional.csv'.length);
     }
     candidates.add('${file.parent.path}${Platform.pathSeparator}${regionalStem}_cap.json');
+    final parentOfParent = file.parent.parent.path;
+    if (parentOfParent != file.parent.path) {
+      candidates.add('$parentOfParent${Platform.pathSeparator}${regionalStem}_cap.json');
+    }
     final cleanPattern = RegExp(r'(_clean|_stimclean|_cleaned|_preprocessed)$', caseSensitive: false);
     if (regionalStem.contains(cleanPattern)) {
       final baseStem = regionalStem.replaceAll(cleanPattern, '');
       candidates.add('${file.parent.path}${Platform.pathSeparator}${baseStem}_cap.json');
+      if (parentOfParent != file.parent.path) {
+        candidates.add('$parentOfParent${Platform.pathSeparator}${baseStem}_cap.json');
+      }
     }
     final srcPath = recordingPaths[path];
     if (srcPath != null && srcPath.isNotEmpty) {
@@ -215,15 +222,19 @@ Future<void> updateRegionalCsvWithCapMetrics(
   File file,
   Map<String, String> capSummary,
 ) async {
+  updateRegionalCsvWithCapMetricsSync(file, capSummary);
+}
+
+/// Synchronously injects or updates companion CAP metrics directly into a regional CSV file.
+void updateRegionalCsvWithCapMetricsSync(
+  File file,
+  Map<String, String> capSummary,
+) {
   if (capSummary.isEmpty || !file.existsSync()) return;
   try {
-    final raw = await file.readAsString();
+    final raw = file.readAsStringSync();
     final parsed = parseCsvTable(raw);
     if (parsed.isEmpty) return;
-    if (parsed.first.containsKey('CAP_rate') &&
-        (parsed.first['CAP_rate'] ?? '').isNotEmpty) {
-      return; // Already present with valid data
-    }
 
     final existingHeaders = parsed.first.keys.toList();
     final newHeaders = <String>[...existingHeaders];
@@ -236,7 +247,7 @@ Future<void> updateRegionalCsvWithCapMetrics(
       final combined = {...row, ...capSummary};
       buf.writeln(newHeaders.map((h) => _escapeCsv(combined[h] ?? '')).join(','));
     }
-    await file.writeAsString(buf.toString());
+    file.writeAsStringSync(buf.toString());
   } catch (e) {
     stderr.writeln('Could not update regional CSV with CAP metrics: $e');
   }

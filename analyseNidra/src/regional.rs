@@ -120,16 +120,13 @@ fn region(channel: &str) -> &'static str {
     match prefix.as_str() {
         "FP" | "FPZ" | "AF" | "AFZ" | "F" | "FZ" => "Frontal",
         "FC" | "FCZ" | "C" | "CZ" | "CP" | "CPZ" => "Central",
+        "P" | "PZ" => "Parietal",
         "PO" | "POZ" | "O" | "OZ" => "Occipital",
         "FT" | "T" | "TP" | "M" | "A" => "Temporal",
         _ => {
             // Fallback substring/prefix checks
-            if chan.contains("FP") || chan.contains("AF") || chan.starts_with('F') {
-                "Frontal"
-            } else if chan.contains("FC") || chan.contains("CP") || chan.starts_with('C') {
+            if chan.contains("FC") || chan.contains("CP") || chan.starts_with('C') {
                 "Central"
-            } else if chan.contains("PO") || chan.starts_with('O') {
-                "Occipital"
             } else if chan.contains("FT")
                 || chan.contains("TP")
                 || chan.starts_with('T')
@@ -137,6 +134,12 @@ fn region(channel: &str) -> &'static str {
                 || chan.starts_with('A')
             {
                 "Temporal"
+            } else if chan.contains("FP") || chan.contains("AF") || chan.starts_with('F') {
+                "Frontal"
+            } else if chan.contains("PO") || chan.starts_with('O') {
+                "Occipital"
+            } else if chan.starts_with('P') {
+                "Parietal"
             } else {
                 "NaN"
             }
@@ -386,7 +389,17 @@ pub fn compile(
             continue;
         }
         let mut row = RegionalRow::new();
-        for column in event_columns().into_iter().chain(feature_columns()).chain(nlg_columns()) {
+        let mut all_cols: BTreeSet<String> = event_columns()
+            .into_iter()
+            .chain(feature_columns())
+            .chain(nlg_columns())
+            .collect();
+        for s in &selected {
+            for k in s.keys() {
+                all_cols.insert(k.clone());
+            }
+        }
+        for column in all_cols {
             row.insert(column.clone(), mean(&selected, &column));
         }
         output.insert(region_name, row);
@@ -587,6 +600,137 @@ pub fn write_csv_with_bands(
     Ok(())
 }
 
+/// Injects or updates `CAP_*` columns in an existing regional CSV file.
+pub fn inject_cap_summary_into_csv(
+    csv_path: &Path,
+    cap_summary: &BTreeMap<String, f64>,
+) -> Result<()> {
+    if cap_summary.is_empty() || !csv_path.exists() {
+        return Ok(());
+    }
+    let text = std::fs::read_to_string(csv_path)?;
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    let Some(header_line) = lines.next() else {
+        return Ok(());
+    };
+    let mut headers: Vec<String> = header_line.split(',').map(|s| s.to_string()).collect();
+    let mut rows: Vec<Vec<String>> = lines
+        .map(|l| l.split(',').map(|s| s.to_string()).collect())
+        .collect();
+    if rows.is_empty() {
+        return Ok(());
+    }
+    for r in &mut rows {
+        if r.len() < headers.len() {
+            r.resize(headers.len(), String::new());
+        }
+    }
+    for (k, &v) in cap_summary {
+        let col = if k.to_ascii_uppercase().starts_with("CAP_") {
+            k.clone()
+        } else {
+            format!("CAP_{k}")
+        };
+        let val = if v.is_finite() {
+            format!("{v:.3}")
+        } else {
+            String::new()
+        };
+        if let Some(idx) = headers.iter().position(|h| h == &col) {
+            for r in &mut rows {
+                r[idx] = val.clone();
+            }
+        } else {
+            headers.push(col);
+            for r in &mut rows {
+                r.push(val.clone());
+            }
+        }
+    }
+    let tmp_path = csv_path.with_extension("csv.partial");
+    let mut writer = BufWriter::new(File::create(&tmp_path)?);
+    writeln!(writer, "{}", headers.join(","))?;
+    for r in rows {
+        writeln!(writer, "{}", r.join(","))?;
+    }
+    writer.flush()?;
+    drop(writer);
+    std::fs::rename(&tmp_path, csv_path)?;
+    Ok(())
+}
+
+fn strip_clean_suffix(stem: &str) -> String {
+    let lower = stem.to_ascii_lowercase();
+    for suffix in ["_clean", "_stimclean", "_cleaned", "_preprocessed"] {
+        if lower.ends_with(suffix) && stem.len() > suffix.len() {
+            return stem[..stem.len() - suffix.len()].to_string();
+        }
+    }
+    stem.to_string()
+}
+
+/// Searches for a companion `*_cap.json` next to `csv_path`, `edf_path`, or `out_dir`
+/// and injects its summary metrics into `csv_path` if found.
+pub fn try_inject_companion_cap_into_csv(
+    csv_path: &Path,
+    edf_path: &Path,
+    out_dir: Option<&Path>,
+) {
+    let Some(stem) = edf_path.file_stem().and_then(|s| s.to_str()) else {
+        return;
+    };
+    let base_stem = strip_clean_suffix(stem);
+    let mut dirs: Vec<&Path> = Vec::new();
+    if let Some(d) = out_dir {
+        dirs.push(d);
+    }
+    if let Some(d) = csv_path.parent() {
+        if !dirs.contains(&d) {
+            dirs.push(d);
+        }
+    }
+    if let Some(d) = edf_path.parent() {
+        if !dirs.contains(&d) {
+            dirs.push(d);
+        }
+        if let Some(parent) = d.parent() {
+            if !dirs.contains(&parent) {
+                dirs.push(parent);
+            }
+        }
+    }
+    let mut candidates = Vec::new();
+    for d in dirs {
+        candidates.push(d.join(format!("{stem}_cap.json")));
+        if base_stem != stem {
+            candidates.push(d.join(format!("{base_stem}_cap.json")));
+        }
+    }
+    for cand in candidates {
+        if !cand.exists() {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&cand) else {
+            continue;
+        };
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let Some(sum_obj) = val.get("summary").and_then(|s| s.as_object()) else {
+            continue;
+        };
+        let mut summary = BTreeMap::new();
+        for (k, v) in sum_obj {
+            let num = v.as_f64().unwrap_or(f64::NAN);
+            summary.insert(k.clone(), num);
+        }
+        if !summary.is_empty() {
+            let _ = inject_cap_summary_into_csv(csv_path, &summary);
+            break;
+        }
+    }
+}
+
 /// Columns that must hold at least one value for an analysis to count as
 /// present in an existing regional CSV (used by `--skip-existing`).
 pub fn marker_columns(analysis: &str) -> &'static [&'static str] {
@@ -595,7 +739,14 @@ pub fn marker_columns(analysis: &str) -> &'static [&'static str] {
         "spindles" => &["sp_Count"],
         "slow_waves" => &["sw_all_Count"],
         "pac" => &["pac_all_max_MI"],
-        "nlg" => &["NLG_SW_NREM", "NLG_Sigma_NREM", "NLG_Alpha_NREM", "NLG_SW_W", "NLG_Sigma_W"],
+        "nlg" => &[
+            "NLG_SW_NREM",
+            "NLG_Sigma_NREM",
+            "NLG_Alpha_NREM",
+            "NLG_SW_W",
+            "NLG_Sigma_W",
+            "NLG_Alpha_W",
+        ],
         _ => &[],
     }
 }
@@ -611,14 +762,22 @@ pub fn is_complete(path: &Path, analyses: &[&str]) -> bool {
     if rows.is_empty() {
         return false;
     }
+    let has_col = |name: &str| -> bool {
+        columns.iter().position(|c| *c == name).is_some_and(|i| {
+            rows.iter().any(|r| r.get(i).is_some_and(|v| !v.trim().is_empty()))
+        })
+    };
     analyses.iter().all(|analysis| {
+        if *analysis == "nlg" {
+            // Require all three default NLG bands (SW, Sigma, Alpha) to be populated.
+            return ["SW", "Sigma", "Alpha"].iter().all(|prefix| {
+                has_col(&format!("NLG_{prefix}_NREM"))
+                    || has_col(&format!("NLG_{prefix}_W"))
+                    || has_col(&format!("NLG_{prefix}_index"))
+            });
+        }
         let wanted = marker_columns(analysis);
-        wanted.is_empty()
-            || wanted.iter().any(|name| {
-                columns.iter().position(|c| c == name).is_some_and(|i| {
-                    rows.iter().any(|r| r.get(i).is_some_and(|v| !v.trim().is_empty()))
-                })
-            })
+        wanted.is_empty() || wanted.iter().any(|name| has_col(name))
     })
 }
 

@@ -279,8 +279,9 @@ pub fn read_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
     let scales: Vec<(f64, f64)> = headers
         .iter()
         .map(|h| {
+            let u_scale = unit_scale_to_uv(&h.unit, h.physical_min, h.physical_max);
             let scale = (h.physical_max - h.physical_min) / (h.digital_max - h.digital_min);
-            (scale, h.physical_min - h.digital_min * scale)
+            (scale * u_scale, (h.physical_min - h.digital_min * scale) * u_scale)
         })
         .collect();
     let records_per_chunk = (8 * 1024 * 1024 / record_bytes.max(1)).max(1);
@@ -434,6 +435,25 @@ fn read_layout(path: &Path) -> Result<(File, EdfLayout)> {
             headers,
         },
     ))
+}
+
+/// Scale factor to convert an electrophysiological channel (EEG/EOG/EMG) from
+/// its EDF header unit to microvolts (µV). Also handles files where the unit
+/// is blank or mislabelled while `physical_min`/`physical_max` are in Volts.
+pub fn unit_scale_to_uv(unit: &str, physical_min: f64, physical_max: f64) -> f64 {
+    match unit.trim() {
+        "V" | "v" | "Volt" | "volt" | "VOLT" | "Volts" | "volts" => 1e6,
+        "mV" | "mv" | "MV" | "mVolt" | "mvolt" => 1e3,
+        "nV" | "nv" | "NV" => 1e-3,
+        _ => {
+            let max_abs = physical_min.abs().max(physical_max.abs());
+            if max_abs > 0.0 && max_abs <= 0.05 {
+                1e6
+            } else {
+                1.0
+            }
+        }
+    }
 }
 
 /// Lists every signal in an EDF/EDF+ file with its native sampling rate.

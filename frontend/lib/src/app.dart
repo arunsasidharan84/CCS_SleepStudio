@@ -8211,7 +8211,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                       final val = v is num ? (v.isFinite ? v.toStringAsFixed(3) : '') : (v?.toString() ?? '');
                       capMap[col] = val;
                     }
-                    unawaited(updateRegionalCsvWithCapMetrics(rFile, capMap));
+                    updateRegionalCsvWithCapMetricsSync(rFile, capMap);
                   }
                 } catch (_) {}
               }

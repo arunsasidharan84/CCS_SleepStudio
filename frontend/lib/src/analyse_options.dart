@@ -44,7 +44,7 @@ class AnalyseNidraOptions {
     List<String>? nlgBands,
     this.nlgSmoothRate = 0.01666,
   }) : analyses = analyses ?? kAnalyseNidraAnalyses.map((a) => a.$1).toSet(),
-       nlgBands = nlgBands ?? ['slow_wave', 'sigma'];
+       nlgBands = nlgBands ?? ['slow_wave', 'sigma', 'alpha'];
 
   final Set<String> analyses;
   final List<String> nlgBands;

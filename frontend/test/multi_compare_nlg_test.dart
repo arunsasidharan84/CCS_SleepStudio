@@ -74,7 +74,7 @@ void main() {
     final all = AnalyseNidraOptions();
     final args = all.toArgs(nlgOutPath: '/o/x_analyse_nlg.json');
     expect(args.sublist(0, 2), ['--analyses', 'core,spindles,slow_waves,pac,nlg']);
-    expect(args, containsAllInOrder(['--nlg-bands', 'slow_wave,sigma', '--nlg-smooth-rate']));
+    expect(args, containsAllInOrder(['--nlg-bands', 'slow_wave,sigma,alpha', '--nlg-smooth-rate']));
     expect(args, contains('/o/x_analyse_nlg.json'));
     final some = AnalyseNidraOptions(analyses: {'spindles'});
     expect(some.toArgs(), ['--analyses', 'spindles']);

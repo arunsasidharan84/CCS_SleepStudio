@@ -643,25 +643,56 @@ pub fn load_arousal_eeg(
             }
         }
     }
+    let scale_uv = |unit: &str, data: &mut [f64]| {
+        let max_abs = data.iter().fold(0.0_f64, |acc, &v| acc.max(v.abs()));
+        let s = crate::edf::unit_scale_to_uv(unit, -max_abs, max_abs);
+        if (s - 1.0).abs() > 1e-12 {
+            for v in data.iter_mut() {
+                *v *= s;
+            }
+        }
+    };
     for c in candidates {
         if let Some(sig) = load_signal(path, Some(&c))? {
             let mut data = sig.data;
-            // Reference unreferenced central channels to the contralateral mastoid.
-            let key = channel_match_key(&c).to_ascii_uppercase();
-            if !key.contains('-') {
-                let contra = if key.ends_with('3') { ["M2", "A2"] } else { ["M1", "A1"] };
-                for r in contra {
-                    if let Some(ref_sig) = load_signal(path, Some(r))? {
-                        if (ref_sig.sfreq - sig.sfreq).abs() < 1e-6 {
+            scale_uv(&sig.unit, &mut data);
+            let mut label = sig.label.clone();
+            // Reference unreferenced central/frontal channels to the requested or contralateral mastoid.
+            let sig_key = channel_match_key(&sig.label).to_ascii_uppercase();
+            if !sig_key.contains('-') {
+                let req_key = channel_match_key(&c).to_ascii_uppercase();
+                let explicit_ref = req_key
+                    .split_once('-')
+                    .map(|(_, r)| r.trim().to_string())
+                    .filter(|r| !r.is_empty());
+                let defaults: [&str; 4] = if sig_key.ends_with('3') {
+                    ["M2", "A2", "M1", "A1"]
+                } else {
+                    ["M1", "A1", "M2", "A2"]
+                };
+                let mut ref_candidates: Vec<String> = Vec::new();
+                if let Some(er) = explicit_ref {
+                    ref_candidates.push(er);
+                }
+                for d in defaults {
+                    if !ref_candidates.iter().any(|x| x.eq_ignore_ascii_case(d)) {
+                        ref_candidates.push(d.to_string());
+                    }
+                }
+                for r in &ref_candidates {
+                    if let Some(mut ref_sig) = load_signal(path, Some(r))? {
+                        if (ref_sig.sfreq - sig.sfreq).abs() < 1e-6 && ref_sig.label != sig.label {
+                            scale_uv(&ref_sig.unit, &mut ref_sig.data);
                             for (x, y) in data.iter_mut().zip(ref_sig.data.iter()) {
                                 *x -= y;
                             }
+                            label = format!("{}-{}", sig.label, ref_sig.label);
                             break;
                         }
                     }
                 }
             }
-            return Ok(Some((data, sig.sfreq, sig.label)));
+            return Ok(Some((data, sig.sfreq, label)));
         }
     }
     Ok(None)

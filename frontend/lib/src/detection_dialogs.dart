@@ -1853,14 +1853,16 @@ class _EditRegionMappingDialogState extends State<EditRegionMappingDialog> {
     if (chan == 'PPG' || chan == 'ECG' || chan == 'EMG' || chan == 'EOG' || chan == 'REF' || chan == 'GND') {
       return 'NaN';
     }
-    if (chan.startsWith('FP') || chan.startsWith('AF') || chan.startsWith('F')) {
-      return 'Frontal';
-    } else if (chan.startsWith('FC') || chan.startsWith('CP') || chan.startsWith('C')) {
+    if (chan.startsWith('FC') || chan.startsWith('CP') || chan.startsWith('C')) {
       return 'Central';
-    } else if (chan.startsWith('PO') || chan.startsWith('O')) {
-      return 'Occipital';
     } else if (chan.startsWith('FT') || chan.startsWith('TP') || chan.startsWith('T') || chan.startsWith('M') || chan.startsWith('A')) {
       return 'Temporal';
+    } else if (chan.startsWith('FP') || chan.startsWith('AF') || chan.startsWith('F')) {
+      return 'Frontal';
+    } else if (chan.startsWith('PO') || chan.startsWith('O')) {
+      return 'Occipital';
+    } else if (chan.startsWith('P')) {
+      return 'Parietal';
     }
     return 'Central';
   }

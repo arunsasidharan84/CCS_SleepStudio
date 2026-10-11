@@ -71,7 +71,7 @@ struct NlgCli {
 impl Default for NlgCli {
     fn default() -> Self {
         Self {
-            bands: vec!["slow_wave".into(), "sigma".into()],
+            bands: vec!["slow_wave".into(), "sigma".into(), "alpha".into()],
             smooth_rate: 0.01666,
             undersampler: 0,
             lp_hz: None,
@@ -815,6 +815,39 @@ fn handle_cap_cli(args: Vec<OsString>) -> Result<()> {
     let report = analyse_nidra::psg::cap::analyse(&edf, &o)?;
     println!("PROGRESS 0.95 Writing {}", out.display());
     write_json_report(&report, &out)?;
+    // Mirror _cap.json next to the input EDF if --out wrote to a different folder
+    // (e.g. when input is a cleaned EDF in a subfolder and --out points to the raw folder).
+    if let (Some(out_dir), Some(edf_dir), Some(out_name)) = (out.parent(), edf.parent(), out.file_name()) {
+        if out_dir != edf_dir {
+            let mirror = edf_dir.join(out_name);
+            let _ = write_json_report(&report, &mirror);
+        }
+    }
+    // Also inject CAP summary metrics into any companion *_analyse_regional.csv.
+    if let Some(edf_stem) = edf.file_stem().and_then(|s| s.to_str()) {
+        let out_stem = out
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.strip_suffix("_cap"))
+            .unwrap_or(edf_stem);
+        let mut dirs: Vec<&Path> = Vec::new();
+        if let Some(d) = out.parent() {
+            dirs.push(d);
+        }
+        if let Some(d) = edf.parent() {
+            if !dirs.contains(&d) {
+                dirs.push(d);
+            }
+        }
+        for d in dirs {
+            for st in [edf_stem, out_stem] {
+                let reg_csv = d.join(format!("{st}_analyse_regional.csv"));
+                if reg_csv.exists() {
+                    let _ = regional::inject_cap_summary_into_csv(&reg_csv, &report.summary);
+                }
+            }
+        }
+    }
     for w in &report.warnings {
         println!("WARNING {w}");
     }
@@ -1135,73 +1168,109 @@ fn main() -> Result<()> {
     println!("analyses: {}", active.join(","));
 
     let core = if run("core") && (output_path.is_some() || need_regional) {
-        cached_or_compute(cli.skip_existing, output_path.as_ref(), "core stage features", || {
-            let t = Instant::now();
-            let v = pipeline::compute_core_stage_features_with_config(&recording, &feature_config);
-            println!("computed core stage features in {:.3}s", t.elapsed().as_secs_f64());
-            Some(v)
-        })
+        cached_or_compute(
+            cli.skip_existing,
+            output_path.as_ref(),
+            "core stage features",
+            |v: &pipeline::CoreStageFeatures| !v.channels.is_empty(),
+            || {
+                let t = Instant::now();
+                let v = pipeline::compute_core_stage_features_with_config(&recording, &feature_config);
+                println!("computed core stage features in {:.3}s", t.elapsed().as_secs_f64());
+                Some(v)
+            },
+        )
     } else {
         (None, false)
     };
     save_if_fresh(&core, output_path.as_ref(), "core stage features", true)?;
     let pac_values = if run("pac") && (pac_output_path.is_some() || need_regional) {
-        cached_or_compute(cli.skip_existing, pac_output_path.as_ref(), "PAC results", || {
-            let t = Instant::now();
-            let v = pac::compute(&recording);
-            println!("computed PAC in {:.3}s", t.elapsed().as_secs_f64());
-            Some(v)
-        })
+        cached_or_compute(
+            cli.skip_existing,
+            pac_output_path.as_ref(),
+            "PAC results",
+            |v: &BTreeMap<String, pac::PacChannelResult>| {
+                v.values().any(|ch| ch.maximum.is_finite())
+            },
+            || {
+                let t = Instant::now();
+                let v = pac::compute(&recording);
+                println!("computed PAC in {:.3}s", t.elapsed().as_secs_f64());
+                Some(v)
+            },
+        )
     } else {
         (None, false)
     };
     save_if_fresh(&pac_values, pac_output_path.as_ref(), "PAC results", true)?;
     let slow_wave_values = if run("slow_waves") && (slow_wave_output_path.is_some() || need_regional) {
-        cached_or_compute(cli.skip_existing, slow_wave_output_path.as_ref(), "slow-wave results", || {
-            let t = Instant::now();
-            let v = events::slow_waves_with_config(&recording, &feature_config.slow_waves);
-            println!("detected slow waves in {:.3}s", t.elapsed().as_secs_f64());
-            Some(v)
-        })
+        cached_or_compute(
+            cli.skip_existing,
+            slow_wave_output_path.as_ref(),
+            "slow-wave results",
+            |v: &events::SlowWaveResults| !v.events.is_empty(),
+            || {
+                let t = Instant::now();
+                let v = events::slow_waves_with_config(&recording, &feature_config.slow_waves);
+                println!("detected slow waves in {:.3}s", t.elapsed().as_secs_f64());
+                Some(v)
+            },
+        )
     } else {
         (None, false)
     };
     save_if_fresh(&slow_wave_values, slow_wave_output_path.as_ref(), "slow-wave results", true)?;
     let spindle_values = if run("spindles") && (spindle_output_path.is_some() || need_regional) {
-        cached_or_compute(cli.skip_existing, spindle_output_path.as_ref(), "spindle results", || {
-            let t = Instant::now();
-            let v = events::spindles_with_config(&recording, &feature_config.spindles);
-            println!("detected spindles in {:.3}s", t.elapsed().as_secs_f64());
-            Some(v)
-        })
+        cached_or_compute(
+            cli.skip_existing,
+            spindle_output_path.as_ref(),
+            "spindle results",
+            |v: &events::SpindleResults| !v.events.is_empty(),
+            || {
+                let t = Instant::now();
+                let v = events::spindles_with_config(&recording, &feature_config.spindles);
+                println!("detected spindles in {:.3}s", t.elapsed().as_secs_f64());
+                Some(v)
+            },
+        )
     } else {
         (None, false)
     };
     save_if_fresh(&spindle_values, spindle_output_path.as_ref(), "spindle results", true)?;
     let nlg_report = if run("nlg") && (cli.nlg_out.is_some() || need_regional) {
         let opts = cli.nlg.options()?;
-        cached_or_compute(cli.skip_existing, cli.nlg_out.as_ref(), "NeuroLoopGain results", || {
-            let t = Instant::now();
-            match analyse_nidra::nlg::analyse_recording(
-                &edf_path,
-                Some(&recording.stages),
-                &cli.channels,
-                &cli.references,
-                &opts,
-            ) {
-                Ok(report) => {
-                    for w in &report.warnings {
-                        println!("WARNING NeuroLoopGain {w}");
+        cached_or_compute(
+            cli.skip_existing,
+            cli.nlg_out.as_ref(),
+            "NeuroLoopGain results",
+            |v: &analyse_nidra::nlg::NlgReport| {
+                opts.bands
+                    .iter()
+                    .all(|b| v.average.contains_key(b.name.as_str()))
+            },
+            || {
+                let t = Instant::now();
+                match analyse_nidra::nlg::analyse_recording(
+                    &edf_path,
+                    Some(&recording.stages),
+                    &cli.channels,
+                    &cli.references,
+                    &opts,
+                ) {
+                    Ok(report) => {
+                        for w in &report.warnings {
+                            println!("WARNING NeuroLoopGain {w}");
+                        }
+                        println!("computed NeuroLoopGain in {:.3}s", t.elapsed().as_secs_f64());
+                        Some(report)
                     }
-                    println!("computed NeuroLoopGain in {:.3}s", t.elapsed().as_secs_f64());
-                    Some(report)
+                    Err(e) => {
+                        println!("WARNING NeuroLoopGain failed: {e}");
+                        None
+                    }
                 }
-                Err(e) => {
-                    println!("WARNING NeuroLoopGain failed: {e}");
-                    None
-                }
-            }
-        })
+            },
+        )
     } else {
         (None, false)
     };
@@ -1229,6 +1298,7 @@ fn main() -> Result<()> {
             .and_then(|value| value.to_str())
             .context("EDF filename is not valid UTF-8")?;
         regional::write_csv_with_bands(output_path, recording_name, &recording, &rows, &feature_config.bands)?;
+        regional::try_inject_companion_cap_into_csv(output_path, &edf_path, cli.out_dir.as_deref());
         println!(
             "wrote final regional CSV to {} ({} rows) in {:.3}s",
             output_path.display(),
@@ -1429,21 +1499,26 @@ mod tests {
 }
 
 
-/// Reuses a cached JSON result when `--skip-existing` is set and the file
-/// reads back; otherwise computes it. Returns (value, freshly computed).
+/// Reuses a cached JSON result when `--skip-existing` is set, the file reads
+/// back, and `is_valid` passes; otherwise computes it. Returns (value, freshly computed).
 fn cached_or_compute<T: serde::de::DeserializeOwned>(
     skip_existing: bool,
     path: Option<&PathBuf>,
     what: &str,
+    is_valid: impl FnOnce(&T) -> bool,
     compute: impl FnOnce() -> Option<T>,
 ) -> (Option<T>, bool) {
     if skip_existing {
         if let Some(p) = path.filter(|p| p.exists()) {
             match analyse_nidra::json_nan::from_path::<T>(p) {
-                Ok(v) => {
+                Ok(v) if is_valid(&v) => {
                     println!("reusing existing {what} from {}", p.display());
                     return (Some(v), false);
                 }
+                Ok(_) => println!(
+                    "recomputing {what} (existing {} is empty or incomplete)",
+                    p.display()
+                ),
                 Err(e) => println!("recomputing {what} (cache read failed: {e})"),
             }
         }

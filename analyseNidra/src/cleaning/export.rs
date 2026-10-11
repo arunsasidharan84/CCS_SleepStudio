@@ -38,6 +38,24 @@ pub fn write_edf_file(
     signals: &[Vec<f64>],
     sample_rate: f64,
 ) -> Result<()> {
+    write_edf_file_with_prefilter(
+        out_path,
+        channel_names,
+        signals,
+        sample_rate,
+        "AnalyseNidra Rust Preprocessed",
+    )
+}
+
+/// Exports cleaned multi-channel signals to standard European Data Format (EDF)
+/// with an explicit prefilter header string and adaptive per-channel dynamic range.
+pub fn write_edf_file_with_prefilter(
+    out_path: &Path,
+    channel_names: &[String],
+    signals: &[Vec<f64>],
+    sample_rate: f64,
+    prefilter_label: &str,
+) -> Result<()> {
     if channel_names.is_empty() || signals.is_empty() {
         anyhow::bail!("Cannot write empty EDF file");
     }
@@ -46,6 +64,19 @@ pub fn write_edf_file(
     let n_samples = signals[0].len();
     let samples_per_record = sample_rate.round() as usize;
     let n_records = n_samples / samples_per_record.max(1);
+
+    // Compute per-channel symmetric physical bound >= 500.0 uV so signals never clip
+    let phys_bounds: Vec<f64> = signals
+        .iter()
+        .map(|sig| {
+            let max_abs = sig
+                .iter()
+                .copied()
+                .filter(|v| v.is_finite())
+                .fold(0.0_f64, |acc, v| acc.max(v.abs()));
+            (max_abs * 1.05).ceil().max(500.0).min(32767.0)
+        })
+        .collect();
 
     let file = File::create(out_path).with_context(|| format!("Creating EDF at {:?}", out_path))?;
     let mut writer = BufWriter::new(file);
@@ -79,12 +110,12 @@ pub fn write_edf_file(
         writer.write_all(&pad_ascii("uV", 8))?;
     }
     // 4. Physical minimum (8 bytes each)
-    for _ in 0..n_signals {
-        writer.write_all(&pad_ascii("-500.0", 8))?;
+    for &bound in &phys_bounds {
+        writer.write_all(&pad_ascii(&format!("-{:.1}", bound), 8))?;
     }
     // 5. Physical maximum (8 bytes each)
-    for _ in 0..n_signals {
-        writer.write_all(&pad_ascii("500.0", 8))?;
+    for &bound in &phys_bounds {
+        writer.write_all(&pad_ascii(&format!("{:.1}", bound), 8))?;
     }
     // 6. Digital minimum (8 bytes each)
     for _ in 0..n_signals {
@@ -96,7 +127,7 @@ pub fn write_edf_file(
     }
     // 8. Prefiltering (80 bytes each)
     for _ in 0..n_signals {
-        writer.write_all(&pad_ascii("AnalyseNidra Rust Preprocessed", 80))?;
+        writer.write_all(&pad_ascii(prefilter_label, 80))?;
     }
     // 9. Samples in each record (8 bytes each)
     for _ in 0..n_signals {
@@ -107,20 +138,20 @@ pub fn write_edf_file(
         writer.write_all(&pad_ascii("", 32))?;
     }
 
-    // Data records: scale uV [-500.0, 500.0] to digital i16 [-32768, 32767]
-    let phys_range = 1000.0;
+    // Data records: scale uV [-bound, bound] to digital i16 [-32768, 32767]
     let dig_range = 65535.0;
-    let scale = dig_range / phys_range;
 
     for rec in 0..n_records {
         let start = rec * samples_per_record;
         let end = start + samples_per_record;
 
         for ch in 0..n_signals {
+            let bound = phys_bounds[ch];
+            let scale = dig_range / (2.0 * bound);
             let slice = &signals[ch][start..end];
             for &val in slice {
-                let clamped = val.clamp(-500.0, 500.0);
-                let digital = ((clamped + 500.0) * scale - 32768.0).round() as i32;
+                let clamped = val.clamp(-bound, bound);
+                let digital = ((clamped + bound) * scale - 32768.0).round() as i32;
                 let i16_val = digital.clamp(-32768, 32767) as i16;
                 writer.write_all(&i16_val.to_le_bytes())?;
             }

@@ -50,7 +50,7 @@ List<TimelineRow> overnightTimelineRows(
   ];
   final byDigit = {for (final o in order) o.$2: o.$1};
   for (final e in events) {
-    if (hiddenLabels.contains(e.label)) continue;
+    if (isMarkerDisabled(e, hiddenLabels)) continue;
     final a = math.min(e.startSec, e.endSec);
     var b = math.max(e.startSec, e.endSec);
     if (b - a < 1) b = a + 1;
@@ -73,7 +73,8 @@ List<TimelineRow> overnightTimelineRows(
     if (name != null) {
       typed.putIfAbsent(name, () => (digit, <(double, double)>[])).$2.add((a, b));
     } else {
-      other.putIfAbsent(e.label.trim().isEmpty ? 'Marker' : e.label.trim(), () => []).add((a, b));
+      final group = markerGroupName(e.label);
+      other.putIfAbsent(group.isEmpty ? 'Marker' : group, () => []).add((a, b));
     }
   }
   final rows = <TimelineRow>[

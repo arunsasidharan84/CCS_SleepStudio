@@ -6,14 +6,14 @@ pub mod spline;
 pub mod stim_artifact;
 
 use anyhow::{Context, Result};
-use export::{write_edf_file, write_json_log, PreprocessingLog};
+use export::{write_edf_file_with_prefilter, write_json_log, PreprocessingLog};
 use gedai::{gedai_denoise, GedaiConfig};
 use ransac::{detect_bad_channels, interpolate_bad_channels, RansacConfig};
 use stim_artifact::{remove_stimulation_artifact, StimArtifactConfig, StimArtifactReport};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::signal::{filter_bandpass_fir, filter_notch, mne_fft_resample};
+use crate::signal::{filter_bandpass_fir, filter_notch, mne_fft_resample, preprocess_mne_250hz};
 
 #[derive(Debug, Clone)]
 pub struct PreprocessingPipelineConfig {
@@ -39,7 +39,7 @@ impl Default for PreprocessingPipelineConfig {
                 "save".to_string(),
             ],
             downsample_freq: Some(250.0),
-            filter_bandpass: (0.5, 40.0),
+            filter_bandpass: (0.3, 35.0),
             notch_freq: Some(50.0),
             ransac_corr_thresh: 0.80,
             eeg_channels: None,
@@ -94,6 +94,7 @@ pub fn run_preprocessing(
     let mut detected_bads = Vec::new();
     let mut bad_indices = Vec::new();
     let mut stim_report: Option<StimArtifactReport> = None;
+    let mut ran_mne_filter = false;
 
     for step in &config.steps {
         if is_stim_artifact_step(step) {
@@ -127,11 +128,16 @@ pub fn run_preprocessing(
             "filter" => {
                 let (lo, hi) = config.filter_bandpass;
                 println!("PROGRESS 0.40 Bandpass filtering ({}-{} Hz)...", lo, hi);
-                for sig in &mut signals {
-                    *sig = filter_bandpass_fir(sig, sfreq, lo, hi);
-                    if let Some(notch) = config.notch_freq {
-                        if notch > 0.0 {
-                            *sig = filter_notch(sig, sfreq, notch, 2.0);
+                if (sfreq - crate::TARGET_SFREQ).abs() < 1e-6 && lo <= 0.5 && hi >= 30.0 {
+                    preprocess_mne_250hz(&mut signals);
+                    ran_mne_filter = true;
+                } else {
+                    for sig in &mut signals {
+                        *sig = filter_bandpass_fir(sig, sfreq, lo, hi);
+                        if let Some(notch) = config.notch_freq {
+                            if notch > 0.0 {
+                                *sig = filter_notch(sig, sfreq, notch, 2.0);
+                            }
                         }
                     }
                 }
@@ -179,7 +185,12 @@ pub fn run_preprocessing(
         println!("PROGRESS 0.90 Saving cleaned EDF and execution log...");
         let edf_name = format!("{}{}.edf", stem, config.suffix);
         let edf_path = out_dir.join(edf_name);
-        write_edf_file(&edf_path, &channel_names, &signals, sfreq)?;
+        let prefilter_label = if ran_mne_filter {
+            "AnalyseNidra Rust Filtered 0.3-35Hz"
+        } else {
+            "AnalyseNidra Rust Preprocessed"
+        };
+        write_edf_file_with_prefilter(&edf_path, &channel_names, &signals, sfreq, prefilter_label)?;
         println!("OUTPUT_EDF \"{}\"", edf_path.display());
         out_edf_path = Some(edf_path);
 

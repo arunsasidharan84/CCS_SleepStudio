@@ -10,7 +10,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const VERSION: &str = "1.25.0";
+const VERSION: &str = "1.26.0";
 
 const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
 [core.json|-] [pac.json|-] [slow-waves.json|-] [spindles.json|-] [regional.csv|-] \
@@ -432,8 +432,8 @@ fn handle_preprocess_cli(args: impl IntoIterator<Item = OsString>) -> Result<()>
     let mut out_dir: Option<PathBuf> = None;
     let mut steps = None;
     let mut downsample_hz = Some(250.0);
-    let mut bandpass_lo = 0.5;
-    let mut bandpass_hi = 40.0;
+    let mut bandpass_lo = 0.3;
+    let mut bandpass_hi = 35.0;
     let mut notch_hz = Some(50.0);
     let mut ransac_thresh = 0.80;
     let mut eeg_channels = None;
@@ -465,11 +465,11 @@ fn handle_preprocess_cli(args: impl IntoIterator<Item = OsString>) -> Result<()>
             }
         } else if s == "--bandpass-lo" {
             if let Some(val) = it.next() {
-                bandpass_lo = val.to_string_lossy().parse().unwrap_or(0.5);
+                bandpass_lo = val.to_string_lossy().parse().unwrap_or(0.3);
             }
         } else if s == "--bandpass-hi" {
             if let Some(val) = it.next() {
-                bandpass_hi = val.to_string_lossy().parse().unwrap_or(40.0);
+                bandpass_hi = val.to_string_lossy().parse().unwrap_or(35.0);
             }
         } else if s == "--notch-hz" {
             if let Some(val) = it.next() {

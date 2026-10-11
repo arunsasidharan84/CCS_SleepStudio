@@ -831,6 +831,7 @@ class _AnalyseNidraDetectionDialogState
     extends State<AnalyseNidraDetectionDialog> {
   late final Set<String> _selectedChannels;
   String _selectedReference = 'None';
+  List<String> _linkedMastoidPair = const [];
   bool _detectSpindles = true;
   bool _detectSlowWaves = true;
 
@@ -838,8 +839,19 @@ class _AnalyseNidraDetectionDialogState
   void initState() {
     super.initState();
     _selectedChannels = <String>{};
+    String? m1Label;
+    String? m2Label;
     for (final label in widget.channelLabels) {
-      final u = label.toUpperCase();
+      final u = label.trim().toUpperCase();
+      final root = u.replaceFirst(RegExp(r'^EEG\s+'), '').split(RegExp(r'[:\-_\s]')).first;
+      if (root == 'M1' || root == 'A1') {
+        m1Label ??= label;
+        continue;
+      }
+      if (root == 'M2' || root == 'A2') {
+        m2Label ??= label;
+        continue;
+      }
       if (u.contains('C3') ||
           u.contains('C4') ||
           u.contains('F3') ||
@@ -854,11 +866,26 @@ class _AnalyseNidraDetectionDialogState
     if (_selectedChannels.isEmpty && widget.channelLabels.isNotEmpty) {
       _selectedChannels.addAll(widget.channelLabels.take(4));
     }
+    final alreadyBipolar = _selectedChannels.isNotEmpty &&
+        _selectedChannels.every((c) => c.contains('-'));
+    if (!alreadyBipolar && m1Label != null && m2Label != null) {
+      _linkedMastoidPair = [m1Label, m2Label];
+      _selectedReference = '$m1Label, $m2Label (Linked Mastoids)';
+    } else if (!alreadyBipolar && (m1Label != null || m2Label != null)) {
+      _selectedReference = m1Label ?? m2Label!;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final refOptions = ['None', ...widget.channelLabels];
+    final linkedLabel = _linkedMastoidPair.length == 2
+        ? '${_linkedMastoidPair[0]}, ${_linkedMastoidPair[1]} (Linked Mastoids)'
+        : null;
+    final refOptions = [
+      'None',
+      ?linkedLabel,
+      ...widget.channelLabels,
+    ];
     return AlertDialog(
       title: const Row(
         children: [
@@ -1030,7 +1057,15 @@ class _AnalyseNidraDetectionDialogState
               );
               return;
             }
-            final refs = _selectedReference == 'None' ? <String>[] : [_selectedReference];
+            final List<String> refs;
+            if (_selectedReference == 'None') {
+              refs = <String>[];
+            } else if (_linkedMastoidPair.length == 2 &&
+                _selectedReference.endsWith('(Linked Mastoids)')) {
+              refs = List<String>.from(_linkedMastoidPair);
+            } else {
+              refs = [_selectedReference];
+            }
             widget.onRun({
               'channels': _selectedChannels.toList(),
               'references': refs,

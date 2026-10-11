@@ -157,6 +157,27 @@ pub fn read_channel_labels(path: &Path) -> Result<Vec<String>> {
     Ok(headers.into_iter().map(|h| h.label).collect())
 }
 
+/// Returns true if the EDF file headers indicate it was already filtered by AnalyseNidra's MNE 0.3-35 Hz filter.
+pub fn is_already_mne_filtered(path: &Path) -> bool {
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    let mut fixed = [0_u8; 256];
+    if file.read_exact(&mut fixed).is_err() {
+        return false;
+    }
+    let Ok(num_signals) = parse_usize(&fixed[252..256], "number of signals") else {
+        return false;
+    };
+    let Ok(headers) = read_edf_headers(&mut file, path, num_signals) else {
+        return false;
+    };
+    !headers.is_empty()
+        && headers
+            .iter()
+            .all(|h| h.prefilter.starts_with("AnalyseNidra Rust Filtered"))
+}
+
 pub fn read_all_channels(path: &Path) -> Result<EdfData> {
     let labels = read_channel_labels(path)?;
     read_selected(path, &labels)

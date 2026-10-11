@@ -411,20 +411,19 @@ pub fn filter_bandpass_fir(signal: &[f64], sfreq: f64, low_hz: f64, high_hz: f64
     if signal.len() < 100 {
         return signal.to_vec();
     }
-    let num_taps = ((3.3 * sfreq / low_hz.max(0.5)).round() as usize).clamp(51, 301);
+    let trans_bw = (low_hz * 0.5).max(0.15);
+    let num_taps = (((3.3 * sfreq / trans_bw).round() as usize) | 1).clamp(101, 4125);
     let taps = design_bandpass_fir(sfreq, low_hz, high_hz, num_taps);
-    let padlen = (num_taps * 2).min(signal.len() - 2);
-    scipy_filtfilt_fir(signal, &taps, padlen)
+    mne_overlap_add(signal, &taps)
 }
 
 pub fn filter_notch(signal: &[f64], sfreq: f64, notch_hz: f64, width_hz: f64) -> Vec<f64> {
     if signal.len() < 100 || notch_hz >= sfreq / 2.0 {
         return signal.to_vec();
     }
-    let num_taps = ((3.3 * sfreq / width_hz.max(1.0)).round() as usize).clamp(51, 301);
+    let num_taps = (((3.3 * sfreq / width_hz.max(1.0)).round() as usize) | 1).clamp(101, 1651);
     let taps = design_notch_fir(sfreq, notch_hz, width_hz, num_taps);
-    let padlen = (num_taps * 2).min(signal.len() - 2);
-    scipy_filtfilt_fir(signal, &taps, padlen)
+    mne_overlap_add(signal, &taps)
 }
 
 #[cfg(test)]

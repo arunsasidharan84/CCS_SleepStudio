@@ -626,7 +626,7 @@ class HypnogramPainter extends CustomPainter {
     // Filter visible events
     final visibleEvents = <ScoredEvent>[];
     for (final event in events) {
-      if (viewport.disabledMarkerLabels.contains(event.label)) continue;
+      if (isMarkerDisabled(event, viewport.disabledMarkerLabels)) continue;
       final start = math.min(event.startSec, event.endSec);
       final end = math.max(event.startSec, event.endSec);
       if (end < startTime || start > endTime) continue;
@@ -2146,7 +2146,7 @@ class SelectionOverlayPainter extends CustomPainter {
     final visibleStart = viewport.visibleStartSeconds;
     final visibleEnd = visibleStart + displayTotalSec;
     for (final event in viewport.scoredEvents) {
-      if (viewport.disabledMarkerLabels.contains(event.label)) continue;
+      if (isMarkerDisabled(event, viewport.disabledMarkerLabels)) continue;
       final rawStart = math.min(event.startSec, event.endSec);
       final rawEnd = math.max(event.startSec, event.endSec);
 

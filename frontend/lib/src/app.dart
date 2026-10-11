@@ -763,6 +763,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             final newSet = Set<String>.from(_viewport!.disabledMarkerLabels);
             if (visible) {
               newSet.remove(label);
+              newSet.removeWhere((l) => markerGroupName(l) == label);
             } else {
               newSet.add(label);
             }
@@ -773,7 +774,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           setState(() {
             final newSet = selectAll
                 ? <String>{}
-                : {for (final ev in _viewport!.scoredEvents) ev.label};
+                : {
+                    for (final ev in _viewport!.scoredEvents) ...[
+                      ev.label,
+                      markerGroupName(ev.label),
+                    ],
+                  };
             _viewport = _viewport!.copyWith(disabledMarkerLabels: newSet);
           });
         },
@@ -7942,8 +7948,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     if (_batchPreprocessDownsample) 'downsample',
     if (_batchPreprocessFilter) 'filter',
     if (_batchPreprocessBadChannel) 'badchannel',
-    if (_batchPreprocessGedai) 'gedai',
     if (_batchPreprocessInterpolate) 'interpolate',
+    if (_batchPreprocessGedai) 'gedai',
   ];
 
   /// Runs the selected pipeline steps, in order, for every recording in the

@@ -189,6 +189,16 @@ pub fn lookup_electrode_pos(montage: &HashMap<String, ElectrodePos>, channel_nam
     montage.get(&canonical.to_uppercase()).copied()
 }
 
+/// Returns true if the channel is a mastoid/earlobe/reference electrode (M1, M2, A1, A2).
+pub fn is_reference_channel(channel_name: &str) -> bool {
+    let canonical = canonical_channel_name(channel_name);
+    matches!(
+        canonical.to_ascii_uppercase().as_str(),
+        "M1" | "M2" | "A1" | "A2" | "REF" | "LINKED"
+    )
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

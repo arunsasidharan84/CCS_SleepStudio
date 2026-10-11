@@ -214,8 +214,8 @@ class AppConfig {
     Map<int, String>? customEventNames,
     // Preprocessing configuration
     this.preprocessDownsampleHz = 250.0,
-    this.preprocessBandpassLo = 0.5,
-    this.preprocessBandpassHi = 40.0,
+    this.preprocessBandpassLo = 0.3,
+    this.preprocessBandpassHi = 35.0,
     this.preprocessNotchHz = 50.0,
     this.preprocessRansacThresh = 0.75,
     this.preprocessStimArtifact = true,

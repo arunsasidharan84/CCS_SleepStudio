@@ -125,6 +125,7 @@ class ScoredEvent {
 
   double get durationSeconds => (endSec - startSec).abs();
   bool get isPointMarker => durationSeconds < 0.05;
+  String get groupName => markerGroupName(label);
 
   List<int> epochs(int epochSeconds, int epochCount) {
     final s = startSec < endSec ? startSec : endSec;
@@ -155,6 +156,25 @@ class ScoredEvent {
       type: json['type'] as String? ?? 'Event',
     );
   }
+}
+
+final RegExp _kTrailingParenPattern = RegExp(r'\s*\([^)]*\)\s*$');
+
+/// Normalizes a marker label into its base group name by stripping per-event
+/// parenthesized details such as channel/amplitude/frequency
+/// (e.g. `SlowWave (O2-M1 78µV)` -> `SlowWave`).
+String markerGroupName(String rawLabel) {
+  final trimmed = rawLabel.trim();
+  if (trimmed.isEmpty) return 'Event';
+  final stripped = trimmed.replaceFirst(_kTrailingParenPattern, '').trim();
+  return stripped.isEmpty ? trimmed : stripped;
+}
+
+/// Returns true if [event] or its [markerGroupName] is in [disabledLabels].
+bool isMarkerDisabled(ScoredEvent event, Set<String> disabledLabels) {
+  if (disabledLabels.isEmpty) return false;
+  return disabledLabels.contains(event.label) ||
+      disabledLabels.contains(markerGroupName(event.label));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

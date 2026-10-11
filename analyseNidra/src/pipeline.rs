@@ -100,7 +100,9 @@ pub fn load_with_epoch(
             .collect::<Result<Vec<_>>>()?;
         rereference(&mut edf.data_uv, &reference_indices);
     }
-    preprocess_mne_250hz(&mut edf.data_uv);
+    if !crate::edf::is_already_mne_filtered(edf_path) {
+        preprocess_mne_250hz(&mut edf.data_uv);
+    }
     let mut selected_data = Vec::with_capacity(channels.len());
     for channel in channels {
         let index = edf

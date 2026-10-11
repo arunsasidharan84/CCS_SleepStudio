@@ -1,4 +1,4 @@
-use super::montage::{lookup_electrode_pos, standard_1020_montage, ElectrodePos};
+use super::montage::{is_reference_channel, lookup_electrode_pos, standard_1020_montage, ElectrodePos};
 use nalgebra::{Cholesky, DMatrix, SymmetricEigen};
 
 /// Configuration parameters for GEDAI denoising.
@@ -95,8 +95,9 @@ pub fn solve_gevd(a: &DMatrix<f64>, b: &DMatrix<f64>) -> Option<(Vec<f64>, DMatr
     Some((sorted_evals, sorted_evecs))
 }
 
-/// Haar MODWT (Maximal Overlap Discrete Wavelet Transform) 1D Multi-Resolution Analysis.
-/// Decomposes signal into `level` detail components and 1 approximation component.
+/// Zero-phase Haar MODWT (Maximal Overlap Discrete Wavelet Transform) 1D Multi-Resolution Analysis.
+/// Decomposes signal into `level` zero-phase detail components and 1 zero-phase approximation component
+/// that sum identically to `signal`.
 pub fn haar_modwt_mra(signal: &[f64], level: usize) -> Vec<Vec<f64>> {
     let n = signal.len();
     if n == 0 || level == 0 {
@@ -112,9 +113,16 @@ pub fn haar_modwt_mra(signal: &[f64], level: usize) -> Vec<Vec<f64>> {
         let mut detail = vec![0.0; n];
 
         for i in 0..n {
-            let prev_idx = if i >= step { i - step } else { n + i - step };
-            next_approx[i] = (approx[i] + approx[prev_idx]) * 0.5;
-            detail[i] = (approx[i] - approx[prev_idx]) * 0.5;
+            let prev_idx = if i >= step { i - step } else { 0 };
+            let next_idx = if i + step < n { i + step } else { n - 1 };
+            // Zero-phase symmetric 2nd-order Haar analysis+synthesis filter:
+            // A = 0.25 * x[i-s] + 0.5 * x[i] + 0.25 * x[i+s]
+            // D = -0.25 * x[i-s] + 0.5 * x[i] - 0.25 * x[i+s]
+            // Exact identity: A[i] + D[i] == approx[i]
+            let a = 0.25 * approx[prev_idx] + 0.5 * approx[i] + 0.25 * approx[next_idx];
+            let d = approx[i] - a;
+            next_approx[i] = a;
+            detail[i] = d;
         }
 
         details.push(detail);
@@ -142,48 +150,41 @@ pub fn haar_modwt_mra_reconstruct(components: &[Vec<f64>]) -> Vec<f64> {
     reconstructed
 }
 
-/// Denoises multi-channel continuous EEG data using GEDAI.
+/// Denoises multi-channel continuous EEG data using GEDAI while preserving
+/// reference channels (M1, M2, A1, A2) and physiological sleep rhythms
+/// (0-30 Hz: slow waves, K-complexes, delta, theta, alpha, spindles, beta).
 pub fn gedai_denoise(
     channel_names: &[String],
     signals: &[Vec<f64>],
     sample_rate: f64,
     config: &GedaiConfig,
 ) -> Vec<Vec<f64>> {
-    let n_chans = signals.len();
-    if n_chans < 2 || signals[0].is_empty() {
+    let n_total = signals.len();
+    if n_total < 2 || signals[0].is_empty() {
         return signals.to_vec();
     }
     let n_samples = signals[0].len();
 
-    // 1. Average reference: x = x - mean(x) / (n_chans + 1)
-    let mut data = DMatrix::<f64>::zeros(n_chans, n_samples);
-    for ch in 0..n_chans {
-        for t in 0..n_samples {
-            data[(ch, t)] = signals[ch][t];
-        }
-    }
-
-    let mut avg_ref = vec![0.0; n_samples];
-    for t in 0..n_samples {
-        let mut sum = 0.0;
-        for ch in 0..n_chans {
-            sum += data[(ch, t)];
-        }
-        avg_ref[t] = sum / (n_chans as f64 + 1.0);
-    }
-    for ch in 0..n_chans {
-        for t in 0..n_samples {
-            data[(ch, t)] -= avg_ref[t];
-        }
-    }
-
-    // 2. Reference covariance
+    // Only run GEDAI spatial decomposition on non-reference scalp electrodes.
     let montage = standard_1020_montage();
-    let positions: Vec<ElectrodePos> = channel_names
-        .iter()
-        .map(|name| lookup_electrode_pos(&montage, name).unwrap_or(ElectrodePos::new(0.0, 0.0, 1.0)))
-        .collect();
+    let mut scalp_indices = Vec::new();
+    let mut positions = Vec::new();
+    for (idx, name) in channel_names.iter().enumerate() {
+        if is_reference_channel(name) {
+            continue;
+        }
+        if let Some(pos) = lookup_electrode_pos(&montage, name) {
+            scalp_indices.push(idx);
+            positions.push(pos);
+        }
+    }
 
+    let n_chans = scalp_indices.len();
+    if n_chans < 2 {
+        return signals.to_vec();
+    }
+
+    // Build reference covariance for scalp electrodes
     let ref_cov = compute_reference_covariance(&positions);
     let sym_ref = (&ref_cov + &ref_cov.transpose()) * 0.5;
     let eigen_ref = SymmetricEigen::new(sym_ref.clone());
@@ -193,47 +194,46 @@ pub fn gedai_denoise(
     let ref_cov_reg = (1.0 - config.reg_lambda) * sym_ref
         + DMatrix::<f64>::identity(n_chans, n_chans) * (config.reg_lambda * mean_eig);
 
-    // 3. First pass: Broadband GEDAI
-    let broadband_clean = gedai_stream_pass(&data, sample_rate, &ref_cov_reg, config);
-
-    // 4. Second pass: Wavelet band decomposition
-    let n_levels = config.n_wavelet_levels;
+    // Choose wavelet decomposition depth so only high-frequency detail bands (> ~30 Hz)
+    // are spatially filtered and the physiological sleep band (0-30 Hz: slow waves, spindles)
+    // is preserved without distortion.
+    let n_levels = ((sample_rate / 62.5).log2().round() as usize).clamp(2, 5);
     let mut band_filtered_data = vec![DMatrix::<f64>::zeros(n_chans, n_samples); n_levels + 1];
 
-    for ch in 0..n_chans {
-        let chan_signal: Vec<f64> = (0..n_samples).map(|t| broadband_clean[(ch, t)]).collect();
-        let wavelet_bands = haar_modwt_mra(&chan_signal, n_levels);
+    for (local_ch, &global_ch) in scalp_indices.iter().enumerate() {
+        let wavelet_bands = haar_modwt_mra(&signals[global_ch], n_levels);
         for (band_idx, band) in wavelet_bands.iter().enumerate() {
             for t in 0..n_samples {
-                band_filtered_data[band_idx][(ch, t)] = band[t];
+                band_filtered_data[band_idx][(local_ch, t)] = band[t];
             }
         }
     }
 
-    // Denoise each high/mid frequency wavelet band with GEDAI
+    // Denoise only high-frequency detail bands (D1..D_{n_levels-1}, > ~30 Hz) with GEDAI,
+    // keeping the physiological sleep band (0..30 Hz) and original reference intact.
     let mut cleaned_final = DMatrix::<f64>::zeros(n_chans, n_samples);
     for (band_idx, band_data) in band_filtered_data.iter().enumerate() {
-        if band_idx < n_levels {
+        if band_idx + 1 < n_levels {
             let cleaned_band = gedai_stream_pass(band_data, sample_rate, &ref_cov_reg, config);
             cleaned_final += cleaned_band;
         } else {
-            // Keep lowest approximation band unprocessed
+            // Keep physiological sleep bands (< ~30 Hz: slow waves, delta, theta, alpha, spindles, beta) unprocessed
             cleaned_final += band_data;
         }
     }
 
-    // Convert back to Vec<Vec<f64>>
-    let mut result = vec![vec![0.0; n_samples]; n_chans];
-    for ch in 0..n_chans {
+    // Reconstruct full channel list (preserving reference channels untouched)
+    let mut result = signals.to_vec();
+    for (local_ch, &global_ch) in scalp_indices.iter().enumerate() {
         for t in 0..n_samples {
-            result[ch][t] = cleaned_final[(ch, t)];
+            result[global_ch][t] = cleaned_final[(local_ch, t)];
         }
     }
 
     result
 }
 
-/// Internal 2-stream overlapping GEDAI pass.
+/// Internal GEDAI pass on a high-frequency wavelet detail band.
 fn gedai_stream_pass(
     data: &DMatrix<f64>,
     sample_rate: f64,
@@ -250,7 +250,7 @@ fn gedai_stream_pass(
     let mut cleaned_stream1 = DMatrix::<f64>::zeros(n_chans, n_epochs * epoch_samples);
 
     // Compute covariance and GEVD per epoch for Stream 1
-    let mut all_evals = Vec::with_capacity(n_epochs * n_chans);
+    let mut max_epoch_evals = Vec::with_capacity(n_epochs);
     let mut epoch_evals = Vec::with_capacity(n_epochs);
     let mut epoch_evecs = Vec::with_capacity(n_epochs);
 
@@ -260,7 +260,11 @@ fn gedai_stream_pass(
         let cov = (&ep_slice * &ep_slice.transpose()) / (epoch_samples as f64 - 1.0).max(1.0);
 
         if let Some((evals, evecs)) = solve_gevd(&cov, ref_cov_reg) {
-            all_evals.extend(evals.iter().copied());
+            if let Some(&max_ev) = evals.first() {
+                if max_ev.is_finite() && max_ev > 1e-12 {
+                    max_epoch_evals.push(max_ev);
+                }
+            }
             epoch_evals.push(evals);
             epoch_evecs.push(evecs);
         } else {
@@ -269,16 +273,15 @@ fn gedai_stream_pass(
         }
     }
 
-    // Determine artifact threshold via PIT / log-evals percentile
-    let mut valid_evals: Vec<f64> = all_evals.into_iter().filter(|&v| v > 1e-12).collect();
-    valid_evals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // Determine artifact threshold from the distribution of epoch maximum eigenvalues
+    max_epoch_evals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    let threshold_val = if !valid_evals.is_empty() {
-        let cutoff_idx = ((valid_evals.len() as f64) * config.threshold_percentile) as usize;
-        let idx = cutoff_idx.min(valid_evals.len() - 1);
-        valid_evals[idx] * 1.5 // Outlier rejection factor
+    let threshold_val = if !max_epoch_evals.is_empty() {
+        let cutoff_idx = ((max_epoch_evals.len() as f64) * config.threshold_percentile) as usize;
+        let idx = cutoff_idx.min(max_epoch_evals.len() - 1);
+        max_epoch_evals[idx] * 4.0 // Only reject extreme transient artifacts (> 4x 95th percentile max eigenvalue)
     } else {
-        10.0
+        f64::INFINITY
     };
 
     // Clean Stream 1 epochs

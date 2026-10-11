@@ -222,18 +222,20 @@ class _MarkersDialogState extends State<MarkersDialog> {
 
   @override
   Widget build(BuildContext context) {
-    // Count per label
+    // Count per grouped base label (e.g. "SlowWave (O2-M1 78µV)" -> "SlowWave")
     final labelCounts = <String, int>{};
     final labelDigit = <String, int>{};
     for (final ev in _localEvents) {
-      labelCounts[ev.label] = (labelCounts[ev.label] ?? 0) + 1;
-      labelDigit[ev.label] = ev.digit;
+      final group = markerGroupName(ev.label);
+      labelCounts[group] = (labelCounts[group] ?? 0) + 1;
+      labelDigit.putIfAbsent(group, () => ev.digit);
     }
 
     final filteredEvents = _localEvents.where((ev) {
       if (_searchQuery.isNotEmpty) {
         final q = _searchQuery.toLowerCase();
-        final matchLabel = ev.label.toLowerCase().contains(q);
+        final matchLabel = ev.label.toLowerCase().contains(q) ||
+            markerGroupName(ev.label).toLowerCase().contains(q);
         final matchType = ev.type.toLowerCase().contains(q);
         final matchChan = ev.channel?.toLowerCase().contains(q) ?? false;
         if (!matchLabel && !matchType && !matchChan) return false;
@@ -281,7 +283,7 @@ class _MarkersDialogState extends State<MarkersDialog> {
               Row(
                 children: [
                   const Text(
-                    'Marker Types & Visibility:',
+                    'Marker Groups & Visibility:',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.black87),
                   ),
                   const Spacer(),
@@ -315,23 +317,26 @@ class _MarkersDialogState extends State<MarkersDialog> {
                     spacing: 6,
                     runSpacing: 6,
                     children: labelCounts.entries.map((entry) {
-                      final label = entry.key;
+                      final group = entry.key;
                       final count = entry.value;
-                      final digit = labelDigit[label] ?? 0;
-                      final isVisible = !_localDisabledLabels.contains(label);
+                      final digit = labelDigit[group] ?? 0;
+                      final isVisible = !_localDisabledLabels.contains(group);
                       return FilterChip(
                         selected: isVisible,
                         avatar: Icon(Icons.circle, size: 10, color: _eventColor(digit)),
-                        label: Text('$label ($count)', style: const TextStyle(fontSize: 11)),
+                        label: Text('$group ($count)', style: const TextStyle(fontSize: 11)),
                         onSelected: (selected) {
                           setState(() {
                             if (selected) {
-                              _localDisabledLabels.remove(label);
+                              _localDisabledLabels.remove(group);
+                              _localDisabledLabels.removeWhere(
+                                (l) => markerGroupName(l) == group,
+                              );
                             } else {
-                              _localDisabledLabels.add(label);
+                              _localDisabledLabels.add(group);
                             }
                           });
-                          widget.onToggleLabel(label, selected);
+                          widget.onToggleLabel(group, selected);
                         },
                       );
                     }).toList(),
@@ -386,7 +391,7 @@ class _MarkersDialogState extends State<MarkersDialog> {
                         itemBuilder: (ctx, i) {
                           final ev = filteredEvents[i];
                           final epoch = (ev.startSec / widget.epochSeconds).floor() + 1;
-                          final isVisible = !_localDisabledLabels.contains(ev.label);
+                          final isVisible = !isMarkerDisabled(ev, _localDisabledLabels);
                           final color = _eventColor(ev.digit);
 
                           return InkWell(

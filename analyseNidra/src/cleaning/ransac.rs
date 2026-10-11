@@ -1,4 +1,4 @@
-use super::montage::{lookup_electrode_pos, standard_1020_montage, ElectrodePos};
+use super::montage::{is_reference_channel, lookup_electrode_pos, standard_1020_montage, ElectrodePos};
 use super::spline::SphericalSplineInterpolator;
 use std::collections::HashSet;
 
@@ -54,8 +54,11 @@ pub fn detect_bad_channels(
     let mut bad_indices = HashSet::new();
     let mut flatline_bads = Vec::new();
 
-    // 1. Flatline Detection
+    // 1. Flatline Detection (skip reference channels unless completely zeroed)
     for (idx, sig) in signals.iter().enumerate() {
+        if is_reference_channel(&channel_names[idx]) {
+            continue;
+        }
         // Global variance check
         let mean = sig.iter().sum::<f64>() / sig.len().max(1) as f64;
         let var = sig.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / sig.len().max(1) as f64;
@@ -84,13 +87,13 @@ pub fn detect_bad_channels(
         }
     }
 
-    // 2. Lookup electrode positions for RANSAC
+    // 2. Lookup scalp electrode positions for RANSAC (excluding mastoid/reference channels)
     let montage = standard_1020_montage();
     let mut localized_indices = Vec::new();
     let mut localized_positions = Vec::new();
 
     for (idx, name) in channel_names.iter().enumerate() {
-        if bad_indices.contains(&idx) {
+        if bad_indices.contains(&idx) || is_reference_channel(name) {
             continue;
         }
         if let Some(pos) = lookup_electrode_pos(&montage, name) {
@@ -102,12 +105,13 @@ pub fn detect_bad_channels(
     let mut ransac_bads = Vec::new();
     let mut mean_correlations = vec![1.0; n_channels];
 
-    // If we have at least 4 localized non-flat channels, run RANSAC
-    if localized_indices.len() >= 4 {
+    // Spherical-spline RANSAC requires high-density EEG (>= 32 scalp electrodes)
+    // to reliably predict held-out electrodes from random subsets at corr >= 0.80.
+    if localized_indices.len() >= 32 {
         let epoch_len = sample_rate.round() as usize;
-        let n_epochs = (n_samples / epoch_len).min(300); // Check up to 300 1-sec epochs
+        let n_epochs = (n_samples / epoch_len.max(1)).min(300); // Check up to 300 1-sec epochs
         let n_loc = localized_indices.len();
-        let subset_size = ((n_loc as f64 * config.min_channels_ratio).ceil() as usize).max(3);
+        let subset_size = ((n_loc as f64 * config.min_channels_ratio).ceil() as usize).max(8);
 
         // Store cumulative correlation and count per localized channel
         let mut corr_sums = vec![0.0; n_loc];
@@ -172,6 +176,27 @@ pub fn detect_bad_channels(
                 }
             }
         }
+    } else if localized_indices.len() >= 3 {
+        // For sparse PSG montages (< 19 scalp channels), check for extreme amplitude outliers
+        // (disconnected/railed electrode > 10x median scalp SD and > 300 uV).
+        let mut sds: Vec<(usize, f64)> = localized_indices
+            .iter()
+            .map(|&idx| {
+                let sig = &signals[idx];
+                let mean = sig.iter().sum::<f64>() / sig.len().max(1) as f64;
+                let sd = (sig.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / sig.len().max(1) as f64).sqrt();
+                (idx, sd)
+            })
+            .collect();
+        let mut sorted_sds: Vec<f64> = sds.iter().map(|&(_, sd)| sd).collect();
+        sorted_sds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median_sd = sorted_sds[sorted_sds.len() / 2].max(1.0);
+        for (global_idx, sd) in sds.drain(..) {
+            if sd > median_sd * 10.0 && sd > 300.0 {
+                bad_indices.insert(global_idx);
+                ransac_bads.push(channel_names[global_idx].clone());
+            }
+        }
     }
 
     let mut sorted_bad_indices: Vec<usize> = bad_indices.into_iter().collect();
@@ -187,7 +212,7 @@ pub fn detect_bad_channels(
     }
 }
 
-/// Interpolates identified bad channels using spherical splines from good channels.
+/// Interpolates identified bad channels using spherical splines from good scalp channels.
 pub fn interpolate_bad_channels(
     channel_names: &[String],
     signals: &mut [Vec<f64>],
@@ -206,6 +231,9 @@ pub fn interpolate_bad_channels(
     let mut bad_positions = Vec::new();
 
     for (idx, name) in channel_names.iter().enumerate() {
+        if is_reference_channel(name) {
+            continue;
+        }
         if let Some(pos) = lookup_electrode_pos(&montage, name) {
             if bad_set.contains(&idx) {
                 bad_to_interpolate.push(idx);

@@ -2999,8 +2999,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             final targetDir = (outputDir != null && outputDir.trim().isNotEmpty)
                 ? outputDir.trim()
                 : File(jobs.first.edfPath).parent.path;
-            final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
-            final masterCsvPath = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet_$stamp.csv';
+            final masterCsvPath = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
             unawaited(() async {
               try {
                 final compiled = await compileRegionalCsvFiles(
@@ -3009,11 +3008,6 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   recordingPaths: _regionalRecordingMap(),
                 );
                 await File(masterCsvPath).writeAsString(compiled);
-                // Also update the un-timestamped symlink/copy for any workflows expecting standard name
-                try {
-                  final latestPath = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
-                  await File(latestPath).writeAsString(compiled);
-                } catch (_) {}
                 if (mounted) {
                   setState(() => _lastBatchMasterSheetPath = masterCsvPath);
                   _setStatus(
@@ -8126,13 +8120,19 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               }
               final input = featureInput(r);
               return _analyseNidraArguments(
-                _AnalyseNidraJob(edfPath: input, scoringPath: r.scoring, mappedScoringPath: r.scoring),
+                _AnalyseNidraJob(
+                  edfPath: input,
+                  scoringPath: r.scoring,
+                  mappedScoringPath: r.scoring,
+                  originalPath: r.source,
+                ),
                 chans,
                 refs,
                 outputDir: outDir,
                 perChannel: _batchAnalysePerChannel,
                 regionMapJson: regionMapJson,
                 options: _batchAnalyseOptions,
+                writeJsonSidecars: false,
                 skipExisting: resume,
                 config: _config,
               );
@@ -8140,9 +8140,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             onSuccess: (r, log) {
               r.regional = pipelineOutputFromLog(log, 'REGIONAL') ??
                   (() {
-                    final input = featureInput(r);
-                    final stem = _basename(input).replaceAll(RegExp(r'\.[^.]+$'), '');
-                    final dir = outDir ?? File(input).parent.path;
+                    final stem = _basename(r.source).replaceAll(RegExp(r'\.[^.]+$'), '');
+                    final dir = outDir ?? File(r.source).parent.path;
                     return '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
                   })();
             },
@@ -8179,8 +8178,6 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 _batchPsgCapSensitivity,
                 if (effectiveCapEeg.isNotEmpty) ...['--eeg', effectiveCapEeg],
                 if (outDir != null) ...['--out-dir', outDir],
-                // Name the result after the original recording so the
-                // viewer finds it even when CAP ran on the cleaned copy.
                 '--out',
                 capOutPath,
               ];
@@ -8191,28 +8188,33 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   '${_basename(r.source).replaceAll(RegExp(r'\.[^.]+$'), '')}_cap.json';
               final regPath = r.regional ??
                   (() {
-                    final input = featureInput(r);
-                    final stem = _basename(input).replaceAll(RegExp(r'\.[^.]+$'), '');
-                    final dir = outDir ?? File(input).parent.path;
+                    final stem = _basename(r.source).replaceAll(RegExp(r'\.[^.]+$'), '');
+                    final dir = outDir ?? File(r.source).parent.path;
                     return '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
                   })();
               final cFile = File(capOut);
               final rFile = File(regPath);
-              if (cFile.existsSync() && rFile.existsSync()) {
-                try {
-                  final decoded = jsonDecode(cFile.readAsStringSync());
-                  if (decoded is Map && decoded['summary'] is Map) {
-                    final sum = decoded['summary'] as Map;
-                    final capMap = <String, String>{};
-                    for (final e in sum.entries) {
-                      final k = e.key.toString();
-                      final v = e.value;
-                      final col = k.toUpperCase().startsWith('CAP_') ? k : 'CAP_$k';
-                      final val = v is num ? (v.isFinite ? v.toStringAsFixed(3) : '') : (v?.toString() ?? '');
-                      capMap[col] = val;
+              if (cFile.existsSync()) {
+                if (rFile.existsSync()) {
+                  try {
+                    final decoded = jsonDecode(cFile.readAsStringSync());
+                    if (decoded is Map && decoded['summary'] is Map) {
+                      final sum = decoded['summary'] as Map;
+                      final capMap = <String, String>{};
+                      for (final e in sum.entries) {
+                        final k = e.key.toString();
+                        final v = e.value;
+                        final col = k.toUpperCase().startsWith('CAP_') ? k : 'CAP_$k';
+                        final val = v is num ? (v.isFinite ? v.toStringAsFixed(3) : '') : (v?.toString() ?? '');
+                        capMap[col] = val;
+                      }
+                      updateRegionalCsvWithCapMetricsSync(rFile, capMap);
                     }
-                    updateRegionalCsvWithCapMetricsSync(rFile, capMap);
-                  }
+                  } catch (_) {}
+                }
+                // Remove redundant intermediate _cap.json once summary is in regional CSV
+                try {
+                  cFile.deleteSync();
                 } catch (_) {}
               }
             },
@@ -8229,10 +8231,17 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         for (final r in recs) {
           var path = r.regional;
           if (path == null) {
-            final input = featureInput(r);
-            final stem = _basename(input).replaceAll(RegExp(r'\.[^.]+$'), '');
-            final dir = outDir ?? File(input).parent.path;
-            path = '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
+            final stem = _basename(r.source).replaceAll(RegExp(r'\.[^.]+$'), '');
+            final dir = outDir ?? File(r.source).parent.path;
+            final primary = '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
+            if (File(primary).existsSync()) {
+              path = primary;
+            } else {
+              final input = featureInput(r);
+              final inStem = _basename(input).replaceAll(RegExp(r'\.[^.]+$'), '');
+              final inDir = outDir ?? File(input).parent.path;
+              path = '$inDir${Platform.pathSeparator}${inStem}_analyse_regional.csv';
+            }
           }
           if (File(path).existsSync()) {
             files.add(path);
@@ -8244,18 +8253,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         final usable = files.where((f) => !empty.contains(f)).toList();
         if (usable.isEmpty) return 'All regional CSV files are empty; re-run feature extraction.';
         final targetDir = outDir ?? File(recs.first.source).parent.path;
-        final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
-        final master = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet_$stamp.csv';
+        final master = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
         final compiledContent = await compileRegionalCsvFiles(
           usable,
           metadata: _batchMetadata,
           recordingPaths: recordingFor,
         );
         await File(master).writeAsString(compiledContent);
-        try {
-          final latestMaster = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet.csv';
-          await File(latestMaster).writeAsString(compiledContent);
-        } catch (_) {}
         if (mounted) {
           setState(() {
             _lastAnalyseRegionalFiles = usable;
@@ -13233,6 +13237,7 @@ List<String> _analyseNidraArguments(
   String? regionMapJson,
   AnalyseNidraOptions? options,
   bool writeRegional = true,
+  bool writeJsonSidecars = true,
   bool skipExisting = false,
   AppConfig? config,
 }) {
@@ -13247,10 +13252,10 @@ List<String> _analyseNidraArguments(
   final args = [
     job.edfPath,
     job.mappedScoringPath,
-    '${base}_analyse_core.json',
-    '${base}_analyse_pac.json',
-    '${base}_analyse_slow_waves.json',
-    '${base}_analyse_spindles.json',
+    writeJsonSidecars ? '${base}_analyse_core.json' : '-',
+    writeJsonSidecars ? '${base}_analyse_pac.json' : '-',
+    writeJsonSidecars ? '${base}_analyse_slow_waves.json' : '-',
+    writeJsonSidecars ? '${base}_analyse_spindles.json' : '-',
     writeRegional ? '${base}_analyse_regional.csv' : '-',
     '--channels',
     channels.join(','),
@@ -13277,7 +13282,8 @@ List<String> _analyseNidraArguments(
   }
   if (config != null) {
     try {
-      final configPath = '${base}_analyse_config.json';
+      final configPath =
+          '${Directory.systemTemp.path}${Platform.pathSeparator}ccs_analyse_config_$pid.json';
       File(configPath).writeAsStringSync(jsonEncode(config.toJson()));
       args.addAll(['--config', configPath]);
     } catch (e) {
@@ -13285,7 +13291,9 @@ List<String> _analyseNidraArguments(
     }
   }
   args.addAll(
-    (options ?? AnalyseNidraOptions()).toArgs(nlgOutPath: '${base}_analyse_nlg.json'),
+    (options ?? AnalyseNidraOptions()).toArgs(
+      nlgOutPath: writeJsonSidecars ? '${base}_analyse_nlg.json' : '-',
+    ),
   );
   return args;
 }

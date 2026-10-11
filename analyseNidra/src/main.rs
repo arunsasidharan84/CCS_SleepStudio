@@ -235,6 +235,7 @@ fn parse_cli(arguments: impl IntoIterator<Item = OsString>) -> Result<Cli> {
     let mut region_map = None;
     let mut analyses: Option<HashSet<String>> = None;
     let mut nlg_out: Option<PathBuf> = None;
+    let mut nlg_out_disabled = false;
     let mut nlg = NlgCli::default();
     let mut skip_existing = false;
     let mut config = None;
@@ -260,7 +261,13 @@ fn parse_cli(arguments: impl IntoIterator<Item = OsString>) -> Result<Cli> {
                 continue;
             }
             if key == "--nlg-out" {
-                nlg_out = next_value().map(PathBuf::from);
+                let val = next_value();
+                if val.as_deref() == Some("-") {
+                    nlg_out_disabled = true;
+                    nlg_out = None;
+                } else {
+                    nlg_out = val.map(PathBuf::from);
+                }
                 continue;
             }
             if nlg.accept(&key, &mut next_value)? {
@@ -365,6 +372,7 @@ to write results automatically"
 
     let edf_path = PathBuf::from(positionals.remove(0));
     let scoring_path = PathBuf::from(positionals.remove(0));
+    let explicit_positional_count = positionals.len();
     let optional_path = |value: OsString| (value != "-").then(|| PathBuf::from(value));
     let mut outputs = positionals
         .into_iter()
@@ -389,11 +397,11 @@ to write results automatically"
         ];
 
         for &(idx, name, ext) in slots {
-            if outputs[idx].is_none() {
+            if idx >= explicit_positional_count && outputs[idx].is_none() {
                 outputs[idx] = Some(dir.join(format!("{stem}_analyse_{name}.{ext}")));
             }
         }
-        if nlg_out.is_none() {
+        if !nlg_out_disabled && nlg_out.is_none() {
             nlg_out = Some(dir.join(format!("{stem}_analyse_nlg.json")));
         }
     }
@@ -1293,10 +1301,16 @@ fn main() -> Result<()> {
             cli.per_channel,
             cli.region_map.as_ref(),
         );
-        let recording_name = edf_path
+        let raw_stem = edf_path
             .file_stem()
             .and_then(|value| value.to_str())
             .context("EDF filename is not valid UTF-8")?;
+        let recording_name = raw_stem
+            .strip_suffix("_clean")
+            .or_else(|| raw_stem.strip_suffix("_stimclean"))
+            .or_else(|| raw_stem.strip_suffix("_cleaned"))
+            .or_else(|| raw_stem.strip_suffix("_preprocessed"))
+            .unwrap_or(raw_stem);
         regional::write_csv_with_bands(output_path, recording_name, &recording, &rows, &feature_config.bands)?;
         regional::try_inject_companion_cap_into_csv(output_path, &edf_path, cli.out_dir.as_deref());
         println!(

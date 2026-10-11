@@ -6,7 +6,7 @@ pub mod spline;
 pub mod stim_artifact;
 
 use anyhow::{Context, Result};
-use export::{write_edf_file_with_prefilter, write_json_log, PreprocessingLog};
+use export::write_edf_file_with_prefilter;
 use gedai::{gedai_denoise, GedaiConfig};
 use ransac::{detect_bad_channels, interpolate_bad_channels, RansacConfig};
 use stim_artifact::{remove_stimulation_artifact, StimArtifactConfig, StimArtifactReport};
@@ -179,10 +179,10 @@ pub fn run_preprocessing(
     let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
 
     let mut out_edf_path = None;
-    let mut out_log_path = None;
+    let out_log_path = None;
 
     if !config.steps.contains(&"no_save".to_string()) {
-        println!("PROGRESS 0.90 Saving cleaned EDF and execution log...");
+        println!("PROGRESS 0.90 Saving cleaned EDF...");
         let edf_name = format!("{}{}.edf", stem, config.suffix);
         let edf_path = out_dir.join(edf_name);
         let prefilter_label = if ran_mne_filter {
@@ -191,31 +191,15 @@ pub fn run_preprocessing(
             "AnalyseNidra Rust Preprocessed"
         };
         write_edf_file_with_prefilter(&edf_path, &channel_names, &signals, sfreq, prefilter_label)?;
+        println!(
+            "Preprocessed {} channels ({:.1} Hz, {:.1}s); bad channels: {:?}",
+            channel_names.len(),
+            sfreq,
+            raw_edf.duration_seconds,
+            detected_bads
+        );
         println!("OUTPUT_EDF \"{}\"", edf_path.display());
         out_edf_path = Some(edf_path);
-
-        let log_name = format!("{}{}_log.json", stem, config.suffix);
-        let log_path = out_dir.join(log_name);
-        let log = PreprocessingLog {
-            input_file: input_path.to_string_lossy().to_string(),
-            output_file: out_edf_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-            steps_run: config.steps.clone(),
-            sample_rate: sfreq,
-            original_channels: channel_names,
-            bad_channels: detected_bads.clone(),
-            duration_seconds: raw_edf.duration_seconds,
-            stim_artifact: stim_report.clone(),
-            timestamp: {
-                let secs = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                format!("epoch-seconds:{}", secs)
-            },
-        };
-        write_json_log(&log_path, &log)?;
-        println!("OUTPUT_LOG \"{}\"", log_path.display());
-        out_log_path = Some(log_path);
     }
 
     println!("PROGRESS 1.00 Done in {:.2}s", start_time.elapsed().as_secs_f64());

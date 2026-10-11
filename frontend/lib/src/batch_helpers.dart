@@ -212,47 +212,16 @@ Future<List<String>?> showBatchFileSubSelectionDialog({
   );
 }
 
-/// Writes an execution log for a batch job.
+/// Per-file logs are consolidated into the single master run log written by
+/// [writeBatchRunSummaryLog] to avoid creating redundant per-file log files.
 Future<void> writeBatchFileLog({
   required String outputFolder,
   required String originalFilePath,
-  required String jobType, // e.g. 'autoscore' or 'analyse'
+  required String jobType,
   required int exitCode,
   required List<String> logLines,
 }) async {
-  try {
-    final baseName = originalFilePath
-        .split(Platform.isWindows ? r'\' : '/')
-        .last
-        .replaceAll(RegExp(r'\.[^.]+$'), '');
-    final outDir = Directory(outputFolder);
-    if (!outDir.existsSync()) {
-      outDir.createSync(recursive: true);
-    }
-
-    final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-    final logPath = '${outDir.path}${Platform.pathSeparator}${baseName}_${jobType}_log_$timestamp.txt';
-
-    final buffer = StringBuffer();
-    buffer.writeln('=== CCS Sleep Studio Batch Job Log ===');
-    buffer.writeln('Job Type: $jobType');
-    buffer.writeln('Source File: $originalFilePath');
-    buffer.writeln('Timestamp: ${DateTime.now().toIso8601String()}');
-    buffer.writeln('Status: ${exitCode == 0 ? "SUCCESS" : "FAILED (Exit Code: $exitCode)"}');
-    buffer.writeln('----------------------------------------');
-    buffer.writeln('Output Logs:');
-    for (final line in logLines) {
-      buffer.writeln(line);
-    }
-    buffer.writeln('----------------------------------------');
-    buffer.writeln('=== End of Log ===');
-
-    final file = File(logPath);
-    await file.writeAsString(buffer.toString());
-  } catch (e) {
-    // Logging failure shouldn't crash the batch run
-    stderr.writeln('Failed to write batch log file: $e');
-  }
+  // Intentionally a no-op: all per-file logs are included in batch_pipeline_run_log.txt.
 }
 
 /// Record of an individual file's result within a batch run.
@@ -282,8 +251,7 @@ Future<void> writeBatchRunSummaryLog({
       outDir.createSync(recursive: true);
     }
 
-    final timestamp = startTime.toIso8601String().replaceAll(':', '-');
-    final logPath = '${outDir.path}${Platform.pathSeparator}batch_${jobType}_master_run_log_$timestamp.txt';
+    final logPath = '${outDir.path}${Platform.pathSeparator}batch_pipeline_run_log.txt';
 
     final total = results.length;
     final successful = results.where((r) => r.exitCode == 0).length;

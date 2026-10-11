@@ -417,105 +417,211 @@ class _AppUpdateDialogState extends State<AppUpdateDialog> {
 
   Future<void> _installLinuxUpdate(File file) async {
     setState(() {
-      _statusMessage = 'Launching package installer (sudo required)…';
+      _statusMessage = 'Extracting update package (no sudo required)…';
     });
 
-    try {
-      final helperScript = File('${file.parent.path}${Platform.pathSeparator}apply_ccs_sleep_update.sh');
-      final scriptContent = '''#!/bin/bash
-set -e
-echo "======================================================================"
-echo "          CCS Sleep Studio - Installing System Update                 "
-echo "======================================================================"
-echo "Package: ${file.path}"
-echo "Administrative (sudo) privileges are required to update this package."
-echo "Please enter your password when prompted below."
-echo "----------------------------------------------------------------------"
+    final extractDir = Directory(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}ccs_linux_extract_${DateTime.now().millisecondsSinceEpoch}',
+    );
+    if (!extractDir.existsSync()) {
+      extractDir.createSync(recursive: true);
+    }
 
-if command -v dnf >/dev/null 2>&1; then
-  sudo dnf install -y "${file.path}"
-elif command -v yum >/dev/null 2>&1; then
-  sudo yum install -y "${file.path}"
-elif command -v rpm >/dev/null 2>&1; then
-  sudo rpm -Uvh --replacepkgs "${file.path}"
-elif command -v apt-get >/dev/null 2>&1; then
-  sudo apt-get install -y "${file.path}"
-elif command -v dpkg >/dev/null 2>&1; then
-  sudo dpkg -i "${file.path}" || sudo apt-get install -f -y
-else
-  echo "Error: Supported package manager (dnf/yum/rpm/apt-get/dpkg) not found." >&2
-  exit 1
+    try {
+      final lowerName = file.path.toLowerCase();
+      ProcessResult extractRes;
+      if (lowerName.endsWith('.deb')) {
+        extractRes = await Process.run('/bin/bash', [
+          '-c',
+          'if command -v dpkg-deb >/dev/null 2>&1; then '
+              'dpkg-deb -x "${file.path}" "${extractDir.path}"; '
+              'elif command -v bsdtar >/dev/null 2>&1; then '
+              'bsdtar -xf "${file.path}" -O data.tar* | tar -xf - -C "${extractDir.path}"; '
+              'else '
+              'cd "${extractDir.path}" && ar x "${file.path}" && tar -xf data.tar* && rm -f data.tar* control.tar* debian-binary; '
+              'fi',
+        ]);
+      } else {
+        extractRes = await Process.run('/bin/bash', [
+          '-c',
+          'if command -v rpm2cpio >/dev/null 2>&1 && command -v cpio >/dev/null 2>&1; then '
+              'cd "${extractDir.path}" && rpm2cpio "${file.path}" | cpio -idm --quiet; '
+              'elif command -v bsdtar >/dev/null 2>&1; then '
+              'bsdtar -xf "${file.path}" -C "${extractDir.path}"; '
+              'else '
+              'exit 1; '
+              'fi',
+        ]);
+      }
+
+      final extractedBundle = Directory('${extractDir.path}/usr/lib/ccs-sleep-studio');
+      final extractedBin = File('${extractedBundle.path}/CCSSleepStudio');
+
+      if (extractRes.exitCode == 0 && extractedBin.existsSync()) {
+        setState(() {
+          _statusMessage = 'Installing update and restarting application…';
+        });
+
+        final currentBundleDir = File(Platform.resolvedExecutable).parent.path;
+        final helperScript = File(
+          '${file.parent.path}${Platform.pathSeparator}update_linux_in_place.sh',
+        );
+        const scriptContent = r'''#!/usr/bin/env bash
+set -e
+
+PID="$1"
+CURRENT_BUNDLE_DIR="$2"
+EXTRACT_DIR="$3"
+PKG_FILE="$4"
+
+NEW_BUNDLE="$EXTRACT_DIR/usr/lib/ccs-sleep-studio"
+chmod +x "$NEW_BUNDLE/CCSSleepStudio" "$NEW_BUNDLE/analyse-nidra" 2>/dev/null || true
+
+# 1. Wait for current app PID to terminate
+for _ in $(seq 1 50); do
+  if ! kill -0 "$PID" 2>/dev/null; then
+    break
+  fi
+  sleep 0.2
+done
+sleep 0.3
+
+can_write_bundle() {
+  local dir="$1"
+  [ -n "$dir" ] && [ -d "$dir" ] && [ -w "$dir" ] || return 1
+  local unwritable
+  unwritable=$(find "$dir" -type d ! -writable -print -quit 2>/dev/null)
+  [ -z "$unwritable" ]
+}
+
+ensure_libmpv_link() {
+  local bundle="$1"
+  if [ -d "$bundle/lib" ]; then
+    for sysdir in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
+      if [ ! -e "$sysdir/libmpv.so.1" ] && [ -e "$sysdir/libmpv.so.2" ] && [ ! -e "$bundle/lib/libmpv.so.1" ]; then
+        ln -sf "$sysdir/libmpv.so.2" "$bundle/lib/libmpv.so.1" 2>/dev/null || true
+        break
+      fi
+    done
+  fi
+}
+
+LAUNCH_BIN=""
+USER_SHARE="${XDG_DATA_HOME:-$HOME/.local/share}"
+USER_BUNDLE="$USER_SHARE/ccs-sleep-studio"
+
+# 2. Prefer updating system-wide /usr/lib/ccs-sleep-studio if writable by current user
+if can_write_bundle "/usr/lib/ccs-sleep-studio"; then
+  (
+    umask 0000
+    cp -rf --remove-destination "$NEW_BUNDLE/." "/usr/lib/ccs-sleep-studio/" 2>/dev/null
+  ) && {
+    chmod -R a+rwX "/usr/lib/ccs-sleep-studio" 2>/dev/null || true
+    chmod a+rx "/usr/lib/ccs-sleep-studio/CCSSleepStudio" "/usr/lib/ccs-sleep-studio/analyse-nidra" 2>/dev/null || true
+    ensure_libmpv_link "/usr/lib/ccs-sleep-studio"
+    LAUNCH_BIN="/usr/lib/ccs-sleep-studio/CCSSleepStudio"
+    # Clean up any older per-user fallback copy so system-wide install is used everywhere
+    if [ -d "$USER_BUNDLE" ] && [ "$CURRENT_BUNDLE_DIR" != "$USER_BUNDLE" ]; then
+      rm -rf "$USER_BUNDLE" 2>/dev/null || true
+    fi
+  } || true
 fi
 
-EXIT_CODE=\$?
-if [ \$EXIT_CODE -eq 0 ]; then
-  echo ""
-  echo "======================================================================"
-  echo "  CCS Sleep Studio updated successfully!                              "
-  echo "======================================================================"
-  echo "Press Enter to exit and restart the application..."
-  read -r
-else
-  echo ""
-  echo "======================================================================"
-  echo "  Update failed or sudo permission denied.                            "
-  echo "======================================================================"
-  echo "Press Enter to close this window..."
-  read -r
+# 3. Otherwise try updating CURRENT_BUNDLE_DIR in-place if writable
+if [ -z "$LAUNCH_BIN" ] && can_write_bundle "$CURRENT_BUNDLE_DIR"; then
+  (
+    umask 0000
+    cp -rf --remove-destination "$NEW_BUNDLE/." "$CURRENT_BUNDLE_DIR/" 2>/dev/null
+  ) && {
+    chmod -R a+rwX "$CURRENT_BUNDLE_DIR" 2>/dev/null || chmod -R u+rwX "$CURRENT_BUNDLE_DIR" 2>/dev/null || true
+    chmod +x "$CURRENT_BUNDLE_DIR/CCSSleepStudio" "$CURRENT_BUNDLE_DIR/analyse-nidra" 2>/dev/null || true
+    ensure_libmpv_link "$CURRENT_BUNDLE_DIR"
+    LAUNCH_BIN="$CURRENT_BUNDLE_DIR/CCSSleepStudio"
+  } || true
+fi
+
+# 4. Fallback: Rootless Per-User Install in ~/.local/share/ccs-sleep-studio (works for any non-sudo user!)
+if [ -z "$LAUNCH_BIN" ]; then
+  USER_BIN_DIR="$HOME/.local/bin"
+  USER_APP_DIR="$USER_SHARE/applications"
+  USER_ICON_DIR="$USER_SHARE/icons/hicolor/256x256/apps"
+
+  mkdir -p "$USER_BUNDLE" "$USER_BIN_DIR" "$USER_APP_DIR" "$USER_ICON_DIR"
+  cp -rf --remove-destination "$NEW_BUNDLE/." "$USER_BUNDLE/"
+  chmod -R u+rwX "$USER_BUNDLE" 2>/dev/null || true
+  chmod +x "$USER_BUNDLE/CCSSleepStudio" "$USER_BUNDLE/analyse-nidra" 2>/dev/null || true
+  ensure_libmpv_link "$USER_BUNDLE"
+
+  ln -sf "$USER_BUNDLE/CCSSleepStudio" "$USER_BIN_DIR/ccs-sleep-studio" 2>/dev/null || true
+
+  if [ -f "$EXTRACT_DIR/usr/share/icons/hicolor/256x256/apps/ccs-sleep-studio.png" ]; then
+    cp -f "$EXTRACT_DIR/usr/share/icons/hicolor/256x256/apps/ccs-sleep-studio.png" \
+      "$USER_ICON_DIR/ccs-sleep-studio.png" 2>/dev/null || true
+  fi
+
+  DESKTOP_SRC="$EXTRACT_DIR/usr/share/applications/ccs-sleep-studio.desktop"
+  if [ -f "$DESKTOP_SRC" ]; then
+    sed "s|^Exec=.*|Exec=$USER_BUNDLE/CCSSleepStudio %F|g" "$DESKTOP_SRC" \
+      > "$USER_APP_DIR/ccs-sleep-studio.desktop"
+    chmod 755 "$USER_APP_DIR/ccs-sleep-studio.desktop" 2>/dev/null || true
+
+    if [ -d "$HOME/Desktop" ]; then
+      cp -f "$USER_APP_DIR/ccs-sleep-studio.desktop" "$HOME/Desktop/ccs-sleep-studio.desktop" 2>/dev/null || true
+      chmod 755 "$HOME/Desktop/ccs-sleep-studio.desktop" 2>/dev/null || true
+    fi
+  fi
+
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$USER_APP_DIR" 2>/dev/null || true
+  fi
+
+  LAUNCH_BIN="$USER_BUNDLE/CCSSleepStudio"
+fi
+
+# 5. Clean up temporary files and relaunch
+rm -rf "$EXTRACT_DIR" 2>/dev/null || true
+rm -f "$PKG_FILE" 2>/dev/null || true
+
+if [ -n "$LAUNCH_BIN" ] && [ -x "$LAUNCH_BIN" ]; then
+  nohup "$LAUNCH_BIN" >/dev/null 2>&1 &
 fi
 ''';
-      await helperScript.writeAsString(scriptContent);
-      await Process.run('chmod', ['+x', helperScript.path]);
+        await helperScript.writeAsString(scriptContent);
+        await Process.run('chmod', ['+x', helperScript.path]);
 
-      final terminals = [
-        'xfce4-terminal',
-        'gnome-terminal',
-        'konsole',
-        'x-terminal-emulator',
-        'mate-terminal',
-        'lxterminal',
-        'xterm',
-      ];
+        await Process.start(
+          '/bin/bash',
+          [
+            helperScript.path,
+            pid.toString(),
+            currentBundleDir,
+            extractDir.path,
+            file.path,
+          ],
+          mode: ProcessStartMode.detached,
+        );
 
-      bool launched = false;
-      for (final term in terminals) {
-        final whichRes = await Process.run('which', [term]);
-        if (whichRes.exitCode == 0) {
-          final termPath = (whichRes.stdout as String).trim();
-          if (term == 'gnome-terminal') {
-            await Process.start(termPath, ['--title=Updating CCS Sleep Studio', '--', '/bin/bash', helperScript.path], mode: ProcessStartMode.detached);
-          } else if (term == 'xfce4-terminal') {
-            await Process.start(termPath, ['--title=Updating CCS Sleep Studio', '-e', '/bin/bash ${helperScript.path}'], mode: ProcessStartMode.detached);
-          } else {
-            await Process.start(termPath, ['-e', '/bin/bash ${helperScript.path}'], mode: ProcessStartMode.detached);
-          }
-          launched = true;
-          break;
-        }
-      }
-
-      if (launched) {
-        setState(() {
-          _statusMessage = 'Installer terminal opened. Please enter your password to authorize sudo privileges.\n'
-              'Alternatively, run in terminal: sudo dnf install -y "${file.path}"';
-        });
+        await Future.delayed(const Duration(milliseconds: 600));
+        exit(0);
       } else {
-        final pkexecCheck = await Process.run('which', ['pkexec']);
-        if (pkexecCheck.exitCode == 0) {
-          Process.start('pkexec', ['/bin/bash', helperScript.path], mode: ProcessStartMode.detached);
-          setState(() {
-            _statusMessage = 'Authorization prompt requested via pkexec.';
-          });
-        } else {
-          Process.run('xdg-open', [file.path]);
-          setState(() {
-            _statusMessage = 'Package downloaded to: ${file.path}\nRun with sudo in terminal: sudo dnf install -y "${file.path}"';
-          });
-        }
+        try {
+          if (extractDir.existsSync()) {
+            extractDir.deleteSync(recursive: true);
+          }
+        } catch (_) {}
+        setState(() {
+          _statusMessage =
+              'Could not extract update archive (${extractRes.stderr}). Package saved at: ${file.path}';
+        });
       }
     } catch (e) {
+      try {
+        if (extractDir.existsSync()) {
+          extractDir.deleteSync(recursive: true);
+        }
+      } catch (_) {}
       setState(() {
-        _statusMessage = 'Error launching installer: $e\nRun manually: sudo dnf install -y "${file.path}"';
+        _statusMessage = 'Update failed: $e';
       });
     }
   }

@@ -57,6 +57,32 @@ StartupWMClass=CCSSleepStudio
 MimeType=application/octet-stream;application/x-edf;
 EOF
 
+cat > "$source_dir/ccs-sleep-studio-launcher.sh" <<'EOF'
+#!/bin/sh
+USER_SHARE="${XDG_DATA_HOME:-$HOME/.local/share}"
+USER_APP="$USER_SHARE/ccs-sleep-studio/CCSSleepStudio"
+SYS_APP="/usr/lib/ccs-sleep-studio/CCSSleepStudio"
+
+if [ -x "$USER_APP" ]; then
+  USER_VER_FILE="$USER_SHARE/ccs-sleep-studio/data/flutter_assets/version.json"
+  SYS_VER_FILE="/usr/lib/ccs-sleep-studio/data/flutter_assets/version.json"
+  if [ -f "$USER_VER_FILE" ] && [ -f "$SYS_VER_FILE" ]; then
+    USER_VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$USER_VER_FILE" | head -n 1)
+    SYS_VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SYS_VER_FILE" | head -n 1)
+    if [ -n "$USER_VER" ] && [ -n "$SYS_VER" ] && [ "$USER_VER" != "$SYS_VER" ]; then
+      NEWEST=$(printf '%s\n%s\n' "$SYS_VER" "$USER_VER" | sort -V | tail -n 1)
+      if [ "$NEWEST" = "$USER_VER" ]; then
+        exec "$USER_APP" "$@"
+      fi
+    fi
+  elif [ "$USER_APP" -nt "$SYS_APP" ]; then
+    exec "$USER_APP" "$@"
+  fi
+fi
+
+exec "$SYS_APP" "$@"
+EOF
+
 cat > "$top_dir/SPECS/ccs-sleep-studio.spec" <<EOF
 %global debug_package %{nil}
 Name:           $package_name
@@ -87,7 +113,8 @@ mkdir -p \
   %{buildroot}/usr/share/pixmaps \
   %{buildroot}/usr/share/icons/hicolor/256x256/apps
 cp -a %{_sourcedir}/bundle/. %{buildroot}/usr/lib/ccs-sleep-studio/
-ln -s ../lib/ccs-sleep-studio/CCSSleepStudio %{buildroot}/usr/bin/ccs-sleep-studio
+install -m 0755 %{_sourcedir}/ccs-sleep-studio-launcher.sh \
+  %{buildroot}/usr/bin/ccs-sleep-studio
 install -m 0644 %{_sourcedir}/ccs-sleep-studio.desktop \
   %{buildroot}/usr/share/applications/ccs-sleep-studio.desktop
 install -m 0644 %{_sourcedir}/ccs-sleep-studio.png \
@@ -103,7 +130,12 @@ for dir in /usr/lib64 /usr/lib; do
   fi
 done
 
-# 2. Update desktop database and icon caches
+# 2. Allow non-sudo users to self-update CCS Sleep Studio in-place
+if [ -d /usr/lib/ccs-sleep-studio ]; then
+  chmod -R 0777 /usr/lib/ccs-sleep-studio 2>/dev/null || true
+fi
+
+# 3. Update desktop database and icon caches
 if which update-desktop-database >/dev/null 2>&1; then
   update-desktop-database /usr/share/applications 2>/dev/null || true
 fi
@@ -111,7 +143,7 @@ if which gtk-update-icon-cache >/dev/null 2>&1; then
   gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
 fi
 
-# 3. Multi-user desktop launcher setup
+# 4. Multi-user desktop launcher setup
 if [ -d /etc/skel ]; then
   mkdir -p /etc/skel/Desktop
   cp -f /usr/share/applications/ccs-sleep-studio.desktop /etc/skel/Desktop/
@@ -147,6 +179,7 @@ if [ "\$1" -eq 0 ]; then
       rm -f "\$dir/libmpv.so.1" || true
     fi
   done
+  rm -rf /usr/lib/ccs-sleep-studio 2>/dev/null || true
   rm -f /etc/skel/Desktop/ccs-sleep-studio.desktop
   if which update-desktop-database >/dev/null 2>&1; then
     update-desktop-database /usr/share/applications 2>/dev/null || true

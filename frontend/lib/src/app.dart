@@ -3304,45 +3304,108 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final includePages = await _showPageSelectionDialog();
     if (includePages == null) return;
 
-    // Group rows by unique source_path
+    // Group rows by unique source_path (or source_file if source_path is relative/missing)
     final Map<String, List<Map<String, String>>> groupedRows = {};
     for (final row in rows) {
-      final path = row['source_path'] ?? '';
+      final path = (row['source_path'] ?? '').trim().isNotEmpty
+          ? row['source_path']!.trim()
+          : (row['source_file'] ?? '').trim();
       if (path.isEmpty) continue;
       groupedRows.putIfAbsent(path, () => []).add(row);
     }
 
     final masterDir = Directory(masterCsvPath).parent.path;
-    final List<_PdfBatchJob> jobs = [];
+    final extraDirs = <String>{
+      masterDir,
+      if (_pipelineOutDir() != null) _pipelineOutDir()!,
+      if (_pipelineCleanedDir() != null) _pipelineCleanedDir()!,
+      if (_batchScoringFolderController.text.trim().isNotEmpty)
+        _batchScoringFolderController.text.trim(),
+      for (final p in _batchAnalysePairs) ...[
+        if ((p['eegPath'] ?? '').isNotEmpty) File(p['eegPath']!).parent.path,
+        if ((p['scoringPath'] ?? '').isNotEmpty) File(p['scoringPath']!).parent.path,
+        if ((p['cleanedPath'] ?? '').isNotEmpty) File(p['cleanedPath']!).parent.path,
+      ],
+    }.where((d) => d.trim().isNotEmpty).toList();
 
-    for (final entry in groupedRows.entries) {
-      final origPath = entry.key;
-      final group = entry.value;
-      final first = group.first;
-
-      final filename = first['source_file'] ?? _basename(origPath);
-      var edfPath = resolveRegionalCsvEdfPath(
-        origPath,
-        masterDirectory: masterDir,
-        sourceFile: filename,
-      );
-      if (!File(edfPath).existsSync()) {
-        final fallbackPath = '$masterDir${Platform.pathSeparator}$filename';
-        if (File(fallbackPath).existsSync()) {
-          edfPath = fallbackPath;
+    String stripCleanStem(String name) {
+      final dot = name.lastIndexOf('.');
+      var stem = dot > 0 ? name.substring(0, dot) : name;
+      for (final suffix in ['_stimclean', '_clean', '_preprocessed']) {
+        if (stem.toLowerCase().endsWith(suffix)) {
+          stem = stem.substring(0, stem.length - suffix.length);
+          break;
         }
       }
+      return stem.toLowerCase();
+    }
 
-      jobs.add(
-        _PdfBatchJob(
-          sourcePath: edfPath,
+    List<_PdfBatchJob> buildJobs(List<String> searchDirectories) {
+      final built = <_PdfBatchJob>[];
+      for (final entry in groupedRows.entries) {
+        final origPath = entry.key;
+        final group = entry.value;
+        final first = group.first;
+
+        final filename = first['source_file'] ?? _basename(origPath);
+        var edfPath = resolveRegionalCsvEdfPath(
+          origPath,
+          masterDirectory: masterDir,
           sourceFile: filename,
-          subjectId: first['Subject Identifier'] ?? '',
-          subjectDetails: first['Subject Details'] ?? '',
-          recordingDate: first['Recording Date'] ?? '',
-          regionalRows: group,
-        ),
+          extraSearchDirectories: searchDirectories,
+        );
+
+        String? explicitScoring;
+        final targetBase = stripCleanStem(filename.isNotEmpty ? filename : _basename(origPath));
+        for (final p in _batchAnalysePairs) {
+          final eegP = p['eegPath'] ?? '';
+          if (eegP.isEmpty) continue;
+          if (stripCleanStem(_basename(eegP)) == targetBase) {
+            if (!File(edfPath).existsSync() && File(eegP).existsSync()) {
+              edfPath = eegP;
+            }
+            final sc = p['scoringPath'] ?? p['autoScoringPath'] ?? '';
+            if (sc.isNotEmpty && File(sc).existsSync()) {
+              explicitScoring = sc;
+            }
+            break;
+          }
+        }
+
+        final jobSearchDirs = <String>{
+          ...searchDirectories,
+          if (origPath.isNotEmpty) File(origPath).parent.path,
+          if (File(edfPath).existsSync()) File(edfPath).parent.path,
+        }.where((d) => d.trim().isNotEmpty).toList();
+
+        built.add(
+          _PdfBatchJob(
+            sourcePath: edfPath,
+            sourceFile: filename,
+            subjectId: first['Subject Identifier'] ?? '',
+            subjectDetails: first['Subject Details'] ?? '',
+            recordingDate: first['Recording Date'] ?? '',
+            regionalRows: group,
+            searchDirs: jobSearchDirs,
+            explicitScoringPath: explicitScoring,
+            outputDir: _pipelineOutDir() ?? masterDir,
+          ),
+        );
+      }
+      return built;
+    }
+
+    var jobs = buildJobs(extraDirs);
+    if (jobs.any((j) => !File(j.sourcePath).existsSync())) {
+      final chosenEdfDir = await FilePicker.getDirectoryPath(
+        dialogTitle:
+            'Select folder containing the EEG (.edf) recordings for this master sheet',
+        initialDirectory: masterDir,
       );
+      if (chosenEdfDir != null && chosenEdfDir.trim().isNotEmpty) {
+        extraDirs.insert(0, chosenEdfDir.trim());
+        jobs = buildJobs(extraDirs);
+      }
     }
 
     if (jobs.isEmpty) {
@@ -7705,6 +7768,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               style: const TextStyle(fontSize: 12.5, color: Colors.black87),
             ),
             _autoscoreFirstOption(_psgAutoscoreFirst, (v) => setState(() => _psgAutoscoreFirst = v)),
+            if (_psgAutoscoreFirst && !buildLite) ...[
+              const SizedBox(height: 8),
+              _buildInlineAutoscoreSettingsCard(),
+            ],
             const SizedBox(height: 12),
             const Text('Analyses', style: TextStyle(fontWeight: FontWeight.bold)),
             Wrap(
@@ -8369,12 +8436,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   Widget _buildBatchProcessingTab() {
     const sections = [
-      (Icons.auto_awesome_outlined, '1  Autoscore'),
-      (Icons.account_tree_outlined, '2  EEG analysis'),
-      (Icons.monitor_heart_outlined, '3  Polygraphy: OSA & PLM'),
-      (Icons.compare_arrows, '4  Scoring comparison'),
-      (Icons.analytics_outlined, '5  Group statistics'),
+      (Icons.account_tree_outlined, '1  EEG analysis'),
+      (Icons.monitor_heart_outlined, '2  Polygraphy: OSA & PLM'),
+      (Icons.compare_arrows, '3  Scoring comparison'),
+      (Icons.analytics_outlined, '4  Group statistics'),
     ];
+    final activeSection = _batchSection.clamp(0, sections.length - 1);
     final totalQueued = _batchAnalysePairs.length;
     final scored = _batchAnalysePairs.where((p) => (p['scoringPath'] ?? '').isNotEmpty).length;
     final autoscored = _batchAnalysePairs.where((p) => (p['autoScoringPath'] ?? '').isNotEmpty).length;
@@ -8598,11 +8665,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               ],
               const SizedBox(width: 6),
               TextButton.icon(
-                onPressed: () => setState(() => _batchSection = 4),
+                onPressed: () => setState(() => _batchSection = 3),
                 icon: const Icon(Icons.analytics_outlined, size: 15),
                 label: const Text('Group Statistics', style: TextStyle(fontSize: 11.5)),
                 style: TextButton.styleFrom(
-                  foregroundColor: _batchSection == 4 ? const Color(0xFF38BDF8) : const Color(0xFFCBD5E1),
+                  foregroundColor: activeSection == 3 ? const Color(0xFF38BDF8) : const Color(0xFFCBD5E1),
                   visualDensity: VisualDensity.compact,
                 ),
               ),
@@ -8611,9 +8678,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 onPressed: totalQueued == 0
                     ? null
                     : () {
-                        setState(() => _batchSection = 1);
+                        setState(() => _batchSection = 0);
                         _runEegPipeline(
-                          {'preprocess', 'features', 'compile'},
+                          {
+                            if (!buildLite && _pipeStepAutoscore) 'autoscore',
+                            'preprocess',
+                            'features',
+                            'compile',
+                          },
                           autoscoreMissingOnly: true,
                         );
                       },
@@ -8645,14 +8717,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 SegmentedButton<int>(
                   segments: [
                     for (var i = 0; i < sections.length; i++)
-                      if (i != 0 || !buildLite)
-                        ButtonSegment<int>(
-                          value: i,
-                          icon: Icon(sections[i].$1, size: 18),
-                          label: Text(sections[i].$2),
-                        ),
+                      ButtonSegment<int>(
+                        value: i,
+                        icon: Icon(sections[i].$1, size: 18),
+                        label: Text(sections[i].$2),
+                      ),
                   ],
-                  selected: {buildLite && _batchSection == 0 ? 1 : _batchSection},
+                  selected: {activeSection},
                   showSelectedIcon: false,
                   onSelectionChanged: (s) => setState(() => _batchSection = s.first),
                 ),
@@ -8670,7 +8741,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (_batchSection != 4)
+                    if (activeSection != 3)
                       _pipelineStepCard(
                         number: 0,
                         title: 'Recordings',
@@ -8682,12 +8753,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                         body: _buildPipelineRecordingsPanel(),
                       ),
                     KeyedSubtree(
-                      key: ValueKey('batch-section-$_batchSection'),
-                      child: switch (buildLite && _batchSection == 0 ? 1 : _batchSection) {
-                        0 => _buildAutoscoreSection(),
-                        1 => _buildEegPipelineSection(),
-                        2 => _buildBatchPsgCard(),
-                        3 => _buildBatchComparisonCard(),
+                      key: ValueKey('batch-section-$activeSection'),
+                      child: switch (activeSection) {
+                        0 => _buildEegPipelineSection(),
+                        1 => _buildBatchPsgCard(),
+                        2 => _buildBatchComparisonCard(),
                         _ => _buildGroupStatisticsSection(),
                       },
                     ),
@@ -8718,7 +8788,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     if (buildLite) return const SizedBox.shrink();
     final missing = _batchUnscoredCount;
     return Tooltip(
-      message: 'Runs 1 Autoscore (with its settings) for the recordings without a scoring, '
+      message: 'Runs Autoscore (with its settings) for the recordings without a scoring, '
           'then continues with this analysis.',
       child: _batchOptionCheckbox(
         'Autoscore recordings without a scoring first'
@@ -8729,91 +8799,42 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
-  Widget _buildAutoscoreSection() {
-    final n = _batchAnalysePairs.length;
-    final missing = _batchUnscoredCount;
-    final targets = _pipelineAutoscoreMissingOnly ? missing : n;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _pipelineCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Sleep staging for the recordings above. A scoring is needed by every other batch analysis: '
-                'EEG analysis (features are mapped to sleep stages), polygraphy (AHI and PLMS indices per hour of sleep) '
-                'and scoring comparison (autoscore against the manual scoring). '
-                'Existing scorings are never replaced: each autoscore is saved as its own file and linked to the recording.',
-                style: TextStyle(fontSize: 12.5, color: Colors.black87),
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 12,
-                runSpacing: 6,
-                children: [
-                  _batchOptionCheckbox(
-                    'Resume (reuse existing autoscores)',
-                    _batchAnalyseSkipExisting,
-                    (v) => setState(() => _batchAnalyseSkipExisting = v),
-                  ),
-                  Text(
-                    '$n recording(s) · $missing without a scoring',
-                    style: const TextStyle(fontSize: 12, color: Colors.black54),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              SizedBox(
-                height: 42,
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.purple,
-                    foregroundColor: Colors.white,
-                  ),
-                  onPressed: targets == 0 ? null : () => _runEegPipeline({'autoscore'}),
-                  icon: const Icon(Icons.play_arrow),
-                  label: Text(
-                    n == 0
-                        ? 'Add recordings first'
-                        : targets == 0
-                        ? 'All recordings already have a scoring'
-                        : 'Autoscore $targets recording(s)',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        _pipelineStepCard(
-          number: 1,
-          title: 'Autoscore settings',
-          leadingIcon: Icons.settings_outlined,
-          subtitle: 'Sleep staging with ${autoscoreAlgorithmLabel(_batchStagingAlgorithm)}'
-              '${_batchStagingCorrection == 'sleepgpt' ? ' + SleepGPT' : ''}'
-              '${_pipelineAutoscoreMissingOnly ? ', only for recordings without a scoring' : ', for all recordings'}',
-          initiallyExpanded: true,
-          body: _buildPipelineAutoscoreSettings(),
-        ),
-      ],
+  /// Compact collapsible Autoscore settings panel shown inline when Autoscore
+  /// is enabled in Polygraphy or Scoring Comparison.
+  Widget _buildInlineAutoscoreSettingsCard() {
+    return _pipelineStepCard(
+      number: 0,
+      title: 'Autoscore settings',
+      leadingIcon: Icons.auto_awesome_outlined,
+      subtitle: 'Sleep staging with ${autoscoreAlgorithmLabel(_batchStagingAlgorithm)}'
+          '${_batchStagingCorrection == 'sleepgpt' ? ' + SleepGPT' : ''}'
+          '${_pipelineAutoscoreMissingOnly ? ', only for recordings without a scoring' : ', for all recordings'}',
+      initiallyExpanded: false,
+      body: _buildPipelineAutoscoreSettings(),
     );
   }
 
   Widget _buildEegPipelineSection() {
     final includes = <(String, String, bool, ValueChanged<bool>)>[
-      ('preprocess', '1  Preprocess', _pipeStepPreprocess, (v) => setState(() => _pipeStepPreprocess = v)),
-      ('features', '2  Extract features', _pipeStepFeatures, (v) => setState(() => _pipeStepFeatures = v)),
-      ('compile', '3  Compile', _pipeStepCompile, (v) => setState(() => _pipeStepCompile = v)),
+      if (!buildLite)
+        ('autoscore', '1  Autoscore', _pipeStepAutoscore, (v) => setState(() => _pipeStepAutoscore = v)),
+      ('preprocess', '${buildLite ? 1 : 2}  Preprocess', _pipeStepPreprocess, (v) => setState(() => _pipeStepPreprocess = v)),
+      ('features', '${buildLite ? 2 : 3}  Extract features', _pipeStepFeatures, (v) => setState(() => _pipeStepFeatures = v)),
+      ('compile', '${buildLite ? 3 : 4}  Compile', _pipeStepCompile, (v) => setState(() => _pipeStepCompile = v)),
     ];
-    final selected = {
-      if (_pipeStepAutoscore && !buildLite && _batchUnscoredCount > 0) 'autoscore',
-      for (final i in includes)
-        if (i.$3) i.$1,
+    final analysisKeys = {
+      if (_pipeStepPreprocess) 'preprocess',
+      if (_pipeStepFeatures) 'features',
+      if (_pipeStepCompile) 'compile',
     };
-    final analysisSteps = selected.where((k) => k != 'autoscore').length;
+    final includeAutoscore = _pipeStepAutoscore &&
+        !buildLite &&
+        (analysisKeys.isEmpty || !_pipelineAutoscoreMissingOnly || _batchUnscoredCount > 0);
+    final selected = <String>{
+      if (includeAutoscore) 'autoscore',
+      ...analysisKeys,
+    };
+    final totalSelectedSteps = selected.length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -8822,9 +8843,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Run the steps in order for every recording. Each step uses the output of the one before it: '
-                'the cleaned EEG from step 1 is analysed in step 2, where features are mapped to sleep stages '
-                'using the recording\'s scoring, and step 3 combines them across recordings.',
+                'Run the steps in order for every recording. Enable 1 Autoscore to automatically stage recordings '
+                '(existing manual scorings are never overwritten), clean the EEG in 2 Preprocess, extract sleep-stage '
+                'features in 3 Extract features, and compile the master sheet and reports in 4 Compile.',
                 style: TextStyle(fontSize: 12.5, color: Colors.black87),
               ),
               const SizedBox(height: 10),
@@ -8858,16 +8879,21 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                     backgroundColor: Colors.indigo,
                     foregroundColor: Colors.white,
                   ),
-                  onPressed: _batchAnalysePairs.isEmpty || analysisSteps == 0
+                  onPressed: _batchAnalysePairs.isEmpty || totalSelectedSteps == 0
                       ? null
-                      : () => _runEegPipeline(selected, autoscoreMissingOnly: true),
+                      : () => _runEegPipeline(
+                            selected,
+                            autoscoreMissingOnly: analysisKeys.isEmpty ? _pipelineAutoscoreMissingOnly : true,
+                          ),
                   icon: const Icon(Icons.play_arrow),
                   label: Text(
-                    analysisSteps == 0
+                    totalSelectedSteps == 0
                         ? 'Select the steps to run'
-                        : '${selected.contains('autoscore') ? 'Autoscore, then run' : 'Run'} '
-                              '${analysisSteps == 1 ? 'the selected step' : 'the $analysisSteps selected steps in sequence'} '
-                              'for ${_batchAnalysePairs.length} recording(s)',
+                        : analysisKeys.isEmpty && selected.contains('autoscore')
+                            ? 'Autoscore ${_batchAnalysePairs.length} recording(s)'
+                            : '${selected.contains('autoscore') ? 'Autoscore, then run' : 'Run'} '
+                                  '${analysisKeys.length == 1 ? 'the selected step' : 'the ${analysisKeys.length} selected steps in sequence'} '
+                                  'for ${_batchAnalysePairs.length} recording(s)',
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
@@ -8876,6 +8902,19 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           ),
         ),
         const SizedBox(height: 12),
+        if (!buildLite && _pipeStepAutoscore)
+          _pipelineStepCard(
+            number: 1,
+            title: 'Autoscore',
+            subtitle: 'Sleep staging with ${autoscoreAlgorithmLabel(_batchStagingAlgorithm)}'
+                '${_batchStagingCorrection == 'sleepgpt' ? ' + SleepGPT' : ''}'
+                '${_pipelineAutoscoreMissingOnly ? ', only for recordings without a scoring' : ', for all recordings'}',
+            stepKey: 'autoscore',
+            included: _pipeStepAutoscore,
+            onIncluded: (v) => setState(() => _pipeStepAutoscore = v),
+            initiallyExpanded: true,
+            body: _buildPipelineAutoscoreSettings(),
+          ),
         _pipelineStepCard(
           number: 0,
           title: 'EEG channels & output folder',
@@ -8887,7 +8926,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           body: _buildPipelineChannelsPanel(),
         ),
         _pipelineStepCard(
-          number: 1,
+          number: buildLite ? 1 : 2,
           title: 'Preprocess',
           subtitle: 'Stimulation artefact removal on the continuous signal, then 30-s epoch cleaning '
               '(${_pipelinePreprocessSteps().isEmpty ? 'no steps chosen' : _pipelinePreprocessSteps().join(', ')})',
@@ -8897,7 +8936,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           body: _buildPipelinePreprocessSettings(),
         ),
         _pipelineStepCard(
-          number: 2,
+          number: buildLite ? 2 : 3,
           title: 'Extract features',
           subtitle: '${_batchAnalyseOptions.summary}${_batchPsgCap ? ', CAP' : ''} — '
               '${_pipelineUseCleaned ? 'on the cleaned EEG when available' : 'on the original recordings'}, mapped to sleep stages',
@@ -8907,7 +8946,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           body: _buildPipelineFeatureSettings(),
         ),
         _pipelineStepCard(
-          number: 3,
+          number: buildLite ? 3 : 4,
           title: 'Compile features',
           subtitle: 'One master sheet across recordings (AnalyseNidra_master_sheet.csv) and batch PDF reports',
           stepKey: 'compile',
@@ -9911,6 +9950,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                         ],
                       ),
                     ),
+                    if (_compareAutoscoreFirst && !buildLite) ...[
+                      const SizedBox(height: 8),
+                      _buildInlineAutoscoreSettingsCard(),
+                    ],
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -13621,6 +13664,9 @@ class _PdfBatchJob {
     required this.subjectDetails,
     required this.recordingDate,
     required this.regionalRows,
+    this.searchDirs = const [],
+    this.explicitScoringPath,
+    this.outputDir,
   });
 
   final String sourcePath;
@@ -13629,6 +13675,9 @@ class _PdfBatchJob {
   final String subjectDetails;
   final String recordingDate;
   final List<Map<String, String>> regionalRows;
+  final List<String> searchDirs;
+  final String? explicitScoringPath;
+  final String? outputDir;
 }
 
 class _BatchPdfProgressDialog extends StatefulWidget {
@@ -13679,6 +13728,66 @@ class _BatchPdfProgressDialogState extends State<_BatchPdfProgressDialog> {
     });
   }
 
+  Future<Map<String, dynamic>?> _loadSidecarAcrossDirs(
+    String edfPath,
+    List<String> searchDirs,
+    String suffix,
+  ) async {
+    final sep = Platform.pathSeparator;
+    final name = _basename(edfPath);
+    final dot = name.lastIndexOf('.');
+    final rawStem = dot > 0 ? name.substring(0, dot) : name;
+    var baseStem = rawStem;
+    for (final cleanSuf in ['_stimclean', '_clean', '_preprocessed']) {
+      if (baseStem.toLowerCase().endsWith(cleanSuf)) {
+        baseStem = baseStem.substring(0, baseStem.length - cleanSuf.length);
+        break;
+      }
+    }
+    final stems = <String>{rawStem, baseStem};
+    final dirs = <String>{
+      File(edfPath).parent.path,
+      ...searchDirs,
+    };
+    for (final dir in dirs) {
+      if (dir.trim().isEmpty) continue;
+      for (final stem in stems) {
+        final cand = '$dir$sep$stem$suffix';
+        if (File(cand).existsSync()) {
+          final loaded = await loadPsgReport(cand);
+          if (loaded != null) return loaded;
+        }
+      }
+    }
+    return null;
+  }
+
+  Map<String, dynamic>? _reconstructCapFromRegionalRows(
+    List<Map<String, String>> regionalRows,
+  ) {
+    if (regionalRows.isEmpty) return null;
+    final row = regionalRows.first;
+    final summary = <String, dynamic>{};
+    for (final entry in row.entries) {
+      final k = entry.key;
+      final v = entry.value.trim();
+      if (!k.startsWith('CAP_') || v.isEmpty) continue;
+      final numVal = num.tryParse(v);
+      final parsedVal = numVal ?? v;
+      summary[k] = parsedVal;
+      final stripped = k.substring(4);
+      if (stripped.isNotEmpty) {
+        summary.putIfAbsent(stripped, () => parsedVal);
+      }
+    }
+    if (summary.isEmpty) return null;
+    return <String, dynamic>{
+      'summary': summary,
+      'a_phases': const <dynamic>[],
+      'sequences': const <dynamic>[],
+    };
+  }
+
   Future<void> _run() async {
     final backend = EegBackend();
     for (final job in widget.jobs) {
@@ -13708,10 +13817,19 @@ class _BatchPdfProgressDialogState extends State<_BatchPdfProgressDialog> {
 
         final eeg = await backend.computeNightProducts(rawEeg, activeConfig);
         final epochCount = (eeg.durationSeconds / 30).ceil();
-        final loadResult = await tryLoadAutoScoring(edfPath, epochCount);
+        final loadResult = await tryLoadAutoScoring(
+          edfPath,
+          epochCount,
+          extraDirectories: job.searchDirs,
+          explicitScoringPath: job.explicitScoringPath,
+        );
         final existingStages = loadResult?.stages;
         final existingStagesUncertain = loadResult?.stagesUncertain;
-        final existingEvents = await tryLoadAutoEvents(edfPath);
+        final existingEvents = await tryLoadAutoEvents(
+          edfPath,
+          extraDirectories: job.searchDirs,
+          explicitScoringPath: job.explicitScoringPath,
+        );
 
         final viewport = await backend.viewportFromEeg(
           eeg,
@@ -13727,16 +13845,19 @@ class _BatchPdfProgressDialogState extends State<_BatchPdfProgressDialog> {
 
         final pages = widget.includePages;
         final respiratoryReport = pages.length > 5 && pages[5]
-            ? await loadPsgReport(respiratoryReportPath(edfPath))
+            ? await _loadSidecarAcrossDirs(edfPath, job.searchDirs, '_respiratory.json')
             : null;
         final plmReport = pages.length > 6 && pages[6]
-            ? await loadPsgReport(plmReportPath(edfPath))
+            ? await _loadSidecarAcrossDirs(edfPath, job.searchDirs, '_plm.json')
             : null;
-        final capReport = pages.length > 7 && pages[7]
-            ? await loadPsgReport(capReportPath(edfPath))
+        var capReport = pages.length > 7 && pages[7]
+            ? await _loadSidecarAcrossDirs(edfPath, job.searchDirs, '_cap.json')
             : null;
+        if (capReport == null && pages.length > 7 && pages[7]) {
+          capReport = _reconstructCapFromRegionalRows(job.regionalRows);
+        }
         final nlgReport = pages.length > 8 && pages[8]
-            ? await loadPsgReport(nlgSidecarPath(edfPath))
+            ? await _loadSidecarAcrossDirs(edfPath, job.searchDirs, '_nlg.json')
             : null;
         final bytes = buildPublicationSleepReport(
           viewport: fullViewport,
@@ -13757,8 +13878,15 @@ class _BatchPdfProgressDialogState extends State<_BatchPdfProgressDialog> {
           ),
         );
 
-        final dotIdx = edfPath.lastIndexOf('.');
-        final reportPath = '${dotIdx >= 0 ? edfPath.substring(0, dotIdx) : edfPath}.report.pdf';
+        final edfName = _basename(edfPath);
+        final dotIdx = edfName.lastIndexOf('.');
+        final stem = dotIdx >= 0 ? edfName.substring(0, dotIdx) : edfName;
+        final targetDir = (job.outputDir != null &&
+                job.outputDir!.trim().isNotEmpty &&
+                Directory(job.outputDir!).existsSync())
+            ? job.outputDir!.trim()
+            : File(edfPath).parent.path;
+        final reportPath = '$targetDir${Platform.pathSeparator}$stem.report.pdf';
         await File(reportPath).writeAsBytes(bytes);
 
         setState(() {

@@ -96,17 +96,11 @@ Future<String> compileRegionalCsvFiles(
     final parsed = parseCsvTable(await file.readAsString());
 
     String recordingDate = '';
-    String? edfPath;
-    if (path.toLowerCase().endsWith('_analyse_regional.csv')) {
-      edfPath =
-          '${path.substring(0, path.length - '_analyse_regional.csv'.length)}.edf';
-    } else {
-      final lastDot = path.lastIndexOf('.');
-      if (lastDot >= 0) {
-        edfPath = '${path.substring(0, lastDot)}.edf';
-      }
+    String? edfPath = recordingPaths[path];
+    if (edfPath == null || !File(edfPath).existsSync()) {
+      edfPath = resolveRegionalCsvEdfPath(path);
     }
-    if (edfPath != null && File(edfPath).existsSync()) {
+    if (File(edfPath).existsSync()) {
       final dt = EdfLoader.readStartDateTime(edfPath);
       if (dt != null) {
         recordingDate =
@@ -257,6 +251,7 @@ String resolveRegionalCsvEdfPath(
   String sourcePath, {
   String? masterDirectory,
   String? sourceFile,
+  List<String> extraSearchDirectories = const [],
 }) {
   final candidates = <String>[];
   void addCandidate(String path) {
@@ -265,6 +260,7 @@ String resolveRegionalCsvEdfPath(
     }
   }
 
+  // Primary direct mapping
   addCandidate(_regionalCsvPathToEdfPath(sourcePath));
 
   if (masterDirectory != null && sourceFile != null && sourceFile.isNotEmpty) {
@@ -275,9 +271,79 @@ String resolveRegionalCsvEdfPath(
     );
   }
 
+  // Extract stems (raw stem and base stem without _clean / _stimclean)
+  final rawEdf = _regionalCsvPathToEdfPath(
+    sourceFile != null && sourceFile.isNotEmpty ? sourceFile : sourcePath,
+  );
+  final rawName = rawEdf.split(Platform.pathSeparator).last;
+  final dotIdx = rawName.lastIndexOf('.');
+  final rawStem = dotIdx > 0 ? rawName.substring(0, dotIdx) : rawName;
+  final cleanRegex = RegExp(
+    r'(_clean|_stimclean|_cleaned|_preprocessed)$',
+    caseSensitive: false,
+  );
+  final baseStem = rawStem.replaceAll(cleanRegex, '');
+
+  final stemVariants = <String>[
+    rawStem,
+    if (baseStem != rawStem && baseStem.isNotEmpty) baseStem,
+    '${baseStem}_clean',
+    '${baseStem}_stimclean',
+  ];
+
+  // Candidate directories to search
+  final searchDirs = <String>[];
+  void addDir(String? dir) {
+    if (dir != null && dir.isNotEmpty && !searchDirs.contains(dir)) {
+      searchDirs.add(dir);
+    }
+  }
+
+  final srcParent = File(sourcePath).parent;
+  addDir(srcParent.path);
+  addDir(masterDirectory);
+  for (final d in extraSearchDirectories) {
+    addDir(d);
+  }
+  if (srcParent.parent.path != srcParent.path) {
+    addDir(srcParent.parent.path);
+  }
+  if (masterDirectory != null && masterDirectory.isNotEmpty) {
+    final mParent = Directory(masterDirectory).parent;
+    if (mParent.path != masterDirectory) {
+      addDir(mParent.path);
+    }
+  }
+
+  for (final dir in searchDirs) {
+    for (final stem in stemVariants) {
+      addCandidate('$dir${Platform.pathSeparator}$stem.edf');
+      addCandidate('$dir${Platform.pathSeparator}$stem.EDF');
+    }
+  }
+
   for (final candidate in candidates) {
     if (File(candidate).existsSync()) return candidate;
   }
+
+  // Also check 1-level subdirectories of searchDirs if still not found
+  for (final dir in searchDirs) {
+    final dObj = Directory(dir);
+    if (!dObj.existsSync()) continue;
+    try {
+      for (final entity in dObj.listSync(followLinks: false)) {
+        if (entity is Directory) {
+          for (final stem in stemVariants) {
+            final p1 = '${entity.path}${Platform.pathSeparator}$stem.edf';
+            if (File(p1).existsSync()) return p1;
+            final p2 = '${entity.path}${Platform.pathSeparator}$stem.EDF';
+            if (File(p2).existsSync()) return p2;
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
   return candidates.isNotEmpty ? candidates.first : sourcePath;
 }
 

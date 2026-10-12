@@ -5,8 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:file_picker/file_picker.dart';
 
-import 'batch_helpers.dart';
-
 class GroupStatisticsWorkbench extends StatefulWidget {
   const GroupStatisticsWorkbench({
     super.key,
@@ -25,6 +23,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
   final TextEditingController _csvPathController = TextEditingController();
   final TextEditingController _metadataPathController = TextEditingController();
   final TextEditingController _metadataKeyController = TextEditingController();
+  final TextEditingController _rowFilterValueController = TextEditingController();
 
   bool _isInspecting = false;
   bool _isAnalyzing = false;
@@ -38,8 +37,19 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
   String? _selectedGroupCol;
   String? _selectedSubgroupCol;
   String? _selectedSubjectIdCol;
+  final Set<String> _selectedExtraFactors = {};
+  bool _includeInteractions = true;
   final Set<String> _selectedCovariates = {};
   final Set<String> _selectedMetrics = {};
+
+  // Interactive Factor Label Filtering & Plot Ordering
+  final Map<String, Set<String>> _excludedFactorLabels = {};
+  final Map<String, List<String>> _customFactorOrder = {};
+
+  // Interactive Row Value Filters: list of {'column': col, 'op': op, 'value': val}
+  final List<Map<String, String>> _rowFilters = [];
+  String? _draftFilterColumn;
+  String _draftFilterOp = '==';
 
   // Modelling preferences
   String _preferredModel = 'auto'; // 'auto', 'lmm', 'glm'
@@ -50,7 +60,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
   Map<String, dynamic>? _analysisResults;
   String? _selectedResultMetric;
   int _activeResultTabIndex = 0; // 0: Plot, 1: Model Effects, 2: Post-Hoc, 3: Descriptives
-  int _activePlotView = 0; // 0: Box & Post-Hoc Plot, 1: Scalp Topoplot
+  int _activePlotView = 0; // 0: Box & Post-Hoc Plot, 1: Scalp Topoplot + eTFCE
 
   @override
   void initState() {
@@ -69,6 +79,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
     _csvPathController.dispose();
     _metadataPathController.dispose();
     _metadataKeyController.dispose();
+    _rowFilterValueController.dispose();
     super.dispose();
   }
 
@@ -117,6 +128,49 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
     } catch (_) {}
 
     return '$currentDir/backend/group_stats.py';
+  }
+
+  List<String> _levelsForFactor(String? factorCol) {
+    if (factorCol == null || factorCol == 'None' || _inspectionData == null) return const [];
+    final rawMap = _inspectionData!['factor_levels'] as Map<String, dynamic>? ?? {};
+    final rawList = (rawMap[factorCol] as List<dynamic>? ?? const []).map((e) => e.toString()).toList();
+    final custom = _customFactorOrder[factorCol];
+    if (custom != null && custom.isNotEmpty) {
+      final ordered = <String>[
+        for (final item in custom)
+          if (rawList.contains(item)) item,
+        for (final item in rawList)
+          if (!custom.contains(item)) item,
+      ];
+      return ordered;
+    }
+    return rawList;
+  }
+
+  List<String> _activeOrderedLevelsForFactor(String? factorCol) {
+    if (factorCol == null || factorCol == 'None') return const [];
+    final all = _levelsForFactor(factorCol);
+    final excluded = _excludedFactorLabels[factorCol] ?? const <String>{};
+    return all.where((l) => !excluded.contains(l)).toList();
+  }
+
+  int _countForFactorLevel(String factorCol, String level) {
+    final countsMap = _inspectionData?['factor_counts'] as Map<String, dynamic>? ?? {};
+    final factorMap = countsMap[factorCol] as Map<String, dynamic>? ?? {};
+    return (factorMap[level] as num?)?.toInt() ?? 0;
+  }
+
+  void _moveFactorLevel(String factorCol, String level, int delta) {
+    final current = List<String>.from(_levelsForFactor(factorCol));
+    final idx = current.indexOf(level);
+    if (idx < 0) return;
+    final target = idx + delta;
+    if (target < 0 || target >= current.length) return;
+    setState(() {
+      final item = current.removeAt(idx);
+      current.insert(target, item);
+      _customFactorOrder[factorCol] = current;
+    });
   }
 
   Future<void> _pickCsvFile() async {
@@ -186,12 +240,19 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
         _selectedGroupCol = jsonMap['group_col'] as String?;
         _selectedSubgroupCol = jsonMap['subgroup_col'] as String? ?? 'None';
         _selectedSubjectIdCol = jsonMap['subject_id'] as String?;
+        _selectedExtraFactors.clear();
+        _excludedFactorLabels.clear();
+        _customFactorOrder.clear();
+        _rowFilters.clear();
+
+        final filterableCols = (jsonMap['filterable_columns'] as List<dynamic>? ?? []).cast<String>();
+        _draftFilterColumn = filterableCols.isNotEmpty ? filterableCols.first : null;
+
         _selectedCovariates.clear();
         final detectedCovs = (jsonMap['covariates'] as List<dynamic>? ?? []).cast<String>();
-        _selectedCovariates.addAll(detectedCovs.take(2)); // default to age, gender
+        _selectedCovariates.addAll(detectedCovs.take(2));
 
         _selectedMetrics.clear();
-        // Default selection: priority metrics
         final prioritized = [
           'Sleep_efficiency', 'TST', 'WASO', 'SOL', 'N3_percentage', 'R_percentage',
           'sp_Count', 'sp_Duration', 'sp_Amplitude', 'sp_Frequency',
@@ -237,6 +298,12 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
       return;
     }
 
+    final activeGroupLevels = _activeOrderedLevelsForFactor(_selectedGroupCol);
+    if (activeGroupLevels.length < 2) {
+      _showSnack('At least 2 active factor labels are required in $_selectedGroupCol.');
+      return;
+    }
+
     setState(() {
       _isAnalyzing = true;
       _analysisProgress = 0.0;
@@ -252,6 +319,22 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
       }
       final script = await _resolveGroupStatsScript();
 
+      final excludeMap = <String, List<String>>{};
+      for (final entry in _excludedFactorLabels.entries) {
+        if (entry.value.isNotEmpty) {
+          excludeMap[entry.key] = entry.value.toList();
+        }
+      }
+
+      final groupOrder = _activeOrderedLevelsForFactor(_selectedGroupCol);
+      final subgroupOrder = (_selectedSubgroupCol != null && _selectedSubgroupCol != 'None')
+          ? _activeOrderedLevelsForFactor(_selectedSubgroupCol)
+          : <String>[];
+
+      final extraFactorsClean = _selectedExtraFactors
+          .where((f) => f != _selectedGroupCol && f != _selectedSubgroupCol && f != _selectedSubjectIdCol)
+          .toList();
+
       final args = [
         script,
         '--csv', csvPath,
@@ -259,11 +342,27 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
         if (_selectedSubgroupCol != null && _selectedSubgroupCol != 'None') ...[
           '--subgroup', _selectedSubgroupCol!,
         ],
+        if (extraFactorsClean.isNotEmpty) ...[
+          '--extra-factors', extraFactorsClean.join(','),
+        ],
+        if (!_includeInteractions) '--no-interactions',
         if (_selectedSubjectIdCol != null) ...[
           '--subject-id', _selectedSubjectIdCol!,
         ],
         if (_selectedCovariates.isNotEmpty) ...[
           '--covariates', _selectedCovariates.join(','),
+        ],
+        if (excludeMap.isNotEmpty) ...[
+          '--exclude-labels', jsonEncode(excludeMap),
+        ],
+        if (_rowFilters.isNotEmpty) ...[
+          '--row-filters', jsonEncode(_rowFilters),
+        ],
+        if (groupOrder.isNotEmpty) ...[
+          '--group-order', jsonEncode(groupOrder),
+        ],
+        if (subgroupOrder.isNotEmpty) ...[
+          '--subgroup-order', jsonEncode(subgroupOrder),
         ],
         '--metrics', _selectedMetrics.join(','),
         '--model', _preferredModel,
@@ -323,7 +422,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
         if (resList.isNotEmpty) {
           _selectedResultMetric = (resList.first as Map<String, dynamic>)['metric'] as String?;
         }
-        _statusMessage = 'Analysis completed successfully! Generated ${_selectedMetrics.length} metric models, publication plots, and reports.';
+        _statusMessage = 'Analysis completed! Generated ${resList.length} metric models, 400-DPI plots, eTFCE topoplots, and reports.';
       });
     } catch (e) {
       _showSnack('Analysis failed: $e');
@@ -367,6 +466,8 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
         const SizedBox(height: 12),
         if (_inspectionData != null) ...[
           _buildConfigurationCard(),
+          const SizedBox(height: 12),
+          _buildFilteringAndOrderCard(),
           const SizedBox(height: 12),
           _buildMetricsSelectionCard(),
           const SizedBox(height: 12),
@@ -413,7 +514,8 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    'Perform state-of-the-art Linear Mixed-Effects Models (LMM) for multi-channel repeated measures and GLM for sleep architecture. Generates publication plots with post-hoc significance markers, datastamped CSV tables, and Word (DOCX) / PDF reports.',
+                    'Multi-factor Linear Mixed-Effects Models (LMM) & GLM/ANOVA with interactive factor filtering, custom plot ordering, '
+                    'outlier-robust 400-DPI plots, spatial eTFCE scalp topoplots, and space-optimized Word (DOCX) / PDF reports.',
                     style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
                   ),
                 ],
@@ -533,6 +635,9 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
     ];
     final subgrpOptions = ['None', ...catCols];
     final candidateSubj = (_inspectionData?['categorical_columns'] as List<dynamic>? ?? []).cast<String>();
+    final extraFactorCandidates = catCols
+        .where((c) => c != _selectedGroupCol && c != _selectedSubgroupCol && c != _selectedSubjectIdCol)
+        .toList();
 
     return Card(
       elevation: 0,
@@ -556,7 +661,6 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
             const SizedBox(height: 14),
             Row(
               children: [
-                // Primary Grouping Factor
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     value: _selectedGroupCol,
@@ -574,7 +678,6 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                   ),
                 ),
                 const SizedBox(width: 14),
-                // Subgroup / Within-Subject Factor
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     value: _selectedSubgroupCol ?? 'None',
@@ -582,7 +685,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                       labelText: 'Secondary / Within-Subject Factor',
                       border: OutlineInputBorder(),
                       isDense: true,
-                      helperText: 'e.g. Chan (Electrode), ageID, Session',
+                      helperText: 'e.g. Chan (Electrode), Region, Session',
                     ),
                     items: [
                       for (final col in subgrpOptions)
@@ -592,7 +695,6 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                   ),
                 ),
                 const SizedBox(width: 14),
-                // Subject ID Column
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     value: _selectedSubjectIdCol,
@@ -613,9 +715,52 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                 ),
               ],
             ),
-            const SizedBox(height: 14),
-            // Covariates selection
-            const Text('Covariates to Adjust For:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+            if (extraFactorCandidates.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Text(
+                    'Additional Factors (Multi-Factor LMM/GLM):',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 16),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Checkbox(
+                        value: _includeInteractions,
+                        visualDensity: VisualDensity.compact,
+                        onChanged: (v) => setState(() => _includeInteractions = v ?? true),
+                      ),
+                      const Text('Include interaction terms (Group × Factor)', style: TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  for (final ef in extraFactorCandidates)
+                    FilterChip(
+                      label: Text(ef),
+                      selected: _selectedExtraFactors.contains(ef),
+                      onSelected: (sel) {
+                        setState(() {
+                          if (sel) {
+                            _selectedExtraFactors.add(ef);
+                          } else {
+                            _selectedExtraFactors.remove(ef);
+                          }
+                        });
+                      },
+                    ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 12),
+            const Text('Continuous Covariates to Adjust For:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
             Wrap(
               spacing: 8,
@@ -638,7 +783,6 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
               ],
             ),
             const SizedBox(height: 14),
-            // Model Approach & Report Preferences
             Row(
               children: [
                 Expanded(
@@ -693,6 +837,295 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                 ),
               ],
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFactorFilterAndOrderSection(String title, String factorCol) {
+    final levels = _levelsForFactor(factorCol);
+    if (levels.isEmpty) return const SizedBox.shrink();
+    final excluded = _excludedFactorLabels.putIfAbsent(factorCol, () => <String>{});
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                '$title: $factorCol',
+                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold, color: Color(0xFF1F4E79)),
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                '(Click checkbox to include/exclude label · Use arrows ◀ ▶ to set plot order)',
+                style: TextStyle(fontSize: 11, color: Colors.black54),
+              ),
+              const Spacer(),
+              if (excluded.isNotEmpty || _customFactorOrder.containsKey(factorCol))
+                TextButton(
+                  style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                  onPressed: () {
+                    setState(() {
+                      excluded.clear();
+                      _customFactorOrder.remove(factorCol);
+                    });
+                  },
+                  child: const Text('Reset', style: TextStyle(fontSize: 11)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (var i = 0; i < levels.length; i++)
+                Builder(
+                  builder: (context) {
+                    final lvl = levels[i];
+                    final isIncluded = !excluded.contains(lvl);
+                    final count = _countForFactorLevel(factorCol, lvl);
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: isIncluded ? const Color(0xFFEFF6FF) : Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isIncluded ? const Color(0xFF3B82F6) : Colors.grey.shade400,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          InkWell(
+                            onTap: i > 0 ? () => _moveFactorLevel(factorCol, lvl, -1) : null,
+                            child: Icon(
+                              Icons.chevron_left,
+                              size: 16,
+                              color: i > 0 ? const Color(0xFF1F4E79) : Colors.grey.shade400,
+                            ),
+                          ),
+                          InkWell(
+                            onTap: () {
+                              setState(() {
+                                if (isIncluded) {
+                                  excluded.add(lvl);
+                                } else {
+                                  excluded.remove(lvl);
+                                }
+                              });
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    isIncluded ? Icons.check_box : Icons.check_box_outline_blank,
+                                    size: 15,
+                                    color: isIncluded ? const Color(0xFF1F4E79) : Colors.grey.shade600,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '${i + 1}. $lvl ($count)',
+                                    style: TextStyle(
+                                      fontSize: 11.5,
+                                      fontWeight: isIncluded ? FontWeight.w600 : FontWeight.normal,
+                                      decoration: isIncluded ? null : TextDecoration.lineThrough,
+                                      color: isIncluded ? const Color(0xFF1E293B) : Colors.grey.shade600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          InkWell(
+                            onTap: i < levels.length - 1 ? () => _moveFactorLevel(factorCol, lvl, 1) : null,
+                            child: Icon(
+                              Icons.chevron_right,
+                              size: 16,
+                              color: i < levels.length - 1 ? const Color(0xFF1F4E79) : Colors.grey.shade400,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilteringAndOrderCard() {
+    final filterableCols = (_inspectionData?['filterable_columns'] as List<dynamic>? ?? []).cast<String>();
+    final distinctMap = _inspectionData?['column_distinct_values'] as Map<String, dynamic>? ?? {};
+    final draftSuggestions = (_draftFilterColumn != null && distinctMap.containsKey(_draftFilterColumn))
+        ? (distinctMap[_draftFilterColumn] as List<dynamic>).map((e) => e.toString()).toList()
+        : const <String>[];
+
+    return Card(
+      elevation: 0,
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.grey.shade300),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.filter_alt_outlined, size: 20, color: Color(0xFF1F4E79)),
+                SizedBox(width: 8),
+                Text(
+                  'Interactive Factor Label Filtering, Plot Ordering & Row Value Exclusion',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_selectedGroupCol != null)
+              _buildFactorFilterAndOrderSection('Primary Grouping Factor', _selectedGroupCol!),
+            if (_selectedSubgroupCol != null && _selectedSubgroupCol != 'None')
+              _buildFactorFilterAndOrderSection('Secondary / Within-Subject Factor', _selectedSubgroupCol!),
+            for (final ef in _selectedExtraFactors)
+              _buildFactorFilterAndOrderSection('Additional Factor', ef),
+            const Divider(height: 18),
+            const Text(
+              'Filter Out Rows with Particular Values:',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold, color: Color(0xFF1F4E79)),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SizedBox(
+                  width: 220,
+                  child: DropdownButtonFormField<String>(
+                    value: filterableCols.contains(_draftFilterColumn) ? _draftFilterColumn : null,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Column',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: [
+                      for (final c in filterableCols)
+                        DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis)),
+                    ],
+                    onChanged: (v) => setState(() => _draftFilterColumn = v),
+                  ),
+                ),
+                SizedBox(
+                  width: 210,
+                  child: DropdownButtonFormField<String>(
+                    value: _draftFilterOp,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Exclusion Rule',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: '==', child: Text('Exclude where == value')),
+                      DropdownMenuItem(value: '!=', child: Text('Exclude where != value (Keep only)')),
+                      DropdownMenuItem(value: '<', child: Text('Exclude where < value')),
+                      DropdownMenuItem(value: '<=', child: Text('Exclude where <= value')),
+                      DropdownMenuItem(value: '>', child: Text('Exclude where > value')),
+                      DropdownMenuItem(value: '>=', child: Text('Exclude where >= value')),
+                      DropdownMenuItem(value: 'contains', child: Text('Exclude where text contains')),
+                      DropdownMenuItem(value: 'is_na', child: Text('Exclude missing / empty rows')),
+                    ],
+                    onChanged: (v) => setState(() => _draftFilterOp = v ?? '=='),
+                  ),
+                ),
+                if (_draftFilterOp != 'is_na')
+                  SizedBox(
+                    width: 220,
+                    child: TextField(
+                      controller: _rowFilterValueController,
+                      decoration: InputDecoration(
+                        labelText: 'Value',
+                        hintText: 'Enter value to filter',
+                        border: const OutlineInputBorder(),
+                        isDense: true,
+                        suffixIcon: draftSuggestions.isNotEmpty
+                            ? PopupMenuButton<String>(
+                                icon: const Icon(Icons.arrow_drop_down, size: 20),
+                                tooltip: 'Pick from existing values in column',
+                                onSelected: (v) => setState(() => _rowFilterValueController.text = v),
+                                itemBuilder: (_) => [
+                                  for (final s in draftSuggestions)
+                                    PopupMenuItem(value: s, child: Text(s)),
+                                ],
+                              )
+                            : null,
+                      ),
+                    ),
+                  ),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    if (_draftFilterColumn == null) return;
+                    final val = _rowFilterValueController.text.trim();
+                    if (_draftFilterOp != 'is_na' && val.isEmpty) {
+                      _showSnack('Enter or pick a value for the row filter.');
+                      return;
+                    }
+                    setState(() {
+                      _rowFilters.add({
+                        'column': _draftFilterColumn!,
+                        'op': _draftFilterOp,
+                        'value': _draftFilterOp == 'is_na' ? 'NA' : val,
+                      });
+                      _rowFilterValueController.clear();
+                    });
+                  },
+                  icon: const Icon(Icons.add_circle_outline, size: 16),
+                  label: const Text('Add Row Filter'),
+                ),
+                if (_rowFilters.isNotEmpty)
+                  TextButton(
+                    onPressed: () => setState(() => _rowFilters.clear()),
+                    child: const Text('Clear Filters'),
+                  ),
+              ],
+            ),
+            if (_rowFilters.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (var i = 0; i < _rowFilters.length; i++)
+                    Chip(
+                      backgroundColor: Colors.orange.shade50,
+                      label: Text(
+                        'Exclude ${_rowFilters[i]['column']} ${_rowFilters[i]['op']} ${_rowFilters[i]['value']}',
+                        style: TextStyle(fontSize: 11.5, color: Colors.orange.shade900, fontWeight: FontWeight.w600),
+                      ),
+                      deleteIcon: const Icon(Icons.close, size: 15),
+                      onDeleted: () => setState(() => _rowFilters.removeAt(i)),
+                    ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -904,7 +1337,6 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Top action bar
             Row(
               children: [
                 const Icon(Icons.folder_special_outlined, color: Color(0xFF1F4E79), size: 24),
@@ -942,7 +1374,6 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
               ],
             ),
             const Divider(height: 24),
-            // Metric selector pills
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
@@ -964,12 +1395,11 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
               ),
             ),
             const SizedBox(height: 14),
-            // Tabs: Plot, Model Effects, Post-Hoc, Descriptives
             Row(
               children: [
                 SegmentedButton<int>(
                   segments: const [
-                    ButtonSegment(value: 0, icon: Icon(Icons.image_outlined, size: 16), label: Text('Publication Plot')),
+                    ButtonSegment(value: 0, icon: Icon(Icons.image_outlined, size: 16), label: Text('Publication Plot & eTFCE')),
                     ButtonSegment(value: 1, icon: Icon(Icons.table_chart_outlined, size: 16), label: Text('Model Effects')),
                     ButtonSegment(value: 2, icon: Icon(Icons.compare_arrows_outlined, size: 16), label: Text('Post-Hoc Contrasts')),
                     ButtonSegment(value: 3, icon: Icon(Icons.summarize_outlined, size: 16), label: Text('Descriptive Stats')),
@@ -980,7 +1410,6 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
               ],
             ),
             const SizedBox(height: 14),
-            // Active Tab Content
             if (activeResult.isNotEmpty) ...[
               if (_activeResultTabIndex == 0) _buildPlotTab(activeResult),
               if (_activeResultTabIndex == 1) _buildModelEffectsTab(activeResult),
@@ -996,7 +1425,9 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
   Widget _buildPlotTab(Map<String, dynamic> res) {
     final plotPath = res['plot_path'] as String? ?? '';
     final topoPath = res['topoplot_path'] as String? ?? '';
+    final unit = res['unit'] as String? ?? '';
     final isMacro = res['is_macroarchitecture'] == true;
+    final etfceChannels = (res['etfce_channels'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
 
     final hasTopo = topoPath.isNotEmpty && File(topoPath).existsSync();
     final currentPath = (_activePlotView == 1 && hasTopo) ? topoPath : plotPath;
@@ -1022,7 +1453,8 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Text(
-                      '${res['metric']} · Model: ${res['model_type']} · N=${res['n_obs']}',
+                      '${res['metric']}${unit.isNotEmpty ? ' ($unit)' : ''} · ${res['model_type']} · '
+                      'N=${res['n_subjects'] ?? res['n_obs']} subj (n=${res['n_obs']} obs)',
                       style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF1F4E79)),
                     ),
                     if (isMacro)
@@ -1047,7 +1479,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                   child: SegmentedButton<int>(
                     segments: const [
                       ButtonSegment(value: 0, icon: Icon(Icons.bar_chart, size: 14), label: Text('Boxplot & Post-hoc')),
-                      ButtonSegment(value: 1, icon: Icon(Icons.pie_chart, size: 14), label: Text('Scalp Topoplot')),
+                      ButtonSegment(value: 1, icon: Icon(Icons.blur_circular, size: 14), label: Text('Scalp Topoplot + eTFCE')),
                     ],
                     selected: {_activePlotView},
                     onSelectionChanged: (s) => setState(() => _activePlotView = s.first),
@@ -1056,21 +1488,29 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
               TextButton.icon(
                 onPressed: file.existsSync() ? () => _openPath(currentPath) : null,
                 icon: const Icon(Icons.zoom_in, size: 16),
-                label: const Text('View Full Image'),
+                label: const Text('Open Full 400-DPI Image'),
               ),
             ],
           ),
           const SizedBox(height: 8),
           if (file.existsSync())
             Center(
-              child: InkWell(
-                onTap: () => _openPath(currentPath),
-                child: ClipRRect(
+              child: Container(
+                constraints: const BoxConstraints(maxHeight: 500),
+                decoration: BoxDecoration(
+                  color: Colors.white,
                   borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.grey.shade200),
+                ),
+                child: InteractiveViewer(
+                  minScale: 0.8,
+                  maxScale: 4.0,
                   child: Image.file(
                     file,
-                    height: 420,
+                    key: ValueKey('${file.path}-${file.lastModifiedSync().millisecondsSinceEpoch}'),
+                    height: 460,
                     fit: BoxFit.contain,
+                    filterQuality: FilterQuality.high,
                   ),
                 ),
               ),
@@ -1080,6 +1520,41 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
               padding: EdgeInsets.all(32),
               child: Center(child: Text('Plot image not found.')),
             ),
+          if (_activePlotView == 1 && hasTopo && etfceChannels.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text(
+              'Spatial eTFCE (Threshold-Free Cluster Enhancement) Permutation Results:',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold, color: Color(0xFF1F4E79)),
+            ),
+            const SizedBox(height: 6),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowHeight: 32,
+                dataRowMinHeight: 28,
+                dataRowMaxHeight: 32,
+                columns: const [
+                  DataColumn(label: Text('Channel / Region', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                  DataColumn(label: Text('Raw Statistic (t / F)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                  DataColumn(label: Text('eTFCE Score', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                  DataColumn(label: Text('p (eTFCE FWER)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                  DataColumn(label: Text('Significance', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                ],
+                rows: [
+                  for (final ch in etfceChannels)
+                    DataRow(
+                      cells: [
+                        DataCell(Text('${ch['channel'] ?? ''}', style: const TextStyle(fontWeight: FontWeight.w600))),
+                        DataCell(Text((ch['raw_stat'] as num?)?.toStringAsFixed(3) ?? '-')),
+                        DataCell(Text((ch['etfce_score'] as num?)?.toStringAsFixed(3) ?? '-')),
+                        DataCell(Text(_formatP(ch['p_etfce'] as num?))),
+                        DataCell(_buildSigBadge(ch['significance'] as String? ?? 'ns')),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -1095,28 +1570,35 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
       );
     }
 
-    return DataTable(
-      columns: const [
-        DataColumn(label: Text('Factor / Term', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('Statistic Type', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('Value', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('df', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('p-value', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('Significance', style: TextStyle(fontWeight: FontWeight.bold))),
-      ],
-      rows: [
-        for (final eff in effects)
-          DataRow(
-            cells: [
-              DataCell(Text(eff['term'] as String? ?? '')),
-              DataCell(Text(eff['stat_type'] as String? ?? '')),
-              DataCell(Text((eff['statistic'] as num?)?.toStringAsFixed(3) ?? '-')),
-              DataCell(Text('${eff['df'] ?? 1}${eff['df_resid'] != null ? ', ${eff['df_resid']}' : ''}')),
-              DataCell(Text(_formatP(eff['p_value'] as num?))),
-              DataCell(_buildSigBadge(eff['significance'] as String? ?? 'ns')),
-            ],
-          ),
-      ],
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DataTable(
+        columns: const [
+          DataColumn(label: Text('Factor / Term', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('N (Subj / Obs)', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('Stat Type', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('Statistic', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('df', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('p-value', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('Effect Size (ηp²)', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('Significance', style: TextStyle(fontWeight: FontWeight.bold))),
+        ],
+        rows: [
+          for (final eff in effects)
+            DataRow(
+              cells: [
+                DataCell(Text(eff['term'] as String? ?? '')),
+                DataCell(Text('${eff['n_subjects'] ?? res['n_subjects'] ?? '-'} / ${eff['n_obs'] ?? res['n_obs'] ?? '-'}')),
+                DataCell(Text(eff['stat_type'] as String? ?? '')),
+                DataCell(Text((eff['statistic'] as num?)?.toStringAsFixed(3) ?? '-')),
+                DataCell(Text('${eff['df'] ?? 1}${eff['df_resid'] != null ? ', ${eff['df_resid']}' : ''}')),
+                DataCell(Text(_formatP(eff['p_value'] as num?))),
+                DataCell(Text((eff['effect_size'] as num?)?.toStringAsFixed(3) ?? '-')),
+                DataCell(_buildSigBadge(eff['significance'] as String? ?? 'ns')),
+              ],
+            ),
+        ],
+      ),
     );
   }
 
@@ -1136,24 +1618,28 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
         columns: const [
           DataColumn(label: Text('Factor Level', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Comparison', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('N (n1 vs n2)', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Mean Diff', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('t-stat', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('p (raw)', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('p (adjusted)', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Cohen’s d', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('Hedges’ g', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Sig.', style: TextStyle(fontWeight: FontWeight.bold))),
         ],
         rows: [
           for (final c in contrasts)
             DataRow(
               cells: [
-                DataCell(Text(c['level'] as String? ?? 'Overall')),
+                DataCell(Text(c['level']?.toString() ?? 'Overall')),
                 DataCell(Text('${c['group1']} vs ${c['group2']}')),
+                DataCell(Text('${c['n1'] ?? '-'} vs ${c['n2'] ?? '-'}')),
                 DataCell(Text((c['diff'] as num?)?.toStringAsFixed(3) ?? '-')),
                 DataCell(Text((c['t_stat'] as num?)?.toStringAsFixed(3) ?? '-')),
                 DataCell(Text(_formatP(c['p_raw'] as num?))),
                 DataCell(Text(_formatP(c['p_adj'] as num?))),
                 DataCell(Text((c['cohen_d'] as num?)?.toStringAsFixed(2) ?? '-')),
+                DataCell(Text((c['hedges_g'] as num?)?.toStringAsFixed(2) ?? '-')),
                 DataCell(_buildSigBadge(c['significance'] as String? ?? 'ns')),
               ],
             ),
@@ -1178,7 +1664,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
         columns: const [
           DataColumn(label: Text('Group', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Subgroup', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text('N', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('N (Subj / Obs)', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Mean ± SD', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Median (IQR)', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Min', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -1188,9 +1674,9 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
           for (final s in stats)
             DataRow(
               cells: [
-                DataCell(Text(s['group'] as String? ?? '-')),
-                DataCell(Text(s['subgroup'] as String? ?? '-')),
-                DataCell(Text('${s['n'] ?? 0}')),
+                DataCell(Text(s['group']?.toString() ?? '-')),
+                DataCell(Text(s['subgroup']?.toString() ?? '-')),
+                DataCell(Text('${s['n_subjects'] ?? s['n'] ?? 0} / ${s['n'] ?? 0}')),
                 DataCell(Text('${(s['mean'] as num?)?.toStringAsFixed(2)} ± ${(s['std'] as num?)?.toStringAsFixed(2)}')),
                 DataCell(Text('${(s['median'] as num?)?.toStringAsFixed(2)} (${(s['iqr'] as num?)?.toStringAsFixed(2)})')),
                 DataCell(Text((s['min'] as num?)?.toStringAsFixed(2) ?? '-')),

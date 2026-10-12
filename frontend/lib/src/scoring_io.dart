@@ -68,12 +68,20 @@ Future<void> writeMappedScoringJson(
   );
 }
 
-/// Load scoring from the JSON file that lives next to the EDF (auto-loaded on open).
+/// Load scoring from the JSON file that lives next to the EDF or in [extraDirectories].
 Future<ScoringLoadResult?> tryLoadAutoScoring(
   String activePath,
-  int epochCount,
-) async {
-  final paths = _autoScoringCandidatePaths(activePath);
+  int epochCount, {
+  List<String> extraDirectories = const [],
+  String? explicitScoringPath,
+}) async {
+  final paths = <String>[
+    if (explicitScoringPath != null &&
+        explicitScoringPath.isNotEmpty &&
+        File(explicitScoringPath).existsSync())
+      explicitScoringPath,
+    ..._autoScoringCandidatePaths(activePath, extraDirectories: extraDirectories),
+  ];
   ScoringLoadResult? primary;
   for (final path in paths) {
     try {
@@ -106,28 +114,49 @@ Future<ScoringLoadResult?> tryLoadAutoScoring(
   return primary;
 }
 
-List<String> _autoScoringCandidatePaths(String activePath) {
+List<String> _autoScoringCandidatePaths(
+  String activePath, {
+  List<String> extraDirectories = const [],
+}) {
   final file = File(activePath);
-  final directory = file.parent;
   final filename = file.uri.pathSegments.isNotEmpty
       ? file.uri.pathSegments.last
       : activePath.split(Platform.pathSeparator).last;
   final dotIdx = filename.lastIndexOf('.');
-  final stem = dotIdx >= 0 ? filename.substring(0, dotIdx) : filename;
-  final basePath = '${directory.path}${Platform.pathSeparator}$stem';
-  final candidates = <String>[];
+  final rawStem = dotIdx >= 0 ? filename.substring(0, dotIdx) : filename;
+  final cleanRegex = RegExp(
+    r'(_clean|_stimclean|_cleaned|_preprocessed)$',
+    caseSensitive: false,
+  );
+  final baseStem = rawStem.replaceAll(cleanRegex, '');
+  final stems = <String>[
+    rawStem,
+    if (baseStem != rawStem && baseStem.isNotEmpty) baseStem,
+  ];
 
+  final dirs = <Directory>[
+    file.parent,
+    for (final d in extraDirectories)
+      if (d.isNotEmpty) Directory(d),
+    if (file.parent.parent.path != file.parent.path) file.parent.parent,
+  ];
+
+  final candidates = <String>[];
   void add(String path) {
     if (File(path).existsSync() && !candidates.contains(path)) {
       candidates.add(path);
     }
   }
 
-  add('${basePath}_scoring.json');
-  add('$basePath.json');
+  for (final directory in dirs) {
+    if (!directory.existsSync()) continue;
+    for (final stem in stems) {
+      final basePath = '${directory.path}${Platform.pathSeparator}$stem';
+      add('${basePath}_scoring.json');
+      add('$basePath.json');
+    }
 
-  if (directory.existsSync()) {
-    final extraFiles = directory.listSync(followLinks: false).whereType<File>();
+    final extraFiles = directory.listSync(followLinks: false).whereType<File>().toList();
     for (final fileEntry in extraFiles) {
       final p = fileEntry.path.toLowerCase();
       if (p.endsWith('.esrc') || p.endsWith('.esedb')) {
@@ -135,17 +164,18 @@ List<String> _autoScoringCandidatePaths(String activePath) {
       }
     }
 
-    final modelSidecars =
-        extraFiles
-            .where((entry) => _isAutoscoreSidecarForStem(entry.path, stem))
-            .toList()
-          ..sort((a, b) {
-            final bModified = b.statSync().modified;
-            final aModified = a.statSync().modified;
-            return bModified.compareTo(aModified);
-          });
-    for (final sidecar in modelSidecars) {
-      add(sidecar.path);
+    for (final stem in stems) {
+      final modelSidecars = extraFiles
+          .where((entry) => _isAutoscoreSidecarForStem(entry.path, stem))
+          .toList()
+        ..sort((a, b) {
+          final bModified = b.statSync().modified;
+          final aModified = a.statSync().modified;
+          return bModified.compareTo(aModified);
+        });
+      for (final sidecar in modelSidecars) {
+        add(sidecar.path);
+      }
     }
   }
 
@@ -163,30 +193,32 @@ bool _isAutoscoreSidecarForStem(String path, String stem) {
   ).hasMatch(suffix);
 }
 
-Future<List<ScoredEvent>> tryLoadAutoEvents(String activePath) async {
-  final dotIdx = activePath.lastIndexOf('.');
-  final base = dotIdx >= 0 ? activePath.substring(0, dotIdx) : activePath;
-
-  // Try postfixed path first
-  var jsonPath = '${base}_scoring.json';
-  var file = File(jsonPath);
-  if (!file.existsSync()) {
-    // Fallback to default json path
-    jsonPath = '$base.json';
-    file = File(jsonPath);
+Future<List<ScoredEvent>> tryLoadAutoEvents(
+  String activePath, {
+  List<String> extraDirectories = const [],
+  String? explicitScoringPath,
+}) async {
+  final candidates = <String>[
+    if (explicitScoringPath != null && explicitScoringPath.trim().isNotEmpty)
+      explicitScoringPath.trim(),
+    ..._autoScoringCandidatePaths(
+      activePath,
+      extraDirectories: extraDirectories,
+    ),
+  ];
+  for (final jsonPath in candidates) {
+    final file = File(jsonPath);
+    if (!file.existsSync()) continue;
+    try {
+      final content = await file.readAsString();
+      final dynamic json = jsonDecode(content);
+      if (json is List && json.length >= 2 && json[1] is List) {
+        final events = _parseEvents(json[1] as List<dynamic>);
+        if (events.isNotEmpty) return events;
+      }
+    } catch (_) {}
   }
-
-  if (!file.existsSync()) return const [];
-  try {
-    final content = await file.readAsString();
-    final dynamic json = jsonDecode(content);
-    if (json is! List || json.length < 2 || json[1] is! List) {
-      return const [];
-    }
-    return _parseEvents(json[1] as List<dynamic>);
-  } catch (_) {
-    return const [];
-  }
+  return const [];
 }
 
 /// Load config from the JSON file that lives next to the EDF (auto-loaded on open).

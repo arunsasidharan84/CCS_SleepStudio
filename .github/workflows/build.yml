@@ -88,6 +88,27 @@ jobs:
         run: flutter pub get
         working-directory: frontend
 
+      - name: Pre-fetch and verify macOS media_kit libmpv xcframeworks
+        run: |
+          for dir in "${PUB_CACHE:-$HOME/.pub-cache}"/hosted/pub.dev/media_kit_libs_macos_video-*/macos; do
+            if [ -d "$dir" ]; then
+              echo "Preparing media_kit_libs_macos_video in $dir..."
+              sed -i '' 's/curl -L/curl --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 15 -fL/g' "$dir/Makefile"
+              for attempt in 1 2 3; do
+                if make -C "$dir" SHELL=/bin/bash && [ -d "$dir/Frameworks/Mpv.xcframework" ] && [ -e "$dir/Frameworks/.symlinks/mpv/macos" ]; then
+                  touch "$dir/Frameworks/.symlinks"
+                  echo "Successfully prepared Mpv.xcframework on attempt $attempt."
+                  break
+                fi
+                echo "make attempt $attempt failed or incomplete; cleaning and retrying..."
+                make -C "$dir" clean || true
+                sleep 4
+              done
+              test -d "$dir/Frameworks/Mpv.xcframework"
+              test -e "$dir/Frameworks/.symlinks/mpv/macos"
+            fi
+          done
+
       - name: Analyze
         run: flutter analyze
         working-directory: frontend

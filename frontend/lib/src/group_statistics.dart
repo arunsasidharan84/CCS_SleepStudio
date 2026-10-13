@@ -20,10 +20,13 @@ class GroupStatisticsWorkbench extends StatefulWidget {
 }
 
 class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
+  static String? _cachedPythonExecutable;
+
   final TextEditingController _csvPathController = TextEditingController();
   final TextEditingController _metadataPathController = TextEditingController();
   final TextEditingController _metadataKeyController = TextEditingController();
   final TextEditingController _rowFilterValueController = TextEditingController();
+  final TextEditingController _pythonPathController = TextEditingController();
 
   bool _isInspecting = false;
   bool _isAnalyzing = false;
@@ -37,6 +40,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
   String? _selectedGroupCol;
   String? _selectedSubgroupCol;
   String? _selectedSubjectIdCol;
+  String? _selectedChannelCol;
   final Set<String> _selectedExtraFactors = {};
   bool _includeInteractions = true;
   final Set<String> _selectedCovariates = {};
@@ -65,6 +69,9 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
   @override
   void initState() {
     super.initState();
+    if (_cachedPythonExecutable != null) {
+      _pythonPathController.text = _cachedPythonExecutable!;
+    }
     if (widget.initialCsvPath != null && widget.initialCsvPath!.isNotEmpty) {
       _csvPathController.text = widget.initialCsvPath!;
       WidgetsBinding.instance.addPostFrameCallback((_) => _inspectCsv());
@@ -80,28 +87,190 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
     _metadataPathController.dispose();
     _metadataKeyController.dispose();
     _rowFilterValueController.dispose();
+    _pythonPathController.dispose();
     super.dispose();
   }
 
-  static Future<String?> _findPythonExecutable() async {
-    final candidates = [
-      if (Platform.isWindows) 'python.exe',
-      if (Platform.isWindows) r'C:\Python312\python.exe',
-      if (Platform.isWindows) r'C:\Python311\python.exe',
-      if (Platform.isMacOS) '/Users/arunsasidharan/miniconda3/bin/python3',
-      if (Platform.isMacOS) '/opt/homebrew/bin/python3',
-      if (Platform.isMacOS) '/usr/local/bin/python3',
-      if (Platform.isLinux) '/usr/bin/python3',
-      'python3',
-      'python',
-    ];
-    for (final cand in candidates) {
+  static Future<String?> _findPythonExecutable([String? preferredPath]) async {
+    if (preferredPath != null && preferredPath.trim().isNotEmpty) {
+      final f = File(preferredPath.trim());
+      if (f.existsSync()) {
+        try {
+          final res = await Process.run(preferredPath.trim(), ['--version']);
+          if (res.exitCode == 0) {
+            _cachedPythonExecutable = preferredPath.trim();
+            return preferredPath.trim();
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (_cachedPythonExecutable != null && _cachedPythonExecutable!.isNotEmpty) {
       try {
-        final res = await Process.run(cand, ['--version']);
-        if (res.exitCode == 0) return cand;
+        final res = await Process.run(_cachedPythonExecutable!, ['--version']);
+        if (res.exitCode == 0) return _cachedPythonExecutable;
+      } catch (_) {
+        _cachedPythonExecutable = null;
+      }
+    }
+
+    final candidateSet = <String>{};
+
+    if (Platform.isWindows) {
+      try {
+        final whichRes = await Process.run('where.exe', ['python']);
+        if (whichRes.exitCode == 0) {
+          final lines = (whichRes.stdout as String).split(RegExp(r'[\r\n]+'));
+          for (final l in lines) {
+            if (l.trim().isNotEmpty && l.trim().toLowerCase().endsWith('.exe')) {
+              candidateSet.add(l.trim());
+            }
+          }
+        }
+      } catch (_) {}
+
+      try {
+        final whichRes = await Process.run('where.exe', ['py']);
+        if (whichRes.exitCode == 0) {
+          final lines = (whichRes.stdout as String).split(RegExp(r'[\r\n]+'));
+          for (final l in lines) {
+            if (l.trim().isNotEmpty && l.trim().toLowerCase().endsWith('.exe')) {
+              candidateSet.add(l.trim());
+            }
+          }
+        }
+      } catch (_) {}
+
+      final localAppData = Platform.environment['LOCALAPPDATA'];
+      if (localAppData != null) {
+        final pyProgDir = Directory('$localAppData\\Programs\\Python');
+        if (pyProgDir.existsSync()) {
+          try {
+            for (final ent in pyProgDir.listSync()) {
+              if (ent is Directory) {
+                final exe = File('${ent.path}\\python.exe');
+                if (exe.existsSync()) candidateSet.add(exe.path);
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      final userProfile = Platform.environment['USERPROFILE'];
+      if (userProfile != null) {
+        for (final sub in ['miniconda3', 'anaconda3', 'Miniconda3', 'Anaconda3', '.conda']) {
+          final exe = File('$userProfile\\$sub\\python.exe');
+          if (exe.existsSync()) candidateSet.add(exe.path);
+        }
+      }
+
+      for (final root in [
+        r'C:\ProgramData\miniconda3',
+        r'C:\ProgramData\anaconda3',
+        r'C:\Python313',
+        r'C:\Python312',
+        r'C:\Python311',
+        r'C:\Python310',
+      ]) {
+        final exe = File('$root\\python.exe');
+        if (exe.existsSync()) candidateSet.add(exe.path);
+      }
+
+      candidateSet.addAll(['python.exe', 'python3.exe', 'py.exe']);
+    } else {
+      // Linux & macOS
+      for (final cmd in ['python3', 'python']) {
+        try {
+          final whichRes = await Process.run('which', [cmd]);
+          if (whichRes.exitCode == 0) {
+            final p = (whichRes.stdout as String).trim();
+            if (p.isNotEmpty) candidateSet.add(p);
+          }
+        } catch (_) {}
+      }
+
+      final home = Platform.environment['HOME'];
+      if (home != null) {
+        for (final sub in [
+          'miniconda3/bin/python3',
+          'miniconda3/bin/python',
+          'anaconda3/bin/python3',
+          'anaconda3/bin/python',
+          '.local/bin/python3',
+          '.local/bin/python',
+        ]) {
+          final exe = File('$home/$sub');
+          if (exe.existsSync()) candidateSet.add(exe.path);
+        }
+
+        final condaEnvsDir = Directory('$home/.conda/envs');
+        if (condaEnvsDir.existsSync()) {
+          try {
+            for (final ent in condaEnvsDir.listSync()) {
+              if (ent is Directory) {
+                final exe = File('${ent.path}/bin/python');
+                if (exe.existsSync()) candidateSet.add(exe.path);
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      candidateSet.addAll([
+        if (Platform.isMacOS) ...[
+          '/opt/homebrew/bin/python3',
+          '/usr/local/bin/python3',
+          '/usr/bin/python3',
+        ],
+        if (Platform.isLinux) ...[
+          '/usr/bin/python3',
+          '/usr/local/bin/python3',
+          '/opt/conda/bin/python',
+          '/opt/conda/bin/python3',
+        ],
+        'python3',
+        'python',
+      ]);
+    }
+
+    String? bestCandidate;
+    int bestScore = -1;
+
+    for (final cand in candidateSet) {
+      try {
+        final verRes = await Process.run(cand, ['--version']);
+        if (verRes.exitCode != 0) continue;
+
+        int score = 1; // Base python works
+
+        try {
+          final pkgRes = await Process.run(cand, [
+            '-c',
+            'import pandas; import statsmodels; import matplotlib; print("READY")',
+          ]);
+          if (pkgRes.exitCode == 0 && (pkgRes.stdout as String).contains('READY')) {
+            score = 10; // fully equipped
+            _cachedPythonExecutable = cand;
+            return cand;
+          } else {
+            final pdRes = await Process.run(cand, ['-c', 'import pandas; print("PD")']);
+            if (pdRes.exitCode == 0 && (pdRes.stdout as String).contains('PD')) {
+              score = 5;
+            }
+          }
+        } catch (_) {}
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestCandidate = cand;
+        }
       } catch (_) {}
     }
-    return null;
+
+    if (bestCandidate != null) {
+      _cachedPythonExecutable = bestCandidate;
+    }
+    return bestCandidate;
   }
 
   static Future<String> _resolveGroupStatsScript() async {
@@ -201,6 +370,44 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
     }
   }
 
+  Future<void> _pickPythonExecutable() async {
+    final result = await FilePicker.pickFiles(
+      dialogTitle: 'Select Python 3 Executable / Environment',
+      type: Platform.isWindows ? FileType.custom : FileType.any,
+      allowedExtensions: Platform.isWindows ? ['exe'] : null,
+    );
+    if (result != null && result.files.single.path != null) {
+      final selected = result.files.single.path!;
+      setState(() {
+        _pythonPathController.text = selected;
+        _cachedPythonExecutable = selected;
+      });
+      if (_csvPathController.text.trim().isNotEmpty) {
+        await _inspectCsv();
+      }
+    }
+  }
+
+  Future<void> _autoDetectPython() async {
+    _cachedPythonExecutable = null;
+    setState(() {
+      _statusMessage = 'Searching system and user directories for Python 3…';
+    });
+    final detected = await _findPythonExecutable();
+    if (detected != null) {
+      setState(() {
+        _pythonPathController.text = detected;
+        _cachedPythonExecutable = detected;
+        _statusMessage = 'Found Python: $detected';
+      });
+      if (_csvPathController.text.trim().isNotEmpty) {
+        await _inspectCsv();
+      }
+    } else {
+      _showSnack('No compatible Python 3 environment found automatically. Please browse and select manually.');
+    }
+  }
+
   Future<void> _inspectCsv() async {
     final csvPath = _csvPathController.text.trim();
     if (csvPath.isEmpty || !File(csvPath).existsSync()) {
@@ -214,10 +421,18 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
     });
 
     try {
-      final python = await _findPythonExecutable();
+      final preferred = _pythonPathController.text.trim();
+      final python = await _findPythonExecutable(preferred.isNotEmpty ? preferred : null);
       if (python == null) {
-        throw StateError('Python 3 environment not found. Please install Python with pandas and statsmodels.');
+        throw StateError(
+          'Python 3 environment not found. Please install Python with pandas and statsmodels, or select your Python executable using the Browse button.',
+        );
       }
+      if (_pythonPathController.text.trim().isEmpty) {
+        _pythonPathController.text = python;
+      }
+      _cachedPythonExecutable = python;
+
       final script = await _resolveGroupStatsScript();
 
       final args = [
@@ -240,6 +455,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
         _selectedGroupCol = jsonMap['group_col'] as String?;
         _selectedSubgroupCol = jsonMap['subgroup_col'] as String? ?? 'None';
         _selectedSubjectIdCol = jsonMap['subject_id'] as String?;
+        _selectedChannelCol = jsonMap['channel_col'] as String? ?? 'None';
         _selectedExtraFactors.clear();
         _excludedFactorLabels.clear();
         _customFactorOrder.clear();
@@ -313,9 +529,10 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
     });
 
     try {
-      final python = await _findPythonExecutable();
+      final preferred = _pythonPathController.text.trim();
+      final python = await _findPythonExecutable(preferred.isNotEmpty ? preferred : null);
       if (python == null) {
-        throw StateError('Python 3 environment not found.');
+        throw StateError('Python 3 environment not found. Please select or install Python with pandas and statsmodels.');
       }
       final script = await _resolveGroupStatsScript();
 
@@ -332,7 +549,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
           : <String>[];
 
       final extraFactorsClean = _selectedExtraFactors
-          .where((f) => f != _selectedGroupCol && f != _selectedSubgroupCol && f != _selectedSubjectIdCol)
+          .where((f) => f != _selectedGroupCol && f != _selectedSubgroupCol && f != _selectedSubjectIdCol && f != _selectedChannelCol)
           .toList();
 
       final args = [
@@ -341,6 +558,9 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
         '--group', _selectedGroupCol!,
         if (_selectedSubgroupCol != null && _selectedSubgroupCol != 'None') ...[
           '--subgroup', _selectedSubgroupCol!,
+        ],
+        if (_selectedChannelCol != null && _selectedChannelCol != 'None') ...[
+          '--channel-col', _selectedChannelCol!,
         ],
         if (extraFactorsClean.isNotEmpty) ...[
           '--extra-factors', extraFactorsClean.join(','),
@@ -617,6 +837,79 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                 ),
               ],
             ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _pythonPathController,
+                    decoration: InputDecoration(
+                      labelText: 'Python 3 Environment / Executable',
+                      hintText: 'Auto-detected system or venv Python path',
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                      prefixIcon: const Icon(Icons.terminal_outlined),
+                      suffixIcon: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.refresh, size: 20),
+                            onPressed: _isInspecting ? null : _autoDetectPython,
+                            tooltip: 'Auto-detect Python',
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.folder_open, size: 20),
+                            onPressed: _isInspecting ? null : _pickPythonExecutable,
+                            tooltip: 'Browse Python Executable',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (_inspectionData != null && _inspectionData!['environment'] != null) ...[
+              Builder(
+                builder: (context) {
+                  final env = _inspectionData!['environment'] as Map<String, dynamic>;
+                  final missing = (env['missing_packages'] as List<dynamic>? ?? []).cast<String>();
+                  if (missing.isEmpty) return const SizedBox.shrink();
+                  return Container(
+                    margin: const EdgeInsets.only(top: 10),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.amber.shade400),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.warning_amber_rounded, color: Colors.amber.shade800, size: 22),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Missing Python Packages: ${missing.join(', ')}',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.amber.shade900),
+                              ),
+                              const SizedBox(height: 2),
+                              SelectableText(
+                                'Run in terminal / virtual environment: pip install ${missing.join(' ')}',
+                                style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ],
             if (_statusMessage.isNotEmpty) ...[
               const SizedBox(height: 10),
               Text(_statusMessage, style: TextStyle(fontSize: 12, color: Colors.grey.shade700, fontStyle: FontStyle.italic)),
@@ -634,9 +927,10 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
       ...catCols.where((c) => c != _selectedGroupCol),
     ];
     final subgrpOptions = ['None', ...catCols];
+    final channelOptions = ['None', ...catCols];
     final candidateSubj = (_inspectionData?['categorical_columns'] as List<dynamic>? ?? []).cast<String>();
     final extraFactorCandidates = catCols
-        .where((c) => c != _selectedGroupCol && c != _selectedSubgroupCol && c != _selectedSubjectIdCol)
+        .where((c) => c != _selectedGroupCol && c != _selectedSubgroupCol && c != _selectedSubjectIdCol && c != _selectedChannelCol)
         .toList();
 
     return Card(
@@ -668,7 +962,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                       labelText: 'Primary Grouping Factor (Cohort)',
                       border: OutlineInputBorder(),
                       isDense: true,
-                      helperText: 'e.g. Group, groupID, Status, Condition',
+                      helperText: 'e.g. Group, groupID, ageID, Condition',
                     ),
                     items: [
                       for (final col in allCols)
@@ -685,7 +979,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                       labelText: 'Secondary / Within-Subject Factor',
                       border: OutlineInputBorder(),
                       isDense: true,
-                      helperText: 'e.g. Chan (Electrode), Region, Session',
+                      helperText: 'e.g. Status, Session, Condition, Chan',
                     ),
                     items: [
                       for (final col in subgrpOptions)
@@ -694,7 +988,11 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                     onChanged: (val) => setState(() => _selectedSubgroupCol = val),
                   ),
                 ),
-                const SizedBox(width: 14),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     value: _selectedSubjectIdCol,
@@ -702,7 +1000,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                       labelText: 'Subject Identifier (Random Effect)',
                       border: OutlineInputBorder(),
                       isDense: true,
-                      helperText: 'Clustering group for repeated measures',
+                      helperText: 'Clustering identifier for repeated measures',
                     ),
                     items: [
                       if (_selectedSubjectIdCol != null && !candidateSubj.contains(_selectedSubjectIdCol))
@@ -711,6 +1009,25 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                         DropdownMenuItem(value: col, child: Text(col, overflow: TextOverflow.ellipsis)),
                     ],
                     onChanged: (val) => setState(() => _selectedSubjectIdCol = val),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: (_selectedChannelCol != null && channelOptions.contains(_selectedChannelCol))
+                        ? _selectedChannelCol
+                        : 'None',
+                    decoration: const InputDecoration(
+                      labelText: 'Channel / Spatial Factor (Definable)',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                      helperText: 'Electrode column for scalp topoplots; skipped for macro/CAP',
+                    ),
+                    items: [
+                      for (final col in channelOptions)
+                        DropdownMenuItem(value: col, child: Text(col, overflow: TextOverflow.ellipsis)),
+                    ],
+                    onChanged: (val) => setState(() => _selectedChannelCol = val),
                   ),
                 ),
               ],

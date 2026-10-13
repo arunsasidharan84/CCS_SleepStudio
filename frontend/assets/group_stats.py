@@ -27,26 +27,44 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-import matplotlib.patches as mpatches
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    import matplotlib.patches as mpatches
+    HAS_MATPLOTLIB = True
+except ImportError:
+    matplotlib = None
+    plt = None
+    Line2D = None
+    mpatches = None
+    HAS_MATPLOTLIB = False
+
+try:
+    from scipy import stats
+    import scipy.interpolate
+    HAS_SCIPY = True
+except ImportError:
+    stats = None
+    scipy = None
+    HAS_SCIPY = False
+
 import numpy as np
 import pandas as pd
-from scipy import stats
-import scipy.interpolate
 
 try:
     import statsmodels.api as sm
     import statsmodels.formula.api as smf
     from statsmodels.stats.multitest import multipletests
     from statsmodels.stats.multicomp import pairwise_tukeyhsd
+    HAS_STATSMODELS = True
 except ImportError:
     sm = None
     smf = None
     multipletests = None
     pairwise_tukeyhsd = None
+    HAS_STATSMODELS = False
 
 try:
     import docx
@@ -75,6 +93,9 @@ try:
     )
 except ImportError:
     SimpleDocTemplate = None
+
+HAS_DOCX = (docx is not None)
+HAS_REPORTLAB = (SimpleDocTemplate is not None)
 
 
 # ─── SIGNIFICANCE & EFFECT SIZE HELPERS ─────────────────────────────────────
@@ -484,6 +505,16 @@ def detect_columns(df: pd.DataFrame) -> dict[str, Any]:
         counts = vc.value_counts().to_dict()
         factor_counts[c] = {str(k): int(v) for k, v in counts.items()}
 
+    # Channel / Electrode / Region column
+    channel_col = None
+    for cand in ["chan", "channel", "subsubjname", "region", "electrode", "derivation", "roi"]:
+        for c in cols:
+            if cols_clean[c] == cand:
+                channel_col = c
+                break
+        if channel_col:
+            break
+
     # Filterable columns metadata for row filtering UI
     filterable_columns: list[str] = [c for c in cols if c != "source_path"]
     column_Distinct_samples: dict[str, list[str]] = {}
@@ -492,10 +523,30 @@ def detect_columns(df: pd.DataFrame) -> dict[str, Any]:
         if len(vals) <= 30:
             column_Distinct_samples[c] = sorted(vals)
 
+    env_info = {
+        "python_path": sys.executable,
+        "has_pandas": True,
+        "has_matplotlib": HAS_MATPLOTLIB,
+        "has_scipy": HAS_SCIPY,
+        "has_statsmodels": HAS_STATSMODELS,
+        "has_docx": HAS_DOCX,
+        "has_reportlab": HAS_REPORTLAB,
+        "missing_packages": [
+            pkg for pkg, has in [
+                ("matplotlib", HAS_MATPLOTLIB),
+                ("scipy", HAS_SCIPY),
+                ("statsmodels", HAS_STATSMODELS),
+                ("python-docx", HAS_DOCX),
+                ("reportlab", HAS_REPORTLAB),
+            ] if not has
+        ]
+    }
+
     return {
         "subject_id": subject_id,
         "group_col": group_col,
         "subgroup_col": subgroup_col,
+        "channel_col": channel_col,
         "categorical_columns": categorical_cols,
         "covariates": covariates,
         "metric_columns": metric_cols,
@@ -506,14 +557,15 @@ def detect_columns(df: pd.DataFrame) -> dict[str, Any]:
         "total_rows": len(df),
         "total_columns": len(cols),
         "unique_subjects": int(df[subject_id].nunique(dropna=True)) if subject_id and subject_id in df.columns else len(df),
+        "environment": env_info,
     }
 
 
 def is_macroarchitecture_or_channel_invariant(
     metric: str,
     df: pd.DataFrame,
-    subject_id: str | None,
-    subgroup_col: str | None,
+    subject_id: str | None = None,
+    channel_col: str | None = None,
 ) -> bool:
     """Determines whether a sleep metric represents global macroarchitecture that is redundant across channels."""
     ml = metric.lower().strip()
@@ -529,8 +581,9 @@ def is_macroarchitecture_or_channel_invariant(
     if ml.startswith("cap_") or any(k in ml for k in ["sleep_efficiency", "sleepefficiency", "tst", "trt", "waso", "sol", "spt"]):
         return True
 
-    if subject_id and subject_id in df.columns and subgroup_col and subgroup_col in df.columns:
-        sub = df[[subject_id, subgroup_col, metric]].dropna()
+    # If channel_col is specified and present, check if metric has zero variance across channels within subjects
+    if subject_id and subject_id in df.columns and channel_col and channel_col in df.columns:
+        sub = df[[subject_id, channel_col, metric]].dropna()
         if len(sub) > 0:
             grouped = sub.groupby(subject_id)[metric].nunique()
             if (grouped <= 1).mean() > 0.90:
@@ -582,6 +635,7 @@ def fit_statistical_model(
     subgroup_col: str | None,
     covariates: list[str],
     subject_id: str | None,
+    channel_col: str | None = None,
     extra_factors: list[str] | None = None,
     include_interactions: bool = True,
     group_order: list[str] | None = None,
@@ -590,11 +644,24 @@ def fit_statistical_model(
     posthoc_method: str = "fdr",     # 'tukey', 'fdr', 'bonferroni'
 ) -> dict[str, Any] | None:
     """Fits LMM or GLM to the metric with support for multiple factors, effect sizes, and N counts."""
-    is_macro = is_macroarchitecture_or_channel_invariant(metric, df, subject_id, subgroup_col or group_col)
-    effective_subgroup_col = None if is_macro else subgroup_col
+    is_macro = is_macroarchitecture_or_channel_invariant(metric, df, subject_id, channel_col)
+
+    # For whole-recording macro / CAP metrics:
+    # 1. If group_col is the channel factor, it has zero variance across channels -> skip analysis
+    if is_macro and channel_col and group_col == channel_col:
+        return None
+
+    # 2. Skip ONLY the channel factor if it was selected as subgroup_col!
+    # KEEP all experimental factors (Status, Session, Visit, Condition, etc.) for macro/CAP metrics!
+    effective_subgroup_col = subgroup_col
+    if is_macro and channel_col and subgroup_col == channel_col:
+        effective_subgroup_col = None
+
+    # 3. Omit channel_col from extra_factors for macro metrics
     extra_factors_clean = [
         f for f in (extra_factors or [])
         if f and f in df.columns and f not in (metric, group_col, effective_subgroup_col, subject_id)
+        and (not (is_macro and channel_col and f == channel_col))
     ]
 
     needed_cols = []
@@ -609,11 +676,12 @@ def fit_statistical_model(
             sub_df[cov] = pd.to_numeric(sub_df[cov], errors="coerce")
     sub_df = sub_df.dropna(subset=[metric, group_col]).copy()
 
-    # For macroarchitecture metrics (invariant across channels), collapse to one observation per subject
-    # when group_col is a subject-level grouping variable.
-    if is_macro and subject_id and subject_id in sub_df.columns:
-        if sub_df.groupby(subject_id)[group_col].nunique().max() <= 1:
-            sub_df = sub_df.drop_duplicates(subset=[subject_id]).copy()
+    # In multi-channel sheets, each subject has multiple rows for each channel.
+    # For macro / CAP metrics, collapse redundant channel rows down to 1 observation per experimental condition cell!
+    if is_macro:
+        session_keys = [k for k in [subject_id, group_col, effective_subgroup_col] + extra_factors_clean if k and k in sub_df.columns]
+        if session_keys:
+            sub_df = sub_df.drop_duplicates(subset=session_keys).copy()
 
     # Drop groups with < 2 observations
     group_counts = sub_df[group_col].value_counts()
@@ -625,17 +693,15 @@ def fit_statistical_model(
     if len(sub_df) < 5:
         return None
 
-    # Check repeated measures per subject
+    # Check repeated measures per subject (e.g. repeated Status, Sessions, or channels)
     has_repeated_measures = False
-    if not is_macro and subject_id and subject_id in sub_df.columns:
+    if subject_id and subject_id in sub_df.columns:
         n_obs = len(sub_df)
         n_subj = sub_df[subject_id].nunique()
-        if n_obs > n_subj * 1.1:
+        if n_obs > n_subj * 1.05:
             has_repeated_measures = True
 
-    if is_macro:
-        use_lmm = False
-    elif preferred_model == "lmm":
+    if preferred_model == "lmm":
         use_lmm = True
     elif preferred_model == "glm":
         use_lmm = False
@@ -695,9 +761,9 @@ def fit_statistical_model(
 
     def restore_term_name(raw_term: str) -> str:
         t = str(raw_term)
+        if effective_subgroup_col:
+            t = t.replace("C(SUBGRP_VAR)", effective_subgroup_col).replace("SUBGRP_VAR", effective_subgroup_col)
         t = t.replace("C(GRP_VAR)", group_col).replace("GRP_VAR", group_col)
-        if subgroup_col:
-            t = t.replace("C(SUBGRP_VAR)", subgroup_col).replace("SUBGRP_VAR", subgroup_col)
         for orig_ef, safe_ef in valid_extra_factors:
             t = t.replace(f"C({safe_ef})", orig_ef).replace(safe_ef, orig_ef)
         for orig_cv, safe_cv in valid_covs:
@@ -1888,45 +1954,47 @@ def generate_docx_report(
         has_plot = plot_path is not None and plot_path.exists()
         has_topo = topo_path is not None and Path(topo_path).exists()
 
-        # Space-saving side-by-side placement when both Boxplot and Topoplot exist!
+        # Publication-ready figures with strictly preserved aspect ratio
         if has_plot and has_topo:
-            fig_tbl = doc.add_table(rows=2, cols=2)
-            fig_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
-            _remove_docx_table_borders(fig_tbl)
+            p_a = doc.add_paragraph()
+            p_a.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p_a.paragraph_format.space_before = Pt(4)
+            p_a.paragraph_format.space_after = Pt(2)
+            p_a.add_run().add_picture(str(plot_path), width=Inches(5.4))
 
-            c00 = fig_tbl.cell(0, 0).paragraphs[0]
-            c00.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            c00.add_run().add_picture(str(plot_path), width=Inches(3.25))
-
-            c01 = fig_tbl.cell(0, 1).paragraphs[0]
-            c01.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            c01.add_run().add_picture(str(topo_path), width=Inches(3.45))
-
-            c10 = fig_tbl.cell(1, 0).paragraphs[0]
-            c10.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            r_cap_a = c10.add_run(f"Figure {idx}A: Group distribution & post-hoc contrasts ({clean_name}).")
-            r_cap_a.font.size = Pt(8)
+            c_a = doc.add_paragraph()
+            c_a.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            c_a.paragraph_format.space_after = Pt(6)
+            r_cap_a = c_a.add_run(f"Figure {idx}A: Group distribution & post-hoc contrasts ({clean_name}).")
+            r_cap_a.font.size = Pt(8.5)
             r_cap_a.font.italic = True
             r_cap_a.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
 
-            c11 = fig_tbl.cell(1, 1).paragraphs[0]
-            c11.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            r_cap_b = c11.add_run(f"Figure {idx}B: Scalp topography & spatial eTFCE map ({clean_name}).")
-            r_cap_b.font.size = Pt(8)
+            p_b = doc.add_paragraph()
+            p_b.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p_b.paragraph_format.space_before = Pt(4)
+            p_b.paragraph_format.space_after = Pt(2)
+            p_b.add_run().add_picture(str(topo_path), width=Inches(6.6))
+
+            c_b = doc.add_paragraph()
+            c_b.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            c_b.paragraph_format.space_after = Pt(8)
+            r_cap_b = c_b.add_run(f"Figure {idx}B: Scalp topography & spatial eTFCE cluster map ({clean_name}).")
+            r_cap_b.font.size = Pt(8.5)
             r_cap_b.font.italic = True
             r_cap_b.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
         elif has_plot:
             img_p = doc.add_paragraph()
             img_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            img_p.paragraph_format.space_before = Pt(2)
+            img_p.paragraph_format.space_before = Pt(4)
             img_p.paragraph_format.space_after = Pt(2)
-            doc.add_picture(str(plot_path), width=Inches(4.3))
+            img_p.add_run().add_picture(str(plot_path), width=Inches(5.4))
 
             cap_p = doc.add_paragraph()
             cap_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            cap_p.paragraph_format.space_after = Pt(6)
+            cap_p.paragraph_format.space_after = Pt(8)
             cap_run = cap_p.add_run(f"Figure {idx}: Distribution and post-hoc pairwise comparisons for {clean_name}.")
-            cap_run.font.size = Pt(8)
+            cap_run.font.size = Pt(8.5)
             cap_run.font.italic = True
             cap_run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
 
@@ -2017,7 +2085,45 @@ def generate_docx_report(
     return output_path
 
 
-# ─── PUBLICATION PDF SCIENTIFIC REPORT (COMPACT SIDE-BY-SIDE) ───────────────
+def _get_image_pixel_dimensions(image_path: Path | str) -> tuple[int, int]:
+    """Reads pixel width and height safely from image file."""
+    try:
+        from PIL import Image as PILImage
+        with PILImage.open(image_path) as im:
+            return int(im.size[0]), int(im.size[1])
+    except Exception:
+        pass
+    try:
+        with open(image_path, "rb") as f:
+            header = f.read(24)
+            if len(header) >= 24 and header[:8] == b"\x89PNG\r\n\x1a\n":
+                import struct
+                w, h = struct.unpack(">II", header[16:24])
+                return int(w), int(h)
+    except Exception:
+        pass
+    return 1600, 1200
+
+
+def _make_aspect_preserved_rl_image(
+    image_path: Path | str,
+    max_width_pt: float,
+    max_height_pt: float,
+) -> Any:
+    """Creates a ReportLab Image Flowable with strictly preserved native aspect ratio."""
+    if RLImage is None:
+        return None
+    w_px, h_px = _get_image_pixel_dimensions(image_path)
+    aspect = max(1e-4, float(w_px) / max(1e-4, float(h_px)))
+    target_w = max_width_pt
+    target_h = target_w / aspect
+    if target_h > max_height_pt:
+        target_h = max_height_pt
+        target_w = target_h * aspect
+    return RLImage(str(image_path), width=target_w, height=target_h)
+
+
+# ─── PUBLICATION PDF SCIENTIFIC REPORT (PROPORTIONAL HIGH-RES) ──────────────
 
 def generate_pdf_report(
     analysis_results: list[dict[str, Any]],
@@ -2142,28 +2248,25 @@ def generate_pdf_report(
         has_plot = plot_path is not None and plot_path.exists()
         has_topo = topo_path is not None and Path(topo_path).exists()
 
-        # Side-by-side placement in PDF when both Boxplot and Topoplot exist!
+        # High-resolution publication figures with strictly preserved aspect ratio
         if has_plot and has_topo:
-            img_a = RLImage(str(plot_path), width=3.45 * inch, height=2.25 * inch)
-            img_b = RLImage(str(topo_path), width=3.85 * inch, height=2.10 * inch)
-            cap_a = Paragraph(f"Figure {idx}A: Distribution & post-hoc ({clean_name}).", caption_style)
-            cap_b = Paragraph(f"Figure {idx}B: Scalp topography & eTFCE ({clean_name}).", caption_style)
-            side_tbl = Table(
-                [[img_a, img_b], [cap_a, cap_b]],
-                colWidths=[3.55 * inch, 3.95 * inch],
-            )
-            side_tbl.setStyle(TableStyle([
-                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 2),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-                ("TOPPADDING", (0, 0), (-1, -1), 2),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-            ]))
-            story.append(side_tbl)
+            img_a = _make_aspect_preserved_rl_image(plot_path, max_width_pt=5.4 * inch, max_height_pt=3.7 * inch)
+            cap_a = Paragraph(f"Figure {idx}A: Group distribution & post-hoc pairwise contrasts ({clean_name}).", caption_style)
+            if img_a:
+                story.append(img_a)
+                story.append(cap_a)
+
+            img_b = _make_aspect_preserved_rl_image(topo_path, max_width_pt=6.8 * inch, max_height_pt=2.2 * inch)
+            cap_b = Paragraph(f"Figure {idx}B: Scalp topography & spatial eTFCE cluster map ({clean_name}).", caption_style)
+            if img_b:
+                story.append(img_b)
+                story.append(cap_b)
         elif has_plot:
-            story.append(RLImage(str(plot_path), width=4.3 * inch, height=2.55 * inch))
-            story.append(Paragraph(f"Figure {idx}: Distribution and post-hoc pairwise significance for {clean_name}.", caption_style))
+            img_a = _make_aspect_preserved_rl_image(plot_path, max_width_pt=5.6 * inch, max_height_pt=3.8 * inch)
+            cap_a = Paragraph(f"Figure {idx}: Distribution and post-hoc pairwise significance for {clean_name}.", caption_style)
+            if img_a:
+                story.append(img_a)
+                story.append(cap_a)
 
         # Model Effects Table (with N and Effect Size ηp²)
         effects = res.get("model_effects", [])
@@ -2278,6 +2381,7 @@ def run_group_analysis(
     metadata_key_col: str | None = None,
     group_col: str | None = None,
     subgroup_col: str | None = None,
+    channel_col: str | None = None,
     extra_factors: list[str] | None = None,
     include_interactions: bool = True,
     covariates: list[str] | None = None,
@@ -2336,6 +2440,7 @@ def run_group_analysis(
         final_subgroup_col = detected["subgroup_col"]
     if final_subgroup_col == final_group_col:
         final_subgroup_col = None
+    final_channel_col = _resolve_col(channel_col) or detected.get("channel_col")
     final_covariates = covariates if covariates is not None else detected["covariates"]
     final_extra_factors = [
         resolved for f in (extra_factors or [])
@@ -2375,14 +2480,14 @@ def run_group_analysis(
     all_posthoc_contrasts: list[dict[str, Any]] = []
     all_descriptives: list[dict[str, Any]] = []
 
-    # Check topoplot feasibility across subgroup or region/channel column
-    topo_channel_col = final_subgroup_col
+    # Check topoplot feasibility across channel column or fallback candidates
+    topo_channel_col = final_channel_col or final_subgroup_col
     is_topo_feasible = False
     if topo_channel_col and topo_channel_col in df.columns:
         channels_in_df = [str(c) for c in df[topo_channel_col].dropna().unique()]
         is_topo_feasible, _ = check_topoplot_suitability(channels_in_df)
     if not is_topo_feasible:
-        # Check if any column in df is a channel/region column even if not selected as primary subgroup
+        # Check if any column in df is a channel/region column
         for cand_col in df.columns:
             if cand_col.lower().strip() in ("subsubjname", "chan", "channel", "region", "electrode", "derivation", "roi"):
                 ch_cand = [str(c) for c in df[cand_col].dropna().unique()]
@@ -2390,6 +2495,8 @@ def run_group_analysis(
                 if ok:
                     is_topo_feasible = True
                     topo_channel_col = cand_col
+                    if not final_channel_col:
+                        final_channel_col = cand_col
                     break
 
     total_metrics = len(target_metrics)
@@ -2404,6 +2511,7 @@ def run_group_analysis(
             metric=m,
             group_col=final_group_col,
             subgroup_col=final_subgroup_col,
+            channel_col=final_channel_col,
             extra_factors=final_extra_factors,
             include_interactions=include_interactions,
             covariates=final_covariates,
@@ -2505,6 +2613,7 @@ def main() -> None:
     parser.add_argument("--metadata-key", help="Key column to join metadata")
     parser.add_argument("--group", help="Primary grouping column")
     parser.add_argument("--subgroup", help="Secondary / within-subject factor")
+    parser.add_argument("--channel-col", "--channel-factor", dest="channel_col", help="Column containing channel/region/electrode labels for spatial topography and channel-invariance exclusion")
     parser.add_argument("--extra-factors", help="Comma-separated additional categorical factor columns")
     parser.add_argument("--no-interactions", action="store_true", help="Fit main effects only without interaction terms")
     parser.add_argument("--covariates", help="Comma-separated covariate column names")
@@ -2543,6 +2652,7 @@ def main() -> None:
         meta_key = cfg.get("metadata_key")
         grp = cfg.get("group")
         subgrp = cfg.get("subgroup")
+        chan_col = cfg.get("channel_col")
         extra_facs = cfg.get("extra_factors", [])
         inc_inter = cfg.get("include_interactions", True)
         covs = cfg.get("covariates", [])
@@ -2566,6 +2676,7 @@ def main() -> None:
         meta_key = args.metadata_key
         grp = args.group
         subgrp = args.subgroup
+        chan_col = args.channel_col
         extra_facs = [c.strip() for c in args.extra_factors.split(",") if c.strip()] if args.extra_factors else []
         inc_inter = not args.no_interactions
         covs = [c.strip() for c in args.covariates.split(",") if c.strip()] if args.covariates else []
@@ -2614,6 +2725,7 @@ def main() -> None:
         metadata_key_col=meta_key,
         group_col=grp,
         subgroup_col=subgrp,
+        channel_col=chan_col,
         extra_factors=extra_facs,
         include_interactions=inc_inter,
         covariates=covs,

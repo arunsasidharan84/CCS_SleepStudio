@@ -2,8 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:file_picker/file_picker.dart';
+
+import 'group_statistics_engine.dart';
+import 'group_statistics_plots.dart';
 
 class GroupStatisticsWorkbench extends StatefulWidget {
   const GroupStatisticsWorkbench({
@@ -20,13 +22,10 @@ class GroupStatisticsWorkbench extends StatefulWidget {
 }
 
 class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
-  static String? _cachedPythonExecutable;
-
   final TextEditingController _csvPathController = TextEditingController();
   final TextEditingController _metadataPathController = TextEditingController();
   final TextEditingController _metadataKeyController = TextEditingController();
   final TextEditingController _rowFilterValueController = TextEditingController();
-  final TextEditingController _pythonPathController = TextEditingController();
 
   bool _isInspecting = false;
   bool _isAnalyzing = false;
@@ -69,9 +68,6 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
   @override
   void initState() {
     super.initState();
-    if (_cachedPythonExecutable != null) {
-      _pythonPathController.text = _cachedPythonExecutable!;
-    }
     if (widget.initialCsvPath != null && widget.initialCsvPath!.isNotEmpty) {
       _csvPathController.text = widget.initialCsvPath!;
       WidgetsBinding.instance.addPostFrameCallback((_) => _inspectCsv());
@@ -87,217 +83,10 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
     _metadataPathController.dispose();
     _metadataKeyController.dispose();
     _rowFilterValueController.dispose();
-    _pythonPathController.dispose();
     super.dispose();
   }
 
-  static Future<String?> _findPythonExecutable([String? preferredPath]) async {
-    if (preferredPath != null && preferredPath.trim().isNotEmpty) {
-      final f = File(preferredPath.trim());
-      if (f.existsSync()) {
-        try {
-          final res = await Process.run(preferredPath.trim(), ['--version']);
-          if (res.exitCode == 0) {
-            _cachedPythonExecutable = preferredPath.trim();
-            return preferredPath.trim();
-          }
-        } catch (_) {}
-      }
-    }
 
-    if (_cachedPythonExecutable != null && _cachedPythonExecutable!.isNotEmpty) {
-      try {
-        final res = await Process.run(_cachedPythonExecutable!, ['--version']);
-        if (res.exitCode == 0) return _cachedPythonExecutable;
-      } catch (_) {
-        _cachedPythonExecutable = null;
-      }
-    }
-
-    final candidateSet = <String>{};
-
-    if (Platform.isWindows) {
-      try {
-        final whichRes = await Process.run('where.exe', ['python']);
-        if (whichRes.exitCode == 0) {
-          final lines = (whichRes.stdout as String).split(RegExp(r'[\r\n]+'));
-          for (final l in lines) {
-            if (l.trim().isNotEmpty && l.trim().toLowerCase().endsWith('.exe')) {
-              candidateSet.add(l.trim());
-            }
-          }
-        }
-      } catch (_) {}
-
-      try {
-        final whichRes = await Process.run('where.exe', ['py']);
-        if (whichRes.exitCode == 0) {
-          final lines = (whichRes.stdout as String).split(RegExp(r'[\r\n]+'));
-          for (final l in lines) {
-            if (l.trim().isNotEmpty && l.trim().toLowerCase().endsWith('.exe')) {
-              candidateSet.add(l.trim());
-            }
-          }
-        }
-      } catch (_) {}
-
-      final localAppData = Platform.environment['LOCALAPPDATA'];
-      if (localAppData != null) {
-        final pyProgDir = Directory('$localAppData\\Programs\\Python');
-        if (pyProgDir.existsSync()) {
-          try {
-            for (final ent in pyProgDir.listSync()) {
-              if (ent is Directory) {
-                final exe = File('${ent.path}\\python.exe');
-                if (exe.existsSync()) candidateSet.add(exe.path);
-              }
-            }
-          } catch (_) {}
-        }
-      }
-
-      final userProfile = Platform.environment['USERPROFILE'];
-      if (userProfile != null) {
-        for (final sub in ['miniconda3', 'anaconda3', 'Miniconda3', 'Anaconda3', '.conda']) {
-          final exe = File('$userProfile\\$sub\\python.exe');
-          if (exe.existsSync()) candidateSet.add(exe.path);
-        }
-      }
-
-      for (final root in [
-        r'C:\ProgramData\miniconda3',
-        r'C:\ProgramData\anaconda3',
-        r'C:\Python313',
-        r'C:\Python312',
-        r'C:\Python311',
-        r'C:\Python310',
-      ]) {
-        final exe = File('$root\\python.exe');
-        if (exe.existsSync()) candidateSet.add(exe.path);
-      }
-
-      candidateSet.addAll(['python.exe', 'python3.exe', 'py.exe']);
-    } else {
-      // Linux & macOS
-      for (final cmd in ['python3', 'python']) {
-        try {
-          final whichRes = await Process.run('which', [cmd]);
-          if (whichRes.exitCode == 0) {
-            final p = (whichRes.stdout as String).trim();
-            if (p.isNotEmpty) candidateSet.add(p);
-          }
-        } catch (_) {}
-      }
-
-      final home = Platform.environment['HOME'];
-      if (home != null) {
-        for (final sub in [
-          'miniconda3/bin/python3',
-          'miniconda3/bin/python',
-          'anaconda3/bin/python3',
-          'anaconda3/bin/python',
-          '.local/bin/python3',
-          '.local/bin/python',
-        ]) {
-          final exe = File('$home/$sub');
-          if (exe.existsSync()) candidateSet.add(exe.path);
-        }
-
-        final condaEnvsDir = Directory('$home/.conda/envs');
-        if (condaEnvsDir.existsSync()) {
-          try {
-            for (final ent in condaEnvsDir.listSync()) {
-              if (ent is Directory) {
-                final exe = File('${ent.path}/bin/python');
-                if (exe.existsSync()) candidateSet.add(exe.path);
-              }
-            }
-          } catch (_) {}
-        }
-      }
-
-      candidateSet.addAll([
-        if (Platform.isMacOS) ...[
-          '/opt/homebrew/bin/python3',
-          '/usr/local/bin/python3',
-          '/usr/bin/python3',
-        ],
-        if (Platform.isLinux) ...[
-          '/usr/bin/python3',
-          '/usr/local/bin/python3',
-          '/opt/conda/bin/python',
-          '/opt/conda/bin/python3',
-        ],
-        'python3',
-        'python',
-      ]);
-    }
-
-    String? bestCandidate;
-    int bestScore = -1;
-
-    for (final cand in candidateSet) {
-      try {
-        final verRes = await Process.run(cand, ['--version']);
-        if (verRes.exitCode != 0) continue;
-
-        int score = 1; // Base python works
-
-        try {
-          final pkgRes = await Process.run(cand, [
-            '-c',
-            'import pandas; import statsmodels; import matplotlib; print("READY")',
-          ]);
-          if (pkgRes.exitCode == 0 && (pkgRes.stdout as String).contains('READY')) {
-            score = 10; // fully equipped
-            _cachedPythonExecutable = cand;
-            return cand;
-          } else {
-            final pdRes = await Process.run(cand, ['-c', 'import pandas; print("PD")']);
-            if (pdRes.exitCode == 0 && (pdRes.stdout as String).contains('PD')) {
-              score = 5;
-            }
-          }
-        } catch (_) {}
-
-        if (score > bestScore) {
-          bestScore = score;
-          bestCandidate = cand;
-        }
-      } catch (_) {}
-    }
-
-    if (bestCandidate != null) {
-      _cachedPythonExecutable = bestCandidate;
-    }
-    return bestCandidate;
-  }
-
-  static Future<String> _resolveGroupStatsScript() async {
-    final currentDir = Directory.current.path;
-    final exeDir = File(Platform.resolvedExecutable).parent.path;
-    final candidates = [
-      '$currentDir/backend/group_stats.py',
-      '$currentDir/../backend/group_stats.py',
-      '$exeDir/backend/group_stats.py',
-      '$exeDir/../Resources/backend/group_stats.py',
-      '$exeDir/../Resources/group_stats.py',
-      '$exeDir/../lib/ccs-sleep-studio/backend/group_stats.py',
-      '/Users/arunsasidharan/Code/ActiveProjects/CCS_SleepStudio/backend/group_stats.py',
-    ];
-    for (final c in candidates) {
-      if (File(c).existsSync()) return c;
-    }
-
-    try {
-      final scriptContent = await rootBundle.loadString('assets/group_stats.py');
-      final tempFile = File('${Directory.systemTemp.path}${Platform.pathSeparator}ccs_group_stats.py');
-      await tempFile.writeAsString(scriptContent);
-      return tempFile.path;
-    } catch (_) {}
-
-    return '$currentDir/backend/group_stats.py';
-  }
 
   List<String> _levelsForFactor(String? factorCol) {
     if (factorCol == null || factorCol == 'None' || _inspectionData == null) return const [];
@@ -370,44 +159,6 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
     }
   }
 
-  Future<void> _pickPythonExecutable() async {
-    final result = await FilePicker.pickFiles(
-      dialogTitle: 'Select Python 3 Executable / Environment',
-      type: Platform.isWindows ? FileType.custom : FileType.any,
-      allowedExtensions: Platform.isWindows ? ['exe'] : null,
-    );
-    if (result != null && result.files.single.path != null) {
-      final selected = result.files.single.path!;
-      setState(() {
-        _pythonPathController.text = selected;
-        _cachedPythonExecutable = selected;
-      });
-      if (_csvPathController.text.trim().isNotEmpty) {
-        await _inspectCsv();
-      }
-    }
-  }
-
-  Future<void> _autoDetectPython() async {
-    _cachedPythonExecutable = null;
-    setState(() {
-      _statusMessage = 'Searching system and user directories for Python 3…';
-    });
-    final detected = await _findPythonExecutable();
-    if (detected != null) {
-      setState(() {
-        _pythonPathController.text = detected;
-        _cachedPythonExecutable = detected;
-        _statusMessage = 'Found Python: $detected';
-      });
-      if (_csvPathController.text.trim().isNotEmpty) {
-        await _inspectCsv();
-      }
-    } else {
-      _showSnack('No compatible Python 3 environment found automatically. Please browse and select manually.');
-    }
-  }
-
   Future<void> _inspectCsv() async {
     final csvPath = _csvPathController.text.trim();
     if (csvPath.isEmpty || !File(csvPath).existsSync()) {
@@ -417,39 +168,17 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
 
     setState(() {
       _isInspecting = true;
-      _statusMessage = 'Inspecting columns and data structure…';
+      _statusMessage = 'Inspecting columns and data structure (Native Zero-Python)…';
     });
 
     try {
-      final preferred = _pythonPathController.text.trim();
-      final python = await _findPythonExecutable(preferred.isNotEmpty ? preferred : null);
-      if (python == null) {
-        throw StateError(
-          'Python 3 environment not found. Please install Python with pandas and statsmodels, or select your Python executable using the Browse button.',
-        );
-      }
-      if (_pythonPathController.text.trim().isEmpty) {
-        _pythonPathController.text = python;
-      }
-      _cachedPythonExecutable = python;
+      final jsonMap = await GroupStatsEngine.inspectDataset(
+        csvPath: csvPath,
+        metadataPath: _metadataPathController.text.trim().isNotEmpty
+            ? _metadataPathController.text.trim()
+            : null,
+      );
 
-      final script = await _resolveGroupStatsScript();
-
-      final args = [
-        script,
-        '--csv', csvPath,
-        '--inspect-only',
-      ];
-      if (_metadataPathController.text.trim().isNotEmpty) {
-        args.addAll(['--metadata-csv', _metadataPathController.text.trim()]);
-      }
-
-      final res = await Process.run(python, args);
-      if (res.exitCode != 0) {
-        throw StateError('Inspection failed: ${res.stderr}');
-      }
-
-      final jsonMap = jsonDecode(res.stdout as String) as Map<String, dynamic>;
       setState(() {
         _inspectionData = jsonMap;
         _selectedGroupCol = jsonMap['group_col'] as String?;
@@ -485,7 +214,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
           _selectedMetrics.addAll(availMetrics.take(8));
         }
 
-        _statusMessage = 'Dataset loaded: ${jsonMap['total_rows']} rows, ${jsonMap['unique_subjects']} subjects detected.';
+        _statusMessage = 'Dataset loaded: ${jsonMap['total_rows']} rows, ${jsonMap['unique_subjects']} subjects detected (Native Zero-Python).';
       });
     } catch (e) {
       _showSnack('Error inspecting file: $e');
@@ -523,19 +252,12 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
     setState(() {
       _isAnalyzing = true;
       _analysisProgress = 0.0;
-      _progressStatus = 'Initializing statistical models…';
-      _statusMessage = 'Running group statistical analysis…';
+      _progressStatus = 'Initializing native statistical models…';
+      _statusMessage = 'Running group statistical analysis (100% Native Zero-Python)…';
       _consoleLogs.clear();
     });
 
     try {
-      final preferred = _pythonPathController.text.trim();
-      final python = await _findPythonExecutable(preferred.isNotEmpty ? preferred : null);
-      if (python == null) {
-        throw StateError('Python 3 environment not found. Please select or install Python with pandas and statsmodels.');
-      }
-      final script = await _resolveGroupStatsScript();
-
       final excludeMap = <String, List<String>>{};
       for (final entry in _excludedFactorLabels.entries) {
         if (entry.value.isNotEmpty) {
@@ -552,97 +274,46 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
           .where((f) => f != _selectedGroupCol && f != _selectedSubgroupCol && f != _selectedSubjectIdCol && f != _selectedChannelCol)
           .toList();
 
-      final args = [
-        script,
-        '--csv', csvPath,
-        '--group', _selectedGroupCol!,
-        if (_selectedSubgroupCol != null && _selectedSubgroupCol != 'None') ...[
-          '--subgroup', _selectedSubgroupCol!,
-        ],
-        if (_selectedChannelCol != null && _selectedChannelCol != 'None') ...[
-          '--channel-col', _selectedChannelCol!,
-        ],
-        if (extraFactorsClean.isNotEmpty) ...[
-          '--extra-factors', extraFactorsClean.join(','),
-        ],
-        if (!_includeInteractions) '--no-interactions',
-        if (_selectedSubjectIdCol != null) ...[
-          '--subject-id', _selectedSubjectIdCol!,
-        ],
-        if (_selectedCovariates.isNotEmpty) ...[
-          '--covariates', _selectedCovariates.join(','),
-        ],
-        if (excludeMap.isNotEmpty) ...[
-          '--exclude-labels', jsonEncode(excludeMap),
-        ],
-        if (_rowFilters.isNotEmpty) ...[
-          '--row-filters', jsonEncode(_rowFilters),
-        ],
-        if (groupOrder.isNotEmpty) ...[
-          '--group-order', jsonEncode(groupOrder),
-        ],
-        if (subgroupOrder.isNotEmpty) ...[
-          '--subgroup-order', jsonEncode(subgroupOrder),
-        ],
-        '--metrics', _selectedMetrics.join(','),
-        '--model', _preferredModel,
-        '--posthoc', _posthocMethod,
-        '--report-format', _reportFormat,
-      ];
-      if (_metadataPathController.text.trim().isNotEmpty) {
-        args.addAll(['--metadata-csv', _metadataPathController.text.trim()]);
-      }
-
-      final process = await Process.start(python, args);
-
-      final stdoutBuffer = StringBuffer();
-      final stderrBuffer = StringBuffer();
-
-      process.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
-        stdoutBuffer.writeln(line);
-        setState(() {
-          _consoleLogs.add(line);
-          if (_consoleLogs.length > 50) _consoleLogs.removeAt(0);
-        });
-      });
-
-      process.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
-        stderrBuffer.writeln(line);
-        if (line.startsWith('PROGRESS ')) {
-          final rest = line.substring(9).trim();
-          final spIdx = rest.indexOf(' ');
-          if (spIdx > 0) {
-            final frac = double.tryParse(rest.substring(0, spIdx));
-            final msg = rest.substring(spIdx + 1).trim();
-            if (frac != null) {
-              setState(() {
-                _analysisProgress = frac.clamp(0.0, 1.0);
-                _progressStatus = msg;
-              });
-            }
-          }
-        }
-        setState(() {
-          _consoleLogs.add('[stderr] $line');
-          if (_consoleLogs.length > 50) _consoleLogs.removeAt(0);
-        });
-      });
-
-      final exitCode = await process.exitCode;
-      if (exitCode != 0) {
-        throw StateError('Analysis returned exit code $exitCode:\n${stderrBuffer.toString()}');
-      }
-
-      final outStr = stdoutBuffer.toString();
-      final jsonMap = jsonDecode(outStr) as Map<String, dynamic>;
+      final jsonMap = await GroupStatsEngine.runAnalysis(
+        csvPath: csvPath,
+        metadataPath: _metadataPathController.text.trim().isNotEmpty
+            ? _metadataPathController.text.trim()
+            : null,
+        groupCol: _selectedGroupCol!,
+        subgroupCol: (_selectedSubgroupCol != null && _selectedSubgroupCol != 'None')
+            ? _selectedSubgroupCol
+            : null,
+        channelCol: (_selectedChannelCol != null && _selectedChannelCol != 'None')
+            ? _selectedChannelCol
+            : null,
+        subjectIdCol: _selectedSubjectIdCol,
+        extraFactors: extraFactorsClean,
+        includeInteractions: _includeInteractions,
+        covariates: _selectedCovariates.toList(),
+        targetMetrics: _selectedMetrics.toList(),
+        excludedFactorLabels: excludeMap,
+        rowFilters: _rowFilters,
+        groupOrder: groupOrder,
+        subgroupOrder: subgroupOrder,
+        preferredModel: _preferredModel,
+        posthocMethod: _posthocMethod,
+        onProgress: (p, s) {
+          setState(() {
+            _analysisProgress = p;
+            _progressStatus = s;
+            _consoleLogs.add('[stats] $s');
+            if (_consoleLogs.length > 50) _consoleLogs.removeAt(0);
+          });
+        },
+      );
 
       setState(() {
         _analysisResults = jsonMap;
-        final resList = jsonMap['results'] as List<dynamic>? ?? [];
+        final resList = (jsonMap['results'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
         if (resList.isNotEmpty) {
-          _selectedResultMetric = (resList.first as Map<String, dynamic>)['metric'] as String?;
+          _selectedResultMetric = resList.first['metric'] as String?;
         }
-        _statusMessage = 'Analysis completed! Generated ${resList.length} metric models, 400-DPI plots, eTFCE topoplots, and reports.';
+        _statusMessage = 'Analysis completed! Generated ${resList.length} metric models, interactive plots, and reports (Zero-Python).';
       });
     } catch (e) {
       _showSnack('Analysis failed: $e');
@@ -837,79 +508,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _pythonPathController,
-                    decoration: InputDecoration(
-                      labelText: 'Python 3 Environment / Executable',
-                      hintText: 'Auto-detected system or venv Python path',
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                      prefixIcon: const Icon(Icons.terminal_outlined),
-                      suffixIcon: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.refresh, size: 20),
-                            onPressed: _isInspecting ? null : _autoDetectPython,
-                            tooltip: 'Auto-detect Python',
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.folder_open, size: 20),
-                            onPressed: _isInspecting ? null : _pickPythonExecutable,
-                            tooltip: 'Browse Python Executable',
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            if (_inspectionData != null && _inspectionData!['environment'] != null) ...[
-              Builder(
-                builder: (context) {
-                  final env = _inspectionData!['environment'] as Map<String, dynamic>;
-                  final missing = (env['missing_packages'] as List<dynamic>? ?? []).cast<String>();
-                  if (missing.isEmpty) return const SizedBox.shrink();
-                  return Container(
-                    margin: const EdgeInsets.only(top: 10),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.amber.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.amber.shade400),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(Icons.warning_amber_rounded, color: Colors.amber.shade800, size: 22),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Missing Python Packages: ${missing.join(', ')}',
-                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.amber.shade900),
-                              ),
-                              const SizedBox(height: 2),
-                              SelectableText(
-                                'Run in terminal / virtual environment: pip install ${missing.join(' ')}',
-                                style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ],
+
             if (_statusMessage.isNotEmpty) ...[
               const SizedBox(height: 10),
               Text(_statusMessage, style: TextStyle(fontSize: 12, color: Colors.grey.shade700, fontStyle: FontStyle.italic)),
@@ -1633,8 +1232,6 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
 
   Widget _buildResultsCard() {
     final outputDir = _analysisResults!['output_dir'] as String? ?? '';
-    final docxPath = _analysisResults!['docx_path'] as String?;
-    final pdfPath = _analysisResults!['pdf_path'] as String?;
     final resList = (_analysisResults!['results'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
 
     final activeResult = resList.firstWhere(
@@ -1673,20 +1270,19 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                   label: const Text('Open Folder'),
                 ),
                 const SizedBox(width: 8),
-                if (docxPath != null)
+                if (_analysisResults!['html_path'] != null)
                   FilledButton.icon(
-                    onPressed: () => _openPath(docxPath),
-                    icon: const Icon(Icons.description, size: 16),
-                    label: const Text('Word (.docx)'),
+                    onPressed: () => _openPath(_analysisResults!['html_path'] as String),
+                    icon: const Icon(Icons.article_outlined, size: 16),
+                    label: const Text('HTML Publishing Report'),
                     style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1F4E79)),
                   ),
                 const SizedBox(width: 8),
-                if (pdfPath != null)
-                  FilledButton.icon(
-                    onPressed: () => _openPath(pdfPath),
-                    icon: const Icon(Icons.picture_as_pdf, size: 16),
-                    label: const Text('PDF Report'),
-                    style: FilledButton.styleFrom(backgroundColor: const Color(0xFFD32F2F)),
+                if (_analysisResults!['summary_csv'] != null)
+                  OutlinedButton.icon(
+                    onPressed: () => _openPath(_analysisResults!['summary_csv'] as String),
+                    icon: const Icon(Icons.table_chart_outlined, size: 16),
+                    label: const Text('Summary CSV'),
                   ),
               ],
             ),
@@ -1716,7 +1312,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
               children: [
                 SegmentedButton<int>(
                   segments: const [
-                    ButtonSegment(value: 0, icon: Icon(Icons.image_outlined, size: 16), label: Text('Publication Plot & eTFCE')),
+                    ButtonSegment(value: 0, icon: Icon(Icons.image_outlined, size: 16), label: Text('Interactive Plot & Topo')),
                     ButtonSegment(value: 1, icon: Icon(Icons.table_chart_outlined, size: 16), label: Text('Model Effects')),
                     ButtonSegment(value: 2, icon: Icon(Icons.compare_arrows_outlined, size: 16), label: Text('Post-Hoc Contrasts')),
                     ButtonSegment(value: 3, icon: Icon(Icons.summarize_outlined, size: 16), label: Text('Descriptive Stats')),
@@ -1740,15 +1336,12 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
   }
 
   Widget _buildPlotTab(Map<String, dynamic> res) {
-    final plotPath = res['plot_path'] as String? ?? '';
-    final topoPath = res['topoplot_path'] as String? ?? '';
-    final unit = res['unit'] as String? ?? '';
+    final metric = res['metric'] as String? ?? '';
     final isMacro = res['is_macroarchitecture'] == true;
+    final descriptives = (res['descriptives'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+    final posthocs = (res['posthoc_contrasts'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
     final etfceChannels = (res['etfce_channels'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
-
-    final hasTopo = topoPath.isNotEmpty && File(topoPath).existsSync();
-    final currentPath = (_activePlotView == 1 && hasTopo) ? topoPath : plotPath;
-    final file = File(currentPath);
+    final hasTopo = !isMacro && etfceChannels.isNotEmpty;
 
     return Container(
       width: double.infinity,
@@ -1770,7 +1363,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Text(
-                      '${res['metric']}${unit.isNotEmpty ? ' ($unit)' : ''} · ${res['model_type']} · '
+                      '$metric · ${res['model_type']} · '
                       'N=${res['n_subjects'] ?? res['n_obs']} subj (n=${res['n_obs']} obs)',
                       style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF1F4E79)),
                     ),
@@ -1795,52 +1388,27 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                   padding: const EdgeInsets.only(right: 8),
                   child: SegmentedButton<int>(
                     segments: const [
-                      ButtonSegment(value: 0, icon: Icon(Icons.bar_chart, size: 14), label: Text('Boxplot & Post-hoc')),
+                      ButtonSegment(value: 0, icon: Icon(Icons.bar_chart, size: 14), label: Text('Boxplot & Contrasts')),
                       ButtonSegment(value: 1, icon: Icon(Icons.blur_circular, size: 14), label: Text('Scalp Topoplot + eTFCE')),
                     ],
                     selected: {_activePlotView},
                     onSelectionChanged: (s) => setState(() => _activePlotView = s.first),
                   ),
                 ),
-              TextButton.icon(
-                onPressed: file.existsSync() ? () => _openPath(currentPath) : null,
-                icon: const Icon(Icons.zoom_in, size: 16),
-                label: const Text('Open Full 400-DPI Image'),
-              ),
             ],
           ),
-          const SizedBox(height: 8),
-          if (file.existsSync())
-            Center(
-              child: Container(
-                constraints: const BoxConstraints(maxHeight: 500),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: Colors.grey.shade200),
-                ),
-                child: InteractiveViewer(
-                  minScale: 0.8,
-                  maxScale: 4.0,
-                  child: Image.file(
-                    file,
-                    key: ValueKey('${file.path}-${file.lastModifiedSync().millisecondsSinceEpoch}'),
-                    height: 460,
-                    fit: BoxFit.contain,
-                    filterQuality: FilterQuality.high,
-                  ),
-                ),
-              ),
+          const SizedBox(height: 12),
+          if (_activePlotView == 0 || !hasTopo)
+            GroupStatsBoxplotWidget(
+              metric: metric,
+              descriptives: descriptives,
+              posthocs: posthocs,
             )
-          else
-            const Padding(
-              padding: EdgeInsets.all(32),
-              child: Center(child: Text('Plot image not found.')),
-            ),
-          if (_activePlotView == 1 && hasTopo && etfceChannels.isNotEmpty) ...[
+          else ...[
+            GroupStatsTopoplotWidget(etfceChannels: etfceChannels),
             const SizedBox(height: 12),
             const Text(
-              'Spatial eTFCE (Threshold-Free Cluster Enhancement) Permutation Results:',
+              'Spatial Channel Contrast & Significance Summary:',
               style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold, color: Color(0xFF1F4E79)),
             ),
             const SizedBox(height: 6),
@@ -1851,10 +1419,10 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                 dataRowMinHeight: 28,
                 dataRowMaxHeight: 32,
                 columns: const [
-                  DataColumn(label: Text('Channel / Region', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                  DataColumn(label: Text('Raw Statistic (t / F)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                  DataColumn(label: Text('eTFCE Score', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                  DataColumn(label: Text('p (eTFCE FWER)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                  DataColumn(label: Text('Channel', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                  DataColumn(label: Text('Mean Difference', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                  DataColumn(label: Text('t-Statistic', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                  DataColumn(label: Text('p-Value', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
                   DataColumn(label: Text('Significance', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
                 ],
                 rows: [
@@ -1862,10 +1430,10 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
                     DataRow(
                       cells: [
                         DataCell(Text('${ch['channel'] ?? ''}', style: const TextStyle(fontWeight: FontWeight.w600))),
-                        DataCell(Text((ch['raw_stat'] as num?)?.toStringAsFixed(3) ?? '-')),
-                        DataCell(Text((ch['etfce_score'] as num?)?.toStringAsFixed(3) ?? '-')),
-                        DataCell(Text(_formatP(ch['p_etfce'] as num?))),
-                        DataCell(_buildSigBadge(ch['significance'] as String? ?? 'ns')),
+                        DataCell(Text((ch['mean_diff'] as num?)?.toStringAsFixed(3) ?? '-')),
+                        DataCell(Text((ch['t_stat'] as num?)?.toStringAsFixed(3) ?? '-')),
+                        DataCell(Text(_formatP(ch['p_value'] as num?))),
+                        DataCell(_buildSigBadge(ch['significant'] == true ? '*' : 'ns')),
                       ],
                     ),
                 ],
@@ -1892,12 +1460,11 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
       child: DataTable(
         columns: const [
           DataColumn(label: Text('Factor / Term', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text('N (Subj / Obs)', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text('Stat Type', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text('Statistic', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text('df', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('N Observations', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('F-Statistic', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('df (num, denom)', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('p-value', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text('Effect Size (ηp²)', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('Partial Eta Squared (ηp²)', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Significance', style: TextStyle(fontWeight: FontWeight.bold))),
         ],
         rows: [
@@ -1905,13 +1472,12 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
             DataRow(
               cells: [
                 DataCell(Text(eff['term'] as String? ?? '')),
-                DataCell(Text('${eff['n_subjects'] ?? res['n_subjects'] ?? '-'} / ${eff['n_obs'] ?? res['n_obs'] ?? '-'}')),
-                DataCell(Text(eff['stat_type'] as String? ?? '')),
-                DataCell(Text((eff['statistic'] as num?)?.toStringAsFixed(3) ?? '-')),
-                DataCell(Text('${eff['df'] ?? 1}${eff['df_resid'] != null ? ', ${eff['df_resid']}' : ''}')),
+                DataCell(Text('${eff['n_obs'] ?? res['n_obs'] ?? '-'}')),
+                DataCell(Text((eff['f_stat'] as num?)?.toStringAsFixed(3) ?? '-')),
+                DataCell(Text('${eff['df_num'] ?? 1}, ${eff['df_denom'] ?? '-' }')),
                 DataCell(Text(_formatP(eff['p_value'] as num?))),
-                DataCell(Text((eff['effect_size'] as num?)?.toStringAsFixed(3) ?? '-')),
-                DataCell(_buildSigBadge(eff['significance'] as String? ?? 'ns')),
+                DataCell(Text((eff['eta_sq'] as num?)?.toStringAsFixed(3) ?? '-')),
+                DataCell(_buildSigBadge(((eff['p_value'] as num?) ?? 1.0) < 0.05 ? '*' : 'ns')),
               ],
             ),
         ],
@@ -1933,31 +1499,31 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
       scrollDirection: Axis.horizontal,
       child: DataTable(
         columns: const [
-          DataColumn(label: Text('Factor Level', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Comparison', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('N (n1 vs n2)', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Mean Diff', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text('t-stat', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('SE', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('t-Statistic', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('df', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('p (raw)', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text('p (adjusted)', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('p (FDR adjusted)', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Cohen’s d', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text('Hedges’ g', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text('Sig.', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('Significance', style: TextStyle(fontWeight: FontWeight.bold))),
         ],
         rows: [
           for (final c in contrasts)
             DataRow(
               cells: [
-                DataCell(Text(c['level']?.toString() ?? 'Overall')),
-                DataCell(Text('${c['group1']} vs ${c['group2']}')),
-                DataCell(Text('${c['n1'] ?? '-'} vs ${c['n2'] ?? '-'}')),
+                DataCell(Text('${c['comparison'] ?? '${c['group_a']} vs ${c['group_b']}'}')),
+                DataCell(Text('${c['n_a'] ?? '-'} vs ${c['n_b'] ?? '-'}')),
                 DataCell(Text((c['diff'] as num?)?.toStringAsFixed(3) ?? '-')),
+                DataCell(Text((c['se'] as num?)?.toStringAsFixed(3) ?? '-')),
                 DataCell(Text((c['t_stat'] as num?)?.toStringAsFixed(3) ?? '-')),
+                DataCell(Text('${c['df'] ?? '-'}')),
                 DataCell(Text(_formatP(c['p_raw'] as num?))),
-                DataCell(Text(_formatP(c['p_adj'] as num?))),
+                DataCell(Text(_formatP(c['p_fdr'] ?? c['p_adj'] as num?))),
                 DataCell(Text((c['cohen_d'] as num?)?.toStringAsFixed(2) ?? '-')),
-                DataCell(Text((c['hedges_g'] as num?)?.toStringAsFixed(2) ?? '-')),
-                DataCell(_buildSigBadge(c['significance'] as String? ?? 'ns')),
+                DataCell(_buildSigBadge(c['significant'] == true ? '*' : 'ns')),
               ],
             ),
         ],
@@ -1966,7 +1532,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
   }
 
   Widget _buildDescriptivesTab(Map<String, dynamic> res) {
-    final stats = (res['descriptive_stats'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+    final stats = (res['descriptives'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
 
     if (stats.isEmpty) {
       return const Padding(
@@ -1981,8 +1547,9 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
         columns: const [
           DataColumn(label: Text('Group', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Subgroup', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text('N (Subj / Obs)', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('N', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Mean ± SD', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('SEM', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Median (IQR)', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Min', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Max', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -1992,9 +1559,10 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
             DataRow(
               cells: [
                 DataCell(Text(s['group']?.toString() ?? '-')),
-                DataCell(Text(s['subgroup']?.toString() ?? '-')),
-                DataCell(Text('${s['n_subjects'] ?? s['n'] ?? 0} / ${s['n'] ?? 0}')),
+                DataCell(Text(s['subgroup']?.toString() ?? 'ALL')),
+                DataCell(Text('${s['n'] ?? 0}')),
                 DataCell(Text('${(s['mean'] as num?)?.toStringAsFixed(2)} ± ${(s['std'] as num?)?.toStringAsFixed(2)}')),
+                DataCell(Text((s['sem'] as num?)?.toStringAsFixed(2) ?? '-')),
                 DataCell(Text('${(s['median'] as num?)?.toStringAsFixed(2)} (${(s['iqr'] as num?)?.toStringAsFixed(2)})')),
                 DataCell(Text((s['min'] as num?)?.toStringAsFixed(2) ?? '-')),
                 DataCell(Text((s['max'] as num?)?.toStringAsFixed(2) ?? '-')),

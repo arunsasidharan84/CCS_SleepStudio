@@ -75,7 +75,6 @@ flutter:
     - assets/spectral.txt
     - assets/logo.png
     - assets/app_icon.png
-    - assets/group_stats.py
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

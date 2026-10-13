@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ccs_sleep_studio/src/group_statistics.dart';
+import 'package:ccs_sleep_studio/src/group_statistics_engine.dart';
 
 void main() {
   testWidgets('renders GroupStatisticsWorkbench shell properly', (tester) async {
@@ -22,24 +23,26 @@ void main() {
     expect(find.text('Inspect Data'), findsOneWidget);
   });
 
-  test('backend group_stats.py CLI runs inspection on master sheet', () async {
+  test('GroupStatsEngine inspects master sheet in pure Dart without Python', () async {
     const csv1 = '/Users/arunsasidharan/Downloads/MED_AnalyseNidra_master_sheet_07102026.csv';
-    if (!File(csv1).existsSync()) return;
+    final file = File(csv1);
+    final String testPath;
+    if (file.existsSync()) {
+      testPath = csv1;
+    } else {
+      final tmp = File('${Directory.systemTemp.path}/test_group_stats.csv');
+      tmp.writeAsStringSync('''subject,group,channel,alpha_power
+s1,Ctrl,C3,10.5
+s2,Ctrl,C3,11.2
+s3,Stim,C3,15.8
+s4,Stim,C3,16.2
+''');
+      testPath = tmp.path;
+    }
 
-    final script = File('backend/group_stats.py').existsSync()
-        ? 'backend/group_stats.py'
-        : '../backend/group_stats.py';
-    final python = Platform.environment['PYTHON'] ?? 'python3';
-    final result = await Process.run(python, [
-      script,
-      '--csv',
-      csv1,
-      '--inspect-only',
-    ]);
-
-    expect(result.exitCode, 0);
-    expect(result.stdout, contains('group_col'));
-    expect(result.stdout, contains('unique_subjects'));
-    expect(result.stdout, contains('metric_columns'));
+    final inspection = await GroupStatsEngine.inspectDataset(csvPath: testPath);
+    expect(inspection['total_rows'], greaterThan(0));
+    expect(inspection['unique_subjects'], greaterThan(0));
+    expect(inspection['metric_columns'], isNotEmpty);
   });
 }

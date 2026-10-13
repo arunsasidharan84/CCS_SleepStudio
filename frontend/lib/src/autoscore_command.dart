@@ -71,56 +71,6 @@ AutoscoreInvocation resolveAutoscoreInvocation({
     }
   }
 
-  final roots = <String>{
-    currentDir,
-    File(currentDir).parent.path,
-    File(executableDir).parent.path,
-  };
-  final scriptCandidates = <String>[
-    for (final root in roots) ...[
-      join([root, 'backend_entry.py']),
-      join([root, 'backend', 'backend_entry.py']),
-      join([root, '..', 'backend_entry.py']),
-    ],
-  ];
-  String? script;
-  for (final candidate in scriptCandidates) {
-    if (exists(candidate)) {
-      script = candidate;
-      break;
-    }
-  }
-
-  if (script != null) {
-    final pythonCandidates = windows
-        ? <String>[
-            join([currentDir, 'backend', 'sleep_env', 'Scripts', 'python.exe']),
-            join([
-              currentDir,
-              '..',
-              'backend',
-              'sleep_env',
-              'Scripts',
-              'python.exe',
-            ]),
-            'python.exe',
-          ]
-        : <String>[
-            join([currentDir, 'backend', 'sleep_env', 'bin', 'python']),
-            join([currentDir, '..', 'backend', 'sleep_env', 'bin', 'python']),
-            if (macOS) '/opt/homebrew/bin/python3',
-            if (macOS) '/usr/local/bin/python3',
-            'python3',
-          ];
-    for (final candidate in pythonCandidates) {
-      if (!candidate.contains(separator) || exists(candidate)) {
-        return AutoscoreInvocation(
-          executable: candidate,
-          argumentPrefix: [script],
-        );
-      }
-    }
-  }
 
   throw StateError(
     'AutoscoreNidra backend is not installed. Install the Full build or '

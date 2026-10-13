@@ -35,8 +35,6 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
   late TextEditingController _stimMaxCombsController;
   late TextEditingController _badChannelThreshController;
 
-  String _engine = 'rust';
-
   bool _stepStimArtifact = false;
   bool _stepDownsample = false;
   bool _stepFilter = true;
@@ -53,7 +51,6 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
   @override
   void initState() {
     super.initState();
-    _engine = isAnalyseNidraAvailable() ? 'rust' : 'python';
     _channelsController = TextEditingController(text: widget.initialChannels.join(', '));
     _outDirController = TextEditingController(text: File(widget.inputFilePath).parent.path);
     _downsampleController = TextEditingController(text: '250');
@@ -135,17 +132,10 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
       _outputEdfPath = null;
     });
 
-    final bool isRust = _engine == 'rust';
     final steps = <String>[];
     // Stimulation artefact removal runs first, on the raw signal, so that filtering and
     // RANSAC bad-channel detection are not driven by the periodic DBS artefact.
-    if (_stepStimArtifact) {
-      if (isRust) {
-        steps.add('stimartifact');
-      } else {
-        _addLog('WARNING: Stimulation artefact removal is only available with the Native Rust engine — step skipped.');
-      }
-    }
+    if (_stepStimArtifact) steps.add('stimartifact');
     if (_stepDownsample) steps.add('downsample');
     if (_stepFilter) steps.add('filter');
     if (_stepBadChannel) steps.add('badchannel');
@@ -186,7 +176,7 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
       }
     }
 
-    if (_stepStimArtifact && isRust) {
+    if (_stepStimArtifact) {
       final f0 = double.tryParse(_stimF0Controller.text.trim());
       if (f0 != null && f0 > 0) rawArgs.addAll(['--stim-f0', f0.toString()]);
       final win = double.tryParse(_stimWinController.text.trim());
@@ -195,7 +185,7 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
       if (combs != null && combs > 0) rawArgs.addAll(['--stim-max-combs', combs.toString()]);
     }
 
-    if (_stepBadChannel && isRust) {
+    if (_stepBadChannel) {
       final thresh = double.tryParse(_badChannelThreshController.text.trim());
       if (thresh != null && thresh > 0) rawArgs.addAll(['--bad-channel-threshold', thresh.toString()]);
     }
@@ -209,38 +199,10 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
       if (notch != null) rawArgs.addAll(['--notch-hz', notch.toString()]);
     }
 
-    String executable;
-    List<String> commandArgs = [];
+    final executable = detectAnalyseNidraExecutable();
+    final commandArgs = ['--preprocess', ...rawArgs];
 
-    if (isRust) {
-      executable = detectAnalyseNidraExecutable();
-      commandArgs = ['--preprocess', ...rawArgs];
-    } else {
-      AutoscoreInvocation invocation;
-      try {
-        invocation = resolveAutoscoreInvocation();
-      } catch (e) {
-        _addLog('ERROR: Failed to resolve Python backend runtime: $e');
-        setState(() => _isProcessing = false);
-        return;
-      }
-
-      executable = invocation.executable;
-      if (invocation.argumentPrefix.isNotEmpty) {
-        // In development mode, find preprocess.py in the same folder as cli.py
-        final scriptDir = File(invocation.argumentPrefix.last).parent;
-        final preprocessScript = File('${scriptDir.path}${Platform.pathSeparator}preprocess.py');
-        if (preprocessScript.existsSync()) {
-          commandArgs = [preprocessScript.path, ...rawArgs];
-        } else {
-          commandArgs = invocation.argumentsFor(['--preprocess', ...rawArgs]);
-        }
-      } else {
-        commandArgs = invocation.argumentsFor(['--preprocess', ...rawArgs]);
-      }
-    }
-
-    _addLog('Starting EEG preprocessing pipeline (${isRust ? "Native Rust / Zero-Python" : "Python ccstools"})...');
+    _addLog('Starting EEG preprocessing pipeline (Native Rust / Zero-Python)...');
     _addLog('Source: ${widget.inputFilePath}');
     _addLog('Steps: ${steps.join(" -> ")}');
 
@@ -330,32 +292,23 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
                           ],
                         ),
                       ),
-                    const Text('Preprocessing Engine:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                    const SizedBox(height: 4),
-                    DropdownButtonFormField<String>(
-                      value: _engine,
-                      isDense: true,
-                      decoration: const InputDecoration(
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.indigo.shade50,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.indigo.shade200),
                       ),
-                      items: const [
-                        DropdownMenuItem(
-                          value: 'rust',
-                          child: Text(
-                            'Native Rust (Zero-Python, Fast)',
-                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.bolt, size: 16, color: Colors.indigo),
+                          SizedBox(width: 8),
+                          Text(
+                            'Engine: Native Rust (Zero-Python, Ultra-Fast)',
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.indigo),
                           ),
-                        ),
-                        DropdownMenuItem(
-                          value: 'python',
-                          child: Text(
-                            'Python Runtime (ccstools)',
-                            style: TextStyle(fontSize: 12),
-                          ),
-                        ),
-                      ],
-                      onChanged: _isProcessing ? null : (v) => setState(() => _engine = v ?? 'rust'),
+                        ],
+                      ),
                     ),
                     const SizedBox(height: 12),
                     const Text('EEG Channels to Clean:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
@@ -376,11 +329,9 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
                       dense: true,
                       contentPadding: EdgeInsets.zero,
                       title: const Text('Auto electric stim artefact removal (DBS / neurostimulator)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        _engine == 'rust'
-                            ? 'Continuous adaptive harmonic comb filter; auto-detects fundamental stimulation frequency'
-                            : 'Requires the Native Rust engine',
-                        style: const TextStyle(fontSize: 10),
+                      subtitle: const Text(
+                        'Continuous adaptive harmonic comb filter; auto-detects fundamental stimulation frequency',
+                        style: TextStyle(fontSize: 10),
                       ),
                       value: _stepStimArtifact,
                       onChanged: _isProcessing ? null : (v) => setState(() => _stepStimArtifact = v ?? false),

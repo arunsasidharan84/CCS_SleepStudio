@@ -21,22 +21,6 @@ void main() {
     expect(invocation.argumentPrefix, isEmpty);
   });
 
-  test('pairs development Python with backend_entry.py', () {
-    final invocation = resolveAutoscoreInvocation(
-      resolvedExecutable: '/tmp/CCSSleepStudio',
-      currentDirectory: '/workspace/CCSSleepStudio',
-      isWindows: false,
-      isMacOS: true,
-      fileExists: (path) =>
-          path == '/workspace/CCSSleepStudio/backend_entry.py' ||
-          path == '/opt/homebrew/bin/python3',
-    );
-
-    expect(invocation.executable, '/opt/homebrew/bin/python3');
-    expect(invocation.argumentPrefix, [
-      '/workspace/CCSSleepStudio/backend_entry.py',
-    ]);
-  });
 
   test('finds the backend from an installed Linux launcher path', () {
     final invocation = resolveAutoscoreInvocation(

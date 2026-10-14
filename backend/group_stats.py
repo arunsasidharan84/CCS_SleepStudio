@@ -1153,7 +1153,7 @@ def generate_publication_plot(
     has_subgroup = subgroup_col is not None and subgroup_col in clean.columns and clean[subgroup_col].nunique() > 1
     subgroups = ordered_levels(clean[subgroup_col], result.get("subgroup_order")) if has_subgroup else [None]
 
-    fig_width = max(6.8, 2.3 * len(subgroups) if has_subgroup else 2.2 * len(groups))
+    fig_width = max(8.6, 3.2 * len(subgroups) if has_subgroup else 2.6 * len(groups))
     fig, ax = plt.subplots(figsize=(fig_width, 5.4), dpi=400)
 
     ax.set_facecolor("#fafafa")
@@ -1279,7 +1279,14 @@ def generate_publication_plot(
             legend_handles.append(
                 Line2D([0], [0], marker="^", color="w", markerfacecolor="#555555", markeredgecolor="#222222", markersize=6, label=f"Outlier clipped ({n_clipped_total})")
             )
-        ax.legend(handles=legend_handles, loc="upper right", framealpha=0.92, fontsize=8.5, ncol=min(3, len(legend_handles)))
+        ax.legend(
+            handles=legend_handles,
+            loc="upper left",
+            bbox_to_anchor=(1.02, 1.0),
+            borderaxespad=0,
+            framealpha=0.95,
+            fontsize=8.5,
+        )
 
     else:
         n_grps = len(groups)
@@ -1385,8 +1392,9 @@ def generate_publication_plot(
                 Line2D([0], [0], marker="^", color="w", markerfacecolor="#555555", markeredgecolor="#222222", markersize=6, label=f"Outlier clipped ({n_clipped_total})")
             )
         ax.legend(
-            handles=legend_handles, title=group_col, title_fontsize=9,
-            loc="upper right", framealpha=0.92, fontsize=8.5, ncol=min(2, len(legend_handles)),
+            handles=legend_handles, title=group_col, title_fontsize=9.5,
+            loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0,
+            framealpha=0.95, fontsize=8.5,
         )
 
     clean_metric_title = metric.replace("_", " ")
@@ -1733,51 +1741,139 @@ def generate_topoplot(
         g_min -= 0.1
         g_max += 0.1
 
-    show_diff = (not single_factor_topography) and (len(groups) == 2)
-    # Panels: Each group mean + (Difference if 2 groups) + eTFCE Statistical Map
-    n_plots = (len(groups) + 2) if show_diff else (len(groups) + 1)
+    contrast_pairs = []
+    if not single_factor_topography and len(groups) >= 2:
+        for i in range(len(groups)):
+            for j in range(i + 1, len(groups)):
+                contrast_pairs.append((groups[i], groups[j]))
 
-    fig_w = max(3.6 * n_plots, 7.8)
-    fig, axes = plt.subplots(1, n_plots, figsize=(fig_w, 4.1), dpi=400)
-    if n_plots == 1:
-        axes = [axes]
+    if len(groups) <= 2:
+        n_plots = len(groups) + len(contrast_pairs) + 1
+        nrows, ncols = 1, n_plots
+        fig_w = max(3.6 * ncols, 7.8)
+        fig, axes_raw = plt.subplots(nrows, ncols, figsize=(fig_w, 4.2), dpi=400)
+        axes = [axes_raw] if n_plots == 1 else list(axes_raw)
 
-    for idx, g in enumerate(groups):
-        vals = np.array([group_means[g][ch] for ch in ch_keys])
+        for idx, g in enumerate(groups):
+            vals = np.array([group_means[g][ch] for ch in ch_keys])
+            _draw_head_topography(
+                axes[idx], xi, yi, mask, pts, matched, vals,
+                title=g if single_factor_topography else f"{g} (Mean)",
+                cmap="viridis", vmin=g_min, vmax=g_max,
+                cbar_label=unit,
+            )
+
+        curr_ax = len(groups)
+        for (g1, g2) in contrast_pairs:
+            diff_vals = np.array([group_means[g2][ch] - group_means[g1][ch] for ch in ch_keys])
+            max_abs = max(1e-4, float(np.max(np.abs(diff_vals))))
+            pair_sig = set()
+            for ch in ch_keys:
+                ch_df = clean[clean[channel_col].astype(str) == ch]
+                v1 = ch_df[ch_df[group_col].astype(str) == g1][metric].dropna().values
+                v2 = ch_df[ch_df[group_col].astype(str) == g2][metric].dropna().values
+                if len(v1) >= 2 and len(v2) >= 2:
+                    try:
+                        _, p_val = scipy.stats.ttest_ind(v2, v1, equal_var=False)
+                        if p_val < 0.05:
+                            pair_sig.add(ch)
+                    except Exception:
+                        pass
+            for c in posthoc_contrasts:
+                p_val = c.get("p_adj", c.get("p_raw", 1.0))
+                if p_val < 0.05:
+                    cg1, cg2 = str(c.get("group1", "")), str(c.get("group2", ""))
+                    if (cg1 == g1 and cg2 == g2) or (cg1 == g2 and cg2 == g1):
+                        lvl = str(c.get("level", ""))
+                        if lvl in matched:
+                            pair_sig.add(lvl)
+
+            _draw_head_topography(
+                axes[curr_ax], xi, yi, mask, pts, matched, diff_vals,
+                title=f"Post-Hoc: {g2} − {g1} (* p<0.05)",
+                cmap="RdBu_r", vmin=-max_abs, vmax=max_abs,
+                cbar_label=f"Δ {unit}".strip(),
+                sig_channels=pair_sig,
+            )
+            curr_ax += 1
+
+        tfce_vals = np.array([etfce_info["tfce_map"][ch] for ch in ch_keys])
+        max_tfce = max(1e-4, float(np.max(np.abs(tfce_vals))))
+        signed_tfce = len(groups) == 2 or single_factor_topography
+        etfce_cmap = "RdBu_r" if signed_tfce else "YlOrRd"
+        etfce_vmin = -max_tfce if signed_tfce else 0.0
         _draw_head_topography(
-            axes[idx], xi, yi, mask, pts, matched, vals,
-            title=g if single_factor_topography else f"{g} (Mean)",
-            cmap="viridis", vmin=g_min, vmax=g_max,
-            cbar_label=unit,
-        )
-
-    next_ax_idx = len(groups)
-    if show_diff:
-        g1, g2 = groups[0], groups[1]
-        diff_vals = np.array([group_means[g2][ch] - group_means[g1][ch] for ch in ch_keys])
-        max_abs = max(1e-4, float(np.max(np.abs(diff_vals))))
-        _draw_head_topography(
-            axes[next_ax_idx], xi, yi, mask, pts, matched, diff_vals,
-            title=f"Diff ({g2} − {g1})",
-            cmap="RdBu_r", vmin=-max_abs, vmax=max_abs,
-            cbar_label=f"Δ {unit}".strip(),
+            axes[curr_ax], xi, yi, mask, pts, matched, tfce_vals,
+            title="eTFCE Cluster Map (* p<0.05)",
+            cmap=etfce_cmap, vmin=etfce_vmin, vmax=max_tfce,
+            cbar_label="eTFCE score",
             sig_channels=etfce_sig_channels,
         )
-        next_ax_idx += 1
 
-    # eTFCE statistical topography panel
-    tfce_vals = np.array([etfce_info["tfce_map"][ch] for ch in ch_keys])
-    max_tfce = max(1e-4, float(np.max(np.abs(tfce_vals))))
-    signed_tfce = show_diff or single_factor_topography
-    etfce_cmap = "RdBu_r" if signed_tfce else "YlOrRd"
-    etfce_vmin = -max_tfce if signed_tfce else 0.0
-    _draw_head_topography(
-        axes[next_ax_idx], xi, yi, mask, pts, matched, tfce_vals,
-        title="eTFCE Cluster Map (* p<0.05)",
-        cmap=etfce_cmap, vmin=etfce_vmin, vmax=max_tfce,
-        cbar_label="eTFCE score",
-        sig_channels=etfce_sig_channels,
-    )
+    else:
+        # Multi-group case: 2 Rows (Row 1: Means + Omnibus eTFCE; Row 2: Post-Hoc Pairwise Comparisons)
+        ncols = max(len(groups) + 1, len(contrast_pairs))
+        nrows = 2
+        fig_w = max(3.5 * ncols, 10.5)
+        fig_h = 7.6
+        fig, axes_grid = plt.subplots(nrows, ncols, figsize=(fig_w, fig_h), dpi=400)
+
+        for idx, g in enumerate(groups):
+            vals = np.array([group_means[g][ch] for ch in ch_keys])
+            _draw_head_topography(
+                axes_grid[0, idx], xi, yi, mask, pts, matched, vals,
+                title=f"{g} (Mean)",
+                cmap="viridis", vmin=g_min, vmax=g_max,
+                cbar_label=unit,
+            )
+
+        tfce_vals = np.array([etfce_info["tfce_map"][ch] for ch in ch_keys])
+        max_tfce = max(1e-4, float(np.max(np.abs(tfce_vals))))
+        _draw_head_topography(
+            axes_grid[0, len(groups)], xi, yi, mask, pts, matched, tfce_vals,
+            title="eTFCE Cluster Map (* p<0.05)",
+            cmap="YlOrRd", vmin=0.0, vmax=max_tfce,
+            cbar_label="eTFCE score",
+            sig_channels=etfce_sig_channels,
+        )
+        for col_extra in range(len(groups) + 1, ncols):
+            axes_grid[0, col_extra].axis("off")
+
+        for p_idx, (g1, g2) in enumerate(contrast_pairs):
+            diff_vals = np.array([group_means[g2][ch] - group_means[g1][ch] for ch in ch_keys])
+            max_abs = max(1e-4, float(np.max(np.abs(diff_vals))))
+
+            pair_sig = set()
+            for ch in ch_keys:
+                ch_df = clean[clean[channel_col].astype(str) == ch]
+                v1 = ch_df[ch_df[group_col].astype(str) == g1][metric].dropna().values
+                v2 = ch_df[ch_df[group_col].astype(str) == g2][metric].dropna().values
+                if len(v1) >= 2 and len(v2) >= 2:
+                    try:
+                        _, p_val = scipy.stats.ttest_ind(v2, v1, equal_var=False)
+                        if p_val < 0.05:
+                            pair_sig.add(ch)
+                    except Exception:
+                        pass
+            for c in posthoc_contrasts:
+                p_val = c.get("p_adj", c.get("p_raw", 1.0))
+                if p_val < 0.05:
+                    cg1, cg2 = str(c.get("group1", "")), str(c.get("group2", ""))
+                    if (cg1 == g1 and cg2 == g2) or (cg1 == g2 and cg2 == g1):
+                        lvl = str(c.get("level", ""))
+                        if lvl in matched:
+                            pair_sig.add(lvl)
+
+            _draw_head_topography(
+                axes_grid[1, p_idx], xi, yi, mask, pts, matched, diff_vals,
+                title=f"Post-Hoc: {g2} − {g1} (* p<0.05)",
+                cmap="RdBu_r", vmin=-max_abs, vmax=max_abs,
+                cbar_label=f"Δ {unit}".strip(),
+                sig_channels=pair_sig,
+            )
+
+        for col_extra in range(len(contrast_pairs), ncols):
+            axes_grid[1, col_extra].axis("off")
 
     clean_metric_title = metric.replace("_", " ")
     unit_suffix = f" ({unit})" if unit else ""

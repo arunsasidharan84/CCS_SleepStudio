@@ -351,18 +351,40 @@ class _BoxplotPainter extends CustomPainter {
 }
 
 /// Interactive 10-20 Scalp Topoplot widget rendered natively in Flutter.
-class GroupStatsTopoplotWidget extends StatelessWidget {
+class GroupStatsTopoplotWidget extends StatefulWidget {
   const GroupStatsTopoplotWidget({
     super.key,
     required this.etfceChannels,
+    this.posthocTopoplots = const [],
   });
 
   final List<Map<String, dynamic>> etfceChannels;
+  final List<Map<String, dynamic>> posthocTopoplots;
+
+  @override
+  State<GroupStatsTopoplotWidget> createState() => _GroupStatsTopoplotWidgetState();
+}
+
+class _GroupStatsTopoplotWidgetState extends State<GroupStatsTopoplotWidget> {
+  int _selectedIndex = 0;
 
   @override
   Widget build(BuildContext context) {
-    if (etfceChannels.isEmpty) {
+    if (widget.etfceChannels.isEmpty && widget.posthocTopoplots.isEmpty) {
       return const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('No spatial channel data available.')));
+    }
+
+    final hasPostHocs = widget.posthocTopoplots.isNotEmpty;
+    final List<Map<String, dynamic>> activeChannels;
+    final String currentTitle;
+
+    if (_selectedIndex == 0 || !hasPostHocs || _selectedIndex > widget.posthocTopoplots.length) {
+      activeChannels = widget.etfceChannels;
+      currentTitle = 'Omnibus / Spatial eTFCE Cluster Map (* p<0.05)';
+    } else {
+      final pair = widget.posthocTopoplots[_selectedIndex - 1];
+      activeChannels = (pair['channels'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+      currentTitle = 'Post-Hoc Contrast: ${pair['contrast']} (* p<0.05)';
     }
 
     return LayoutBuilder(
@@ -371,6 +393,32 @@ class GroupStatsTopoplotWidget extends StatelessWidget {
         return Center(
           child: Column(
             children: [
+              if (hasPostHocs) ...[
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    ChoiceChip(
+                      label: const Text('Omnibus eTFCE Map', style: TextStyle(fontSize: 11)),
+                      selected: _selectedIndex == 0,
+                      onSelected: (v) => setState(() => _selectedIndex = 0),
+                    ),
+                    for (var i = 0; i < widget.posthocTopoplots.length; i++)
+                      ChoiceChip(
+                        label: Text('Post-Hoc: ${widget.posthocTopoplots[i]['contrast']}', style: const TextStyle(fontSize: 11)),
+                        selected: _selectedIndex == i + 1,
+                        onSelected: (v) => setState(() => _selectedIndex = i + 1),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+              ],
+              Text(
+                currentTitle,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF1F4E79)),
+              ),
+              const SizedBox(height: 8),
               Container(
                 width: size,
                 height: size,
@@ -383,7 +431,7 @@ class GroupStatsTopoplotWidget extends StatelessWidget {
                 ),
                 child: CustomPaint(
                   size: Size(size, size),
-                  painter: _TopoplotPainter(etfceChannels: etfceChannels),
+                  painter: _TopoplotPainter(etfceChannels: activeChannels),
                 ),
               ),
               const SizedBox(height: 12),
@@ -396,7 +444,7 @@ class GroupStatsTopoplotWidget extends StatelessWidget {
                     children: [
                       Container(width: 14, height: 14, decoration: const BoxDecoration(color: Color(0xFFD32F2F), shape: BoxShape.circle)),
                       const SizedBox(width: 6),
-                      const Text('Positive Effect (+t)', style: TextStyle(fontSize: 11)),
+                      const Text('Positive Difference (+Δ)', style: TextStyle(fontSize: 11)),
                     ],
                   ),
                   Row(
@@ -404,7 +452,7 @@ class GroupStatsTopoplotWidget extends StatelessWidget {
                     children: [
                       Container(width: 14, height: 14, decoration: const BoxDecoration(color: Color(0xFF1F4E79), shape: BoxShape.circle)),
                       const SizedBox(width: 6),
-                      const Text('Negative Effect (-t)', style: TextStyle(fontSize: 11)),
+                      const Text('Negative Difference (-Δ)', style: TextStyle(fontSize: 11)),
                     ],
                   ),
                   Row(
@@ -419,7 +467,7 @@ class GroupStatsTopoplotWidget extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 6),
-                      const Text('Significant Channel (p<0.05)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                      const Text('Significant Channel (* p<0.05)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                     ],
                   ),
                 ],

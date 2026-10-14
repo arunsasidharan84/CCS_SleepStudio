@@ -98,8 +98,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   // SWA slider value (0–100). 100 = no smoothing, 0 = maximum smoothing.
   int _swaSlider = 100;
 
-  // Batch pipeline (EEG analysis) state
+  // Batch pipeline (PSG analysis) state
   int _batchSection = 0;
+  int _psgSubSection = 0;
   bool _pipeStepAutoscore = true;
   bool _pipeStepPreprocess = true;
   bool _pipeStepFeatures = true;
@@ -8436,10 +8437,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   Widget _buildBatchProcessingTab() {
     const sections = [
-      (Icons.account_tree_outlined, '1  EEG analysis'),
-      (Icons.monitor_heart_outlined, '2  Polygraphy: OSA & PLM'),
-      (Icons.compare_arrows, '3  Scoring comparison'),
-      (Icons.analytics_outlined, '4  Group statistics'),
+      (Icons.medical_services_outlined, '1  PSG Analysis'),
+      (Icons.compare_arrows, '2  Scoring comparison'),
+      (Icons.analytics_outlined, '3  Group statistics'),
     ];
     final activeSection = _batchSection.clamp(0, sections.length - 1);
     final totalQueued = _batchAnalysePairs.length;
@@ -8663,16 +8663,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   onPressed: _clearBatchOutputFolder,
                 ),
               ],
-              const SizedBox(width: 6),
-              TextButton.icon(
-                onPressed: () => setState(() => _batchSection = 3),
-                icon: const Icon(Icons.analytics_outlined, size: 15),
-                label: const Text('Group Statistics', style: TextStyle(fontSize: 11.5)),
-                style: TextButton.styleFrom(
-                  foregroundColor: activeSection == 3 ? const Color(0xFF38BDF8) : const Color(0xFFCBD5E1),
-                  visualDensity: VisualDensity.compact,
-                ),
-              ),
+
               const SizedBox(width: 8),
               FilledButton.icon(
                 onPressed: totalQueued == 0
@@ -8741,7 +8732,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (activeSection != 3)
+                    if (activeSection != 2)
                       _pipelineStepCard(
                         number: 0,
                         title: 'Recordings',
@@ -8755,9 +8746,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                     KeyedSubtree(
                       key: ValueKey('batch-section-$activeSection'),
                       child: switch (activeSection) {
-                        0 => _buildEegPipelineSection(),
-                        1 => _buildBatchPsgCard(),
-                        2 => _buildBatchComparisonCard(),
+                        0 => _buildPsgAnalysisSection(),
+                        1 => _buildBatchComparisonCard(),
                         _ => _buildGroupStatisticsSection(),
                       },
                     ),
@@ -8811,6 +8801,38 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           '${_pipelineAutoscoreMissingOnly ? ', only for recordings without a scoring' : ', for all recordings'}',
       initiallyExpanded: false,
       body: _buildPipelineAutoscoreSettings(),
+    );
+  }
+
+  Widget _buildPsgAnalysisSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          child: SegmentedButton<int>(
+            segments: const [
+              ButtonSegment<int>(
+                value: 0,
+                icon: Icon(Icons.waves, size: 16),
+                label: Text('EEG Analysis Pipeline', style: TextStyle(fontWeight: FontWeight.w600)),
+              ),
+              ButtonSegment<int>(
+                value: 1,
+                icon: Icon(Icons.monitor_heart, size: 16),
+                label: Text('Polygraphy: OSA & PLM', style: TextStyle(fontWeight: FontWeight.w600)),
+              ),
+            ],
+            selected: {_psgSubSection.clamp(0, 1)},
+            showSelectedIcon: false,
+            onSelectionChanged: (s) => setState(() => _psgSubSection = s.first),
+          ),
+        ),
+        if (_psgSubSection == 0)
+          _buildEegPipelineSection()
+        else
+          _buildBatchPsgCard(),
+      ],
     );
   }
 

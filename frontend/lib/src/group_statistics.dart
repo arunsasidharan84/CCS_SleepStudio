@@ -168,7 +168,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
 
     setState(() {
       _isInspecting = true;
-      _statusMessage = 'Inspecting columns and data structure (Native Zero-Python)…';
+      _statusMessage = 'Inspecting columns and data structure…';
     });
 
     try {
@@ -214,7 +214,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
           _selectedMetrics.addAll(availMetrics.take(8));
         }
 
-        _statusMessage = 'Dataset loaded: ${jsonMap['total_rows']} rows, ${jsonMap['unique_subjects']} subjects detected (Native Zero-Python).';
+        _statusMessage = 'Dataset loaded: ${jsonMap['total_rows']} rows, ${jsonMap['unique_subjects']} subjects detected.';
       });
     } catch (e) {
       _showSnack('Error inspecting file: $e');
@@ -253,7 +253,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
       _isAnalyzing = true;
       _analysisProgress = 0.0;
       _progressStatus = 'Initializing native statistical models…';
-      _statusMessage = 'Running group statistical analysis (100% Native Zero-Python)…';
+      _statusMessage = 'Running group statistical analysis…';
       _consoleLogs.clear();
     });
 
@@ -313,7 +313,7 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
         if (resList.isNotEmpty) {
           _selectedResultMetric = resList.first['metric'] as String?;
         }
-        _statusMessage = 'Analysis completed! Generated ${resList.length} metric models, interactive plots, and reports (Zero-Python).';
+        _statusMessage = 'Analysis completed! Generated ${resList.length} metric models, interactive plots, and reports.';
       });
     } catch (e) {
       _showSnack('Analysis failed: $e');
@@ -1405,7 +1405,10 @@ class _GroupStatisticsWorkbenchState extends State<GroupStatisticsWorkbench> {
               posthocs: posthocs,
             )
           else ...[
-            GroupStatsTopoplotWidget(etfceChannels: etfceChannels),
+            GroupStatsTopoplotWidget(
+              etfceChannels: etfceChannels,
+              posthocTopoplots: (res['posthoc_topoplots'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>(),
+            ),
             const SizedBox(height: 12),
             const Text(
               'Spatial Channel Contrast & Significance Summary:',

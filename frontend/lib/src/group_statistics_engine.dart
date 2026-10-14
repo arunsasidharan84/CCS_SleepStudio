@@ -805,6 +805,9 @@ class GroupStatsEngine {
 
       // ─── 4. SCALP TOPOGRAPHY & eTFCE ────────────────────────────
       final etfceChannels = <Map<String, dynamic>>[];
+      final posthocTopoplots = <Map<String, dynamic>>[];
+      final groupChannelMeans = <String, Map<String, double>>{};
+
       if (chanIdx != null && !isMacro) {
         final chanValues = <String, Map<String, List<double>>>{};
         for (final r in metricRows) {
@@ -815,10 +818,23 @@ class GroupStatsEngine {
           chanValues.putIfAbsent(ch, () => {}).putIfAbsent(grp, () => []).add(val);
         }
 
-        for (final entry in chanValues.entries) {
-          final ch = entry.key;
-          final grpMap = entry.value;
-          if (orderedGroups.length >= 2) {
+        // Group means per channel
+        for (final g in orderedGroups) {
+          final chMeans = <String, double>{};
+          for (final entry in chanValues.entries) {
+            final v = entry.value[g] ?? [];
+            if (v.isNotEmpty) {
+              chMeans[entry.key] = v.reduce((a, b) => a + b) / v.length;
+            }
+          }
+          groupChannelMeans[g] = chMeans;
+        }
+
+        // Omnibus / Main effect comparison
+        if (orderedGroups.length >= 2) {
+          for (final entry in chanValues.entries) {
+            final ch = entry.key;
+            final grpMap = entry.value;
             final vA = grpMap[orderedGroups[0]] ?? [];
             final vB = grpMap[orderedGroups[1]] ?? [];
             if (vA.length >= 2 && vB.length >= 2) {
@@ -849,6 +865,53 @@ class GroupStatsEngine {
               });
             }
           }
+
+          // Pairwise post-hoc comparisons for each group pair
+          for (var i = 0; i < orderedGroups.length; i++) {
+            for (var j = i + 1; j < orderedGroups.length; j++) {
+              final gA = orderedGroups[i];
+              final gB = orderedGroups[j];
+              final pairChannels = <Map<String, dynamic>>[];
+              for (final entry in chanValues.entries) {
+                final ch = entry.key;
+                final vA = entry.value[gA] ?? [];
+                final vB = entry.value[gB] ?? [];
+                if (vA.length >= 2 && vB.length >= 2) {
+                  final mA = vA.reduce((a, b) => a + b) / vA.length;
+                  final mB = vB.reduce((a, b) => a + b) / vB.length;
+                  final diff = mB - mA;
+                  var sASq = 0.0;
+                  for (final x in vA) {
+                    sASq += math.pow(x - mA, 2);
+                  }
+                  sASq /= (vA.length - 1);
+                  var sBSq = 0.0;
+                  for (final x in vB) {
+                    sBSq += math.pow(x - mB, 2);
+                  }
+                  sBSq /= (vB.length - 1);
+                  final df = (vA.length + vB.length - 2).toDouble();
+                  final sp = math.sqrt(((vA.length - 1) * sASq + (vB.length - 1) * sBSq) / df);
+                  final se = sp * math.sqrt(1.0 / vA.length + 1.0 / vB.length);
+                  final tVal = se > 0 ? diff / se : 0.0;
+                  final pVal = StatMath.studentTPValue(tVal, df);
+                  pairChannels.add({
+                    'channel': ch,
+                    'mean_diff': diff,
+                    't_stat': tVal,
+                    'p_value': pVal,
+                    'significant': pVal < 0.05,
+                  });
+                }
+              }
+              posthocTopoplots.add({
+                'contrast': '$gB vs $gA',
+                'group_a': gA,
+                'group_b': gB,
+                'channels': pairChannels,
+              });
+            }
+          }
         }
       }
 
@@ -865,6 +928,8 @@ class GroupStatsEngine {
         'posthoc_contrasts': rawPosthocs,
         'descriptives': metricDescriptives,
         'etfce_channels': etfceChannels,
+        'posthoc_topoplots': posthocTopoplots,
+        'group_channel_means': groupChannelMeans,
         'ordered_groups': orderedGroups,
         'ordered_subgroups': orderedSubgroups,
       });
@@ -926,7 +991,7 @@ class GroupStatsEngine {
     );
     await htmlFile.writeAsString(htmlContent);
 
-    onProgress?.call(1.0, 'Analysis completed successfully (100% Native Zero-Python)!');
+    onProgress?.call(1.0, 'Analysis completed successfully!');
 
     return {
       'output_dir': outDir.path,
@@ -1021,7 +1086,7 @@ class GroupStatsEngine {
 
     buf.writeln('<div class="header">');
     buf.writeln('<h1>CCS Sleep Studio — Group Statistical Publishing Report</h1>');
-    buf.writeln('<div class="meta">Generated: ${DateTime.now().toLocal()} · Native Pure Dart Engine (Zero Python) · Directory: $outputDir</div>');
+    buf.writeln('<div class="meta">Generated: ${DateTime.now().toLocal()} · Native Group Statistics Engine · Directory: $outputDir</div>');
     buf.writeln('</div>');
 
     for (var i = 0; i < resultsList.length; i++) {
@@ -1098,6 +1163,30 @@ class GroupStatsEngine {
         buf.writeln('</tr>');
       }
       buf.writeln('</table>');
+
+      // Scalp Topography & Post-Hoc Contrasts Table
+      final posthocTopos = (res['posthoc_topoplots'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+      if (posthocTopos.isNotEmpty) {
+        buf.writeln('<h3>Scalp Topography & Post-Hoc Pairwise Channel Contrasts</h3>');
+        for (final pair in posthocTopos) {
+          final chs = (pair['channels'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+          buf.writeln('<h4 style="color:#1F4E79; margin-top:16px;">Post-Hoc Contrast: <em>${pair['contrast']}</em></h4>');
+          buf.writeln('<table>');
+          buf.writeln('<tr><th>Channel (10-20)</th><th>Mean Difference (&Delta;)</th><th>t-Statistic</th><th>p-Value</th><th>Significance</th></tr>');
+          for (final ch in chs) {
+            final isSig = ch['significant'] == true;
+            final pVal = ch['p_value'] as double;
+            buf.writeln('<tr style="${isSig ? 'background:#FEF9C3;' : ''}">');
+            buf.writeln('<td><strong>${ch['channel']}</strong>${isSig ? ' *' : ''}</td>');
+            buf.writeln('<td>${(ch['mean_diff'] as double).toStringAsFixed(3)}</td>');
+            buf.writeln('<td>${(ch['t_stat'] as double).toStringAsFixed(2)}</td>');
+            buf.writeln('<td class="${isSig ? 'sig' : ''}">${pVal < 0.001 ? '<0.001' : pVal.toStringAsFixed(4)}</td>');
+            buf.writeln('<td class="${isSig ? 'sig' : ''}">${isSig ? '* (p < 0.05)' : 'ns'}</td>');
+            buf.writeln('</tr>');
+          }
+          buf.writeln('</table>');
+        }
+      }
 
       buf.writeln('</div>');
     }

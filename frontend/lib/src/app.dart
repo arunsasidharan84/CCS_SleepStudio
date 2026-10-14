@@ -100,10 +100,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   // Batch pipeline (PSG analysis) state
   int _batchSection = 0;
-  int _psgSubSection = 0;
   bool _pipeStepAutoscore = true;
   bool _pipeStepPreprocess = true;
   bool _pipeStepFeatures = true;
+  bool _pipeStepRespiratory = true;
+  bool _pipeStepPlm = true;
   bool _pipeStepCompile = true;
   bool _pipelineUseCleaned = true;
   bool _pipelineAutoscoreMissingOnly = true;
@@ -7147,67 +7148,90 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       PlatformMenu(
         label: 'Utilities',
         menus: [
-          if (!buildLite) ...[
-            PlatformMenuItem(
-              label: 'AnalyseNidra — Advanced Sleep EEG Analysis…',
-              onSelected: _runAnalyseNidraCurrent,
-            ),
-          ],
-          PlatformMenuItem(
-            label: 'K-Complex Detection (MT-KCD)  [Ctrl+K]',
-            onSelected: _runKComplexDetection,
+          PlatformMenuItemGroup(
+            members: [
+              PlatformMenuItem(
+                label: 'Preprocessing Pipeline (Filters, RANSAC, GEDAI)…',
+                onSelected: _openPreprocessDialog,
+              ),
+              PlatformMenuItem(
+                label: 'Auto electric stim artefact removal (DBS)…',
+                onSelected: _openStimArtifactRemovalDialog,
+              ),
+              PlatformMenuItem(
+                label: 'EEG Utilities Module (Reduce, Crop, Rename, Anonymize & Batch)…',
+                onSelected: _openEdfUtilitiesDialog,
+              ),
+            ],
           ),
-          PlatformMenuItem(
-            label: 'Spindle Detection (MT-Spindle)  [Ctrl+Shift+S]',
-            onSelected: _runSpindleDetection,
+          PlatformMenuItemGroup(
+            members: [
+              PlatformMenuItem(
+                label: 'Spindle Detection (MT-Spindle)  [Ctrl+Shift+S]',
+                onSelected: _runSpindleDetection,
+              ),
+              PlatformMenuItem(
+                label: 'K-Complex Detection (MT-KCD)  [Ctrl+K]',
+                onSelected: _runKComplexDetection,
+              ),
+              PlatformMenuItem(
+                label: 'AnalyseNidra Detection (Spindles & Slow-Waves)…',
+                onSelected: _runAnalyseNidraDetection,
+              ),
+              PlatformMenuItem(
+                label: 'Cyclic Alternating Pattern (CAP) Analysis…',
+                onSelected: _runCapAnalysis,
+              ),
+            ],
           ),
-          PlatformMenuItem(
-            label: 'AnalyseNidra Detection (Spindles & Slow-Waves)…',
-            onSelected: _runAnalyseNidraDetection,
+          PlatformMenuItemGroup(
+            members: [
+              PlatformMenuItem(
+                label: 'Respiratory / OSA Analysis (AASM)…',
+                onSelected: _runRespiratoryAnalysis,
+              ),
+              PlatformMenuItem(
+                label: 'Periodic Limb Movement (PLMS) Analysis…',
+                onSelected: _runPlmAnalysis,
+              ),
+              PlatformMenuItem(
+                label: 'Show / Remove OSA, PLM & CAP Markers…',
+                onSelected: _managePsgMarkers,
+              ),
+            ],
           ),
-          PlatformMenuItem(
-            label: 'Respiratory / OSA Analysis (AASM)…',
-            onSelected: _runRespiratoryAnalysis,
+          PlatformMenuItemGroup(
+            members: [
+              if (!buildLite)
+                PlatformMenuItem(
+                  label: 'AnalyseNidra — Advanced Sleep EEG Analysis…',
+                  onSelected: _runAnalyseNidraCurrent,
+                ),
+              PlatformMenuItem(
+                label: 'Feature Selection & Extraction Parameters…',
+                onSelected: _openFeatureSelectionAndConfigDialog,
+              ),
+            ],
           ),
-          PlatformMenuItem(
-            label: 'Periodic Limb Movement (PLMS) Analysis…',
-            onSelected: _runPlmAnalysis,
+          PlatformMenuItemGroup(
+            members: [
+              PlatformMenuItem(
+                label: 'Zoom on selected EEG  [Z]',
+                onSelected: _zoomOnSelectedEeg,
+              ),
+              PlatformMenuItem(
+                label: 'Find similar epochs from current epoch…',
+                onSelected: _showSimilarEpochDialog,
+              ),
+            ],
           ),
-          PlatformMenuItem(
-            label: 'Cyclic Alternating Pattern (CAP) Analysis…',
-            onSelected: _runCapAnalysis,
-          ),
-          PlatformMenuItem(
-            label: 'Show / Remove OSA, PLM & CAP Markers…',
-            onSelected: _managePsgMarkers,
-          ),
-          PlatformMenuItem(
-            label: 'Find similar epochs from current epoch…',
-            onSelected: _showSimilarEpochDialog,
-          ),
-          PlatformMenuItem(
-            label: 'Zoom on selected EEG  [Z]',
-            onSelected: _zoomOnSelectedEeg,
-          ),
-          PlatformMenuItem(
-            label: 'EEG Utilities Module (Reduce, Crop, Rename, Anonymize & Batch)…',
-            onSelected: _openEdfUtilitiesDialog,
-          ),
-          PlatformMenuItem(
-            label: 'Auto electric stim artefact removal (DBS)…',
-            onSelected: _openStimArtifactRemovalDialog,
-          ),
-          PlatformMenuItem(
-            label: 'Preprocessing Pipeline (Filters, RANSAC, GEDAI)…',
-            onSelected: _openPreprocessDialog,
-          ),
-          PlatformMenuItem(
-            label: 'Feature Selection & Extraction Parameters…',
-            onSelected: _openFeatureSelectionAndConfigDialog,
-          ),
-          PlatformMenuItem(
-            label: 'Export Sleep Report (PDF)',
-            onSelected: _exportSleepReport,
+          PlatformMenuItemGroup(
+            members: [
+              PlatformMenuItem(
+                label: 'Export Sleep Report (PDF)',
+                onSelected: _exportSleepReport,
+              ),
+            ],
           ),
         ],
       ),
@@ -7344,6 +7368,21 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         ],
       ),
     ];
+  }
+
+  Widget _menuSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 9.5,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.8,
+          color: Color(0xFF6E6E6E),
+        ),
+      ),
+    );
   }
 
   Widget _buildInAppMenuBar() {
@@ -7526,72 +7565,90 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           ),
           SubmenuButton(
             menuChildren: [
-              if (!buildLite) ...[
-                MenuItemButton(
-                  onPressed: _runAnalyseNidraCurrent,
-                  child: const Text(
-                    'AnalyseNidra — Advanced Sleep EEG Analysis…',
-                  ),
-                ),
-                const Divider(height: 1),
-              ],
+              _menuSectionHeader('SIGNAL PREPROCESSING & CLEANING'),
               MenuItemButton(
-                onPressed: _runKComplexDetection,
-                child: const Text('K-Complex Detection (MT-KCD) [Ctrl+K]'),
-              ),
-              MenuItemButton(
-                onPressed: _runSpindleDetection,
-                child: const Text(
-                  'Spindle Detection (MT-Spindle) [Ctrl+Shift+S]',
-                ),
-              ),
-              MenuItemButton(
-                onPressed: _runAnalyseNidraDetection,
-                child: const Text(
-                  'AnalyseNidra Detection (Spindles & Slow-Waves)…',
-                ),
-              ),
-              MenuItemButton(
-                onPressed: _runRespiratoryAnalysis,
-                child: const Text('Respiratory / OSA Analysis (AASM)…'),
-              ),
-              MenuItemButton(
-                onPressed: _runPlmAnalysis,
-                child: const Text('Periodic Limb Movement (PLMS) Analysis…'),
-              ),
-              MenuItemButton(
-                onPressed: _runCapAnalysis,
-                child: const Text('Cyclic Alternating Pattern (CAP) Analysis…'),
-              ),
-              MenuItemButton(
-                onPressed: _managePsgMarkers,
-                child: const Text('Show / Remove OSA, PLM & CAP Markers…'),
-              ),
-              MenuItemButton(
-                onPressed: _showSimilarEpochDialog,
-                child: const Text('Find similar epochs from current epoch…'),
-              ),
-              MenuItemButton(
-                onPressed: _zoomOnSelectedEeg,
-                child: const Text('Zoom on selected EEG [Z]'),
-              ),
-              MenuItemButton(
-                onPressed: _openEdfUtilitiesDialog,
-                child: const Text('EEG Utilities Module (Crop, Downsample, Rename, Anonymize & Batch)…'),
-              ),
-              MenuItemButton(
-                onPressed: _openStimArtifactRemovalDialog,
-                child: const Text('Auto electric stim artefact removal (DBS)…'),
-              ),
-              MenuItemButton(
+                leadingIcon: const Icon(Icons.auto_fix_high, size: 18),
                 onPressed: _openPreprocessDialog,
                 child: const Text('Preprocessing Pipeline (Filters, RANSAC, GEDAI)…'),
               ),
               MenuItemButton(
+                leadingIcon: const Icon(Icons.flash_off, size: 18),
+                onPressed: _openStimArtifactRemovalDialog,
+                child: const Text('Auto electric stim artefact removal (DBS)…'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.transform, size: 18),
+                onPressed: _openEdfUtilitiesDialog,
+                child: const Text('EEG Utilities Module (Crop, Downsample, Rename, Anonymize & Batch)…'),
+              ),
+              const Divider(height: 8),
+              _menuSectionHeader('MICRO-EVENTS & TRANSIENT DETECTION'),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.grain, size: 18),
+                onPressed: _runSpindleDetection,
+                child: const Text('Spindle Detection (MT-Spindle)  [Ctrl+Shift+S]'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.show_chart, size: 18),
+                onPressed: _runKComplexDetection,
+                child: const Text('K-Complex Detection (MT-KCD)  [Ctrl+K]'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.bolt, size: 18),
+                onPressed: _runAnalyseNidraDetection,
+                child: const Text('AnalyseNidra Detection (Spindles & Slow-Waves)…'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.all_inclusive, size: 18),
+                onPressed: _runCapAnalysis,
+                child: const Text('Cyclic Alternating Pattern (CAP) Analysis…'),
+              ),
+              const Divider(height: 8),
+              _menuSectionHeader('POLYGRAPHY: RESPIRATORY (OSA) & PLM'),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.air, size: 18),
+                onPressed: _runRespiratoryAnalysis,
+                child: const Text('Respiratory / OSA Analysis (AASM)…'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.directions_walk, size: 18),
+                onPressed: _runPlmAnalysis,
+                child: const Text('Periodic Limb Movement (PLMS) Analysis…'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.bookmark_border, size: 18),
+                onPressed: _managePsgMarkers,
+                child: const Text('Show / Remove OSA, PLM & CAP Markers…'),
+              ),
+              const Divider(height: 8),
+              _menuSectionHeader('ADVANCED SLEEP EEG PIPELINE'),
+              if (!buildLite)
+                MenuItemButton(
+                  leadingIcon: const Icon(Icons.analytics_outlined, size: 18),
+                  onPressed: _runAnalyseNidraCurrent,
+                  child: const Text('AnalyseNidra — Advanced Sleep EEG Analysis…'),
+                ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.tune, size: 18),
                 onPressed: _openFeatureSelectionAndConfigDialog,
                 child: const Text('Feature Selection & Extraction Parameters…'),
               ),
+              const Divider(height: 8),
+              _menuSectionHeader('INTERACTIVE VIEWER TOOLS'),
               MenuItemButton(
+                leadingIcon: const Icon(Icons.zoom_in, size: 18),
+                onPressed: _zoomOnSelectedEeg,
+                child: const Text('Zoom on selected EEG  [Z]'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.find_in_page, size: 18),
+                onPressed: _showSimilarEpochDialog,
+                child: const Text('Find similar epochs from current epoch…'),
+              ),
+              const Divider(height: 8),
+              _menuSectionHeader('REPORTING & EXPORT'),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.picture_as_pdf, size: 18),
                 onPressed: _exportSleepReport,
                 child: const Text('Export Sleep Report (PDF)'),
               ),
@@ -8326,6 +8383,120 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       }
     }
 
+    if (selected.contains('respiratory')) {
+      final hypopneaRule = _batchPsgHypopneaRule;
+      final pressure = _batchPsgPressureController.text.trim();
+      final thermal = _batchPsgThermalController.text.trim();
+      final spo2 = _batchPsgSpo2Controller.text.trim();
+      steps.add(
+        PipelineStep(
+          key: 'respiratory',
+          title: 'Respiratory (OSA)',
+          build: (r) {
+            final input = featureInput(r);
+            if (!analyseNidraReadsNatively(input)) {
+              throw PipelineSkip('convert ${_basename(input)} to EDF first');
+            }
+            final outDir = _pipelineOutDir();
+            final respOut = respiratoryReportPath(
+              outDir != null
+                  ? '$outDir${Platform.pathSeparator}${_basename(r.source)}'
+                  : r.source,
+            );
+            if (resume && File(respOut).existsSync()) {
+              r.respiratory = respOut;
+              throw PipelineSkip('respiratory report exists (${_basename(respOut)})', reused: true);
+            }
+            return buildRespiratoryArgs(
+              edfPath: input,
+              scoringPath: r.scoring.isNotEmpty && File(r.scoring).existsSync() ? r.scoring : null,
+              outPath: respOut,
+              settings: {
+                'channels': {
+                  if (pressure.isNotEmpty) 'pressure': pressure,
+                  if (thermal.isNotEmpty) 'thermal': thermal,
+                  if (spo2.isNotEmpty) 'spo2': spo2,
+                },
+                'hypopneaRule': hypopneaRule,
+                'arousalMode': 'prefer-manual',
+              },
+            );
+          },
+          onSuccess: (r, log) {
+            final outDir = _pipelineOutDir();
+            final respOut = pipelineOutputFromLog(log, 'RESPIRATORY') ??
+                respiratoryReportPath(
+                  outDir != null
+                      ? '$outDir${Platform.pathSeparator}${_basename(r.source)}'
+                      : r.source,
+                );
+            if (File(respOut).existsSync()) {
+              r.respiratory = respOut;
+            }
+          },
+        ),
+      );
+    }
+
+    if (selected.contains('plm')) {
+      final left = _batchPsgLeftLegController.text.trim();
+      final right = _batchPsgRightLegController.text.trim();
+      final standard = _batchPsgPlmStandard;
+      steps.add(
+        PipelineStep(
+          key: 'plm',
+          title: 'Limb Movements (PLM)',
+          build: (r) {
+            final input = featureInput(r);
+            if (!analyseNidraReadsNatively(input)) {
+              throw PipelineSkip('convert ${_basename(input)} to EDF first');
+            }
+            final outDir = _pipelineOutDir();
+            final plmOut = plmReportPath(
+              outDir != null
+                  ? '$outDir${Platform.pathSeparator}${_basename(r.source)}'
+                  : r.source,
+            );
+            if (resume && File(plmOut).existsSync()) {
+              r.plm = plmOut;
+              throw PipelineSkip('PLM report exists (${_basename(plmOut)})', reused: true);
+            }
+            final respOut = r.respiratory ??
+                respiratoryReportPath(
+                  outDir != null
+                      ? '$outDir${Platform.pathSeparator}${_basename(r.source)}'
+                      : r.source,
+                );
+            final haveResp = File(respOut).existsSync();
+            return buildPlmArgs(
+              edfPath: input,
+              scoringPath: r.scoring.isNotEmpty && File(r.scoring).existsSync() ? r.scoring : null,
+              outPath: plmOut,
+              respiratoryJson: haveResp ? respOut : null,
+              settings: {
+                if (left.isNotEmpty) 'left': left,
+                if (right.isNotEmpty) 'right': right,
+                'standard': standard,
+                'useRespiratory': haveResp,
+              },
+            );
+          },
+          onSuccess: (r, log) {
+            final outDir = _pipelineOutDir();
+            final plmOut = pipelineOutputFromLog(log, 'PLM') ??
+                plmReportPath(
+                  outDir != null
+                      ? '$outDir${Platform.pathSeparator}${_basename(r.source)}'
+                      : r.source,
+                );
+            if (File(plmOut).existsSync()) {
+              r.plm = plmOut;
+            }
+          },
+        ),
+      );
+    }
+
     Future<String?> Function(List<PipelineRecording>)? finalize;
     if (selected.contains('compile')) {
       finalize = (recs) async {
@@ -8351,12 +8522,21 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             recordingFor[path] = r.source;
           }
         }
-        if (files.isEmpty) return 'No regional CSV files to compile.';
+        final targetDir = outDir ?? File(recs.first.source).parent.path;
+        final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
+
+        if (files.isEmpty) {
+          // If no regional CSV files exist, check if PSG summary can be compiled from reports
+          final psgSummary = await _writePsgBatchSummaryFromRecordings(recs, targetDir, stamp);
+          if (psgSummary != null) {
+            return 'Compiled PSG batch summary into ${_basename(psgSummary)}';
+          }
+          return 'No regional CSV files or PSG reports to compile.';
+        }
+
         final empty = await regionalCsvFilesWithoutData(files);
         final usable = files.where((f) => !empty.contains(f)).toList();
         if (usable.isEmpty) return 'All regional CSV files are empty; re-run feature extraction.';
-        final targetDir = outDir ?? File(recs.first.source).parent.path;
-        final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
         final master = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet_$stamp.csv';
         final compiledContent = await compileRegionalCsvFiles(
           usable,
@@ -8364,6 +8544,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           recordingPaths: recordingFor,
         );
         await File(master).writeAsString(compiledContent);
+        // Also produce companion PSG summary if polygraphy reports were present
+        await _writePsgBatchSummaryFromRecordings(recs, targetDir, stamp);
         if (mounted) {
           setState(() {
             _lastAnalyseRegionalFiles = usable;
@@ -8387,7 +8569,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             : File(recordings.first.source).parent.path);
     final title = selected.length == 1 && selected.contains('autoscore')
         ? 'Autoscore — ${recordings.length} recording(s)'
-        : 'EEG analysis pipeline — ${recordings.length} recording(s)';
+        : 'PSG analysis pipeline — ${recordings.length} recording(s)';
     final proceed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -8417,6 +8599,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               }
               if (r.cleaned != null) pair['cleanedPath'] = r.cleaned!;
               if (r.regional != null) pair['regionalPath'] = r.regional!;
+              if (r.respiratory != null) pair['respiratoryPath'] = r.respiratory!;
+              if (r.plm != null) pair['plmPath'] = r.plm!;
             }
             final regionals = [
               for (final r in recs)
@@ -8426,13 +8610,79 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           });
           _setStatus(
             failed == 0
-                ? 'Pipeline finished for ${recs.length} recording(s)'
-                : 'Pipeline finished with $failed failed step(s) — see the logs',
+                ? 'PSG pipeline finished for ${recs.length} recording(s)'
+                : 'PSG pipeline finished with $failed failed step(s) — see the logs',
           );
         },
       ),
     );
     if (proceed == true && then != null && mounted) then();
+  }
+
+  Future<String?> _writePsgBatchSummaryFromRecordings(
+    List<PipelineRecording> recs,
+    String targetDir,
+    String stamp,
+  ) async {
+    final rows = <List<String>>[];
+    for (final r in recs) {
+      final path = r.source;
+      final outDir = _pipelineOutDir();
+      final baseDir = outDir ?? File(path).parent.path;
+      final stem = _basename(path).replaceAll(RegExp(r'\.[^.]+$'), '');
+      final respPath = r.respiratory ?? '$baseDir${Platform.pathSeparator}${stem}_respiratory.json';
+      final plmPath = r.plm ?? '$baseDir${Platform.pathSeparator}${stem}_plm.json';
+      final capPath = '$baseDir${Platform.pathSeparator}${stem}_cap.json';
+
+      final reports = <String, Map<String, dynamic>?>{
+        'respiratory': await loadPsgReport(respPath),
+        'plm': await loadPsgReport(plmPath),
+        'cap': await loadPsgReport(capPath),
+      };
+
+      final hasAny = reports.values.any((m) => m != null && m.isNotEmpty);
+      if (!hasAny) continue;
+
+      String cell(String analysis, String section, String key) {
+        final v = (reports[analysis]?[section] as Map?)?[key];
+        if (v == null) return '';
+        if (v is num) return v.isFinite ? v.toStringAsFixed(3) : '';
+        return v.toString();
+      }
+
+      final meta = _batchMetadata;
+      final metaRow = meta?.lookup(path);
+      rows.add([
+        path,
+        r.scoring,
+        if (meta != null)
+          for (final h in meta.headers) metaRow?[h] ?? '',
+        for (final c in _kBatchPsgColumns) cell(c.$1, c.$2, c.$3),
+      ]);
+    }
+
+    if (rows.isEmpty) return null;
+
+    String esc(String v) => v.contains(RegExp(r'[,"\n]')) ? '"${v.replaceAll('"', '""')}"' : v;
+    final header = [
+      'recording',
+      'scoring',
+      if (_batchMetadata != null) ..._batchMetadata!.headers,
+      for (final c in _kBatchPsgColumns)
+        c.$1 == 'cap'
+            ? (c.$3.toUpperCase().startsWith('CAP_') ? c.$3 : 'CAP_${c.$3}')
+            : '${c.$1}_${c.$3}',
+    ];
+    final csvPath = '$targetDir${Platform.pathSeparator}psg_batch_summary_$stamp.csv';
+    try {
+      await Directory(targetDir).create(recursive: true);
+      await File(csvPath).writeAsString(
+        [header, ...rows].map((r) => r.map(esc).join(',')).join('\n'),
+      );
+      return csvPath;
+    } catch (_) {
+      return null;
+    }
   }
 
   Widget _buildBatchProcessingTab() {
@@ -8805,48 +9055,20 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   }
 
   Widget _buildPsgAnalysisSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          child: SegmentedButton<int>(
-            segments: const [
-              ButtonSegment<int>(
-                value: 0,
-                icon: Icon(Icons.waves, size: 16),
-                label: Text('EEG Analysis Pipeline', style: TextStyle(fontWeight: FontWeight.w600)),
-              ),
-              ButtonSegment<int>(
-                value: 1,
-                icon: Icon(Icons.monitor_heart, size: 16),
-                label: Text('Polygraphy: OSA & PLM', style: TextStyle(fontWeight: FontWeight.w600)),
-              ),
-            ],
-            selected: {_psgSubSection.clamp(0, 1)},
-            showSelectedIcon: false,
-            onSelectionChanged: (s) => setState(() => _psgSubSection = s.first),
-          ),
-        ),
-        if (_psgSubSection == 0)
-          _buildEegPipelineSection()
-        else
-          _buildBatchPsgCard(),
-      ],
-    );
-  }
-
-  Widget _buildEegPipelineSection() {
     final includes = <(String, String, bool, ValueChanged<bool>)>[
       if (!buildLite)
         ('autoscore', '1  Autoscore', _pipeStepAutoscore, (v) => setState(() => _pipeStepAutoscore = v)),
       ('preprocess', '${buildLite ? 1 : 2}  Preprocess', _pipeStepPreprocess, (v) => setState(() => _pipeStepPreprocess = v)),
-      ('features', '${buildLite ? 2 : 3}  Extract features', _pipeStepFeatures, (v) => setState(() => _pipeStepFeatures = v)),
-      ('compile', '${buildLite ? 3 : 4}  Compile', _pipeStepCompile, (v) => setState(() => _pipeStepCompile = v)),
+      ('features', '${buildLite ? 2 : 3}  EEG features', _pipeStepFeatures, (v) => setState(() => _pipeStepFeatures = v)),
+      ('respiratory', '${buildLite ? 3 : 4}  Respiratory (OSA)', _pipeStepRespiratory, (v) => setState(() => _pipeStepRespiratory = v)),
+      ('plm', '${buildLite ? 4 : 5}  Limb movements (PLM)', _pipeStepPlm, (v) => setState(() => _pipeStepPlm = v)),
+      ('compile', '${buildLite ? 5 : 6}  Compile', _pipeStepCompile, (v) => setState(() => _pipeStepCompile = v)),
     ];
     final analysisKeys = {
       if (_pipeStepPreprocess) 'preprocess',
       if (_pipeStepFeatures) 'features',
+      if (_pipeStepRespiratory) 'respiratory',
+      if (_pipeStepPlm) 'plm',
       if (_pipeStepCompile) 'compile',
     };
     final includeAutoscore = _pipeStepAutoscore &&
@@ -8865,9 +9087,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Run the steps in order for every recording. Enable 1 Autoscore to automatically stage recordings '
-                '(existing manual scorings are never overwritten), clean the EEG in 2 Preprocess, extract sleep-stage '
-                'features in 3 Extract features, and compile the master sheet and reports in 4 Compile.',
+                'Run the selected PSG pipeline steps in sequence across all recordings. Combine Autoscore, Preprocess, '
+                'EEG Features, Respiratory (OSA), Limb Movements (PLM), and Compile in any combination using the toggles below.',
                 style: TextStyle(fontSize: 12.5, color: Colors.black87),
               ),
               const SizedBox(height: 10),
@@ -8969,8 +9190,28 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         ),
         _pipelineStepCard(
           number: buildLite ? 3 : 4,
-          title: 'Compile features',
-          subtitle: 'One master sheet across recordings (AnalyseNidra_master_sheet.csv) and batch PDF reports',
+          title: 'Respiratory / OSA',
+          leadingIcon: Icons.air,
+          subtitle: 'Rule: ${_batchPsgHypopneaRule == 3 ? "1A (3%/arousal)" : "1B (4%)"} · channels: auto-detected or mapped',
+          stepKey: 'respiratory',
+          included: _pipeStepRespiratory,
+          onIncluded: (v) => setState(() => _pipeStepRespiratory = v),
+          body: _buildPipelineRespiratorySettings(),
+        ),
+        _pipelineStepCard(
+          number: buildLite ? 4 : 5,
+          title: 'Limb movements (PLM)',
+          leadingIcon: Icons.directions_walk,
+          subtitle: 'Standard: ${_batchPsgPlmStandard.toUpperCase()} · leg EMG: auto-detected or mapped',
+          stepKey: 'plm',
+          included: _pipeStepPlm,
+          onIncluded: (v) => setState(() => _pipeStepPlm = v),
+          body: _buildPipelinePlmSettings(),
+        ),
+        _pipelineStepCard(
+          number: buildLite ? 5 : 6,
+          title: 'Compile features & reports',
+          subtitle: 'Unified master sheet across recordings (AnalyseNidra_master_sheet.csv) and batch PDF reports',
           stepKey: 'compile',
           included: _pipeStepCompile,
           onIncluded: (v) => setState(() => _pipeStepCompile = v),
@@ -9473,6 +9714,117 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                             ),
                           ),
 
+      ],
+    );
+  }
+
+  Widget _buildPipelineRespiratorySettings() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Detects apneas, hypopneas, desaturations, and respiratory effort-related arousals according to AASM criteria. '
+          'Outputs AHI, ODI, hypoxic burden, and markers on the hypnogram and raw signals.',
+          style: TextStyle(fontSize: 12.5, color: Colors.black87),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 16,
+          runSpacing: 8,
+          children: [
+            SizedBox(
+              width: 240,
+              child: DropdownButtonFormField<int>(
+                value: _batchPsgHypopneaRule,
+                isExpanded: true,
+                isDense: true,
+                decoration: const InputDecoration(
+                  labelText: 'Hypopnea definition rule',
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 3, child: Text('Rule 1A (3% desat / arousal)')),
+                  DropdownMenuItem(value: 4, child: Text('Rule 1B (4% desat)')),
+                ],
+                onChanged: (v) => setState(() => _batchPsgHypopneaRule = v ?? 3),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          _pipelineFirstRecording == null
+              ? 'Respiratory channels (optional — auto-detected if blank):'
+              : 'Respiratory channels (lists come from ${_basename(_pipelineFirstRecording!)}):',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _batchPsgField(_batchPsgPressureController, 'Nasal pressure', 'Select nasal pressure channel'),
+            _batchPsgField(_batchPsgThermalController, 'Oronasal thermal', 'Select thermal airflow channel'),
+            _batchPsgField(_batchPsgSpo2Controller, 'SpO₂', 'Select SpO2 channel'),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPipelinePlmSettings() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Identifies candidate limb movements and clusters them into periodic limb movement series (PLMS) per AASM or WASM criteria. '
+          'Limb movements occurring during respiratory events are excluded when Respiratory analysis is also active.',
+          style: TextStyle(fontSize: 12.5, color: Colors.black87),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 16,
+          runSpacing: 8,
+          children: [
+            SizedBox(
+              width: 240,
+              child: DropdownButtonFormField<String>(
+                value: _batchPsgPlmStandard,
+                isExpanded: true,
+                isDense: true,
+                decoration: const InputDecoration(
+                  labelText: 'Scoring standard',
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'aasm', child: Text('AASM v3 Standard')),
+                  DropdownMenuItem(value: 'wasm', child: Text('WASM 2016 Standard')),
+                ],
+                onChanged: (v) => setState(() => _batchPsgPlmStandard = v ?? 'aasm'),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          _pipelineFirstRecording == null
+              ? 'Leg EMG channels (optional — auto-detected if blank):'
+              : 'Leg EMG channels (lists come from ${_basename(_pipelineFirstRecording!)}):',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _batchPsgField(_batchPsgLeftLegController, 'Left leg EMG', 'Select left tibialis channel'),
+            _batchPsgField(_batchPsgRightLegController, 'Right leg EMG', 'Select right tibialis channel'),
+          ],
+        ),
       ],
     );
   }

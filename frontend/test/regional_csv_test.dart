@@ -79,4 +79,31 @@ void main() {
     expect(updated, contains('Central,0.12,48.5,14.2'));
     expect(updated, contains('Frontal,0.18,48.5,14.2'));
   });
+
+  test('merges companion _respiratory.json and _plm.json metrics into compiled master sheet', () async {
+    final directory = await Directory.systemTemp.createTemp('analyse_psg_');
+    final regional = await File(
+      '${directory.path}/rec03_analyse_regional.csv',
+    ).writeAsString('Chan,N2_ACW\nCentral,0.15\n');
+    await File(
+      '${directory.path}/rec03_respiratory.json',
+    ).writeAsString('{"summary": {"AHI": 18.5, "ODI3": 14.2}, "flags": {"severity": "Moderate"}}');
+    await File(
+      '${directory.path}/rec03_plm.json',
+    ).writeAsString('{"summary": {"PLMS_index": 22.4}, "flags": {"PLMS_severity": "Severe"}}');
+
+    final compiled = await compileRegionalCsvFiles([regional.path]);
+
+    expect(compiled, contains('RESP_AHI'));
+    expect(compiled, contains('18.500'));
+    expect(compiled, contains('RESP_ODI3'));
+    expect(compiled, contains('14.200'));
+    expect(compiled, contains('RESP_severity'));
+    expect(compiled, contains('Moderate'));
+    expect(compiled, contains('PLM_PLMS_index'));
+    expect(compiled, contains('22.400'));
+    expect(compiled, contains('PLM_PLMS_severity'));
+    expect(compiled, contains('Severe'));
+  });
 }
+

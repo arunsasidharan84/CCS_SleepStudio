@@ -16,7 +16,14 @@ enum PipelineStatus { pending, running, done, reused, skipped, failed, blocked }
 
 /// One recording travelling through the pipeline.
 class PipelineRecording {
-  PipelineRecording({required this.source, this.scoring = '', this.cleaned, this.regional});
+  PipelineRecording({
+    required this.source,
+    this.scoring = '',
+    this.cleaned,
+    this.regional,
+    this.respiratory,
+    this.plm,
+  });
 
   final String source;
 
@@ -31,6 +38,12 @@ class PipelineRecording {
 
   /// Regional CSV written by the feature step.
   String? regional;
+
+  /// Respiratory JSON report written by the respiratory step.
+  String? respiratory;
+
+  /// PLM JSON report written by the PLM step.
+  String? plm;
 
   final Map<String, PipelineStatus> status = {};
   final Map<String, String> notes = {};

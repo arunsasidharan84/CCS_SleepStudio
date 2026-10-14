@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <b>Current version: 1.37.4</b> ·
+  <b>Current version: 1.37.5</b> ·
   <a href="CHANGELOG.md">Detailed changelog</a> ·
   <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/issues">Report a problem</a>
 </p>

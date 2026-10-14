@@ -4,7 +4,7 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
-## [1.37.4]
+## [1.37.5]
 *   **Unified PSG Batch Analysis Pipeline with Toggleable Substeps:**
     - Merged previously separate "EEG Analysis Pipeline" and "Polygraphy: OSA & PLM" sub-tabs into a single unified **PSG Analysis** pipeline.
     - All stages are now toggleable substeps that can be freely combined in any sequence: `[✓ Autoscore] -> [✓ Preprocess] -> [✓ EEG Features] -> [✓ Respiratory / OSA] -> [✓ Limb / PLM] -> [✓ Compile]`.

@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <b>Current version: 1.30.0</b> ·
+  <b>Current version: 1.37.4</b> ·
   <a href="CHANGELOG.md">Detailed changelog</a> ·
   <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/issues">Report a problem</a>
 </p>
@@ -90,13 +90,13 @@ Built from the ground up using **Flutter** for a lightweight, fluid UI and a nat
 
 ---
 
-## 🌟 What's New in Version 1.30.0
+## 🌟 What's New in Version 1.37.4
 
-* **Macroarchitecture Channel-Invariance:** Whole-night sleep macroarchitecture metrics (sleep efficiency, total sleep time, WASO, sleep onset latency, stage percentages/latencies) are recognized as channel-invariant global metrics, preventing sample size inflation. Automatically modeled at the subject/recording level using GLM/ANOVA with single-factor publication plots.
-* **2D EEG Scalp Topoplot Generator:** Automatically computes and renders 2D scalp topographic maps (topoplots) for channel-level metrics whenever at least 4 channels with sufficient spatial coverage are available (10-20 system, multiquadric RBF interpolation). Generates group mean topoplots and difference maps with annotated significance markers (`*`), embedded directly into the in-app interactive viewer, Word (`.docx`), and PDF reports.
-* **Live Progress Indicators for Batch Operations:** Animated progress bars and real-time status tracking (`0%–100%`) across Group Statistical Analysis and Batch Scoring Comparison dialogs.
-* **Batch Scoring "Clear All":** Added one-click "Clear All" action to the Batch Scoring Comparison top action bar alongside "Auto-Pair 2 Folders…" and "Add Pair".
-* **Flexible Nomenclature & Metadata:** Full support for newer CSV nomenclature (`groupID`, `ageID`, `napID`, `Subject_Code`, `Cyc*`, `CAP_*`, datastamped files) and intelligent classification of categorical vs continuous variables.
+* **Unified PSG Batch Analysis Pipeline with Substep Toggles:** Unified the previously separate "EEG Analysis Pipeline" and "Polygraphy: OSA & PLM" workflows into a single cohesive **PSG Analysis** pipeline. All stages (`[✓ Autoscore] -> [✓ Preprocess] -> [✓ EEG Features] -> [✓ Respiratory / OSA] -> [✓ Limb / PLM] -> [✓ Compile]`) are toggleable substeps that can be freely combined in any sequence. Master sheet compilation automatically incorporates companion polygraphy metrics (`_respiratory.json` - AHI, ODI, hypoxic burden, SpO2 min; `_plm.json` - PLMS index, severity) alongside spectral and micro-event metrics.
+* **Restructured Utilities Menu:** Reorganized the flat 15-item menu into 6 intuitive categories with styled headers, leading icons, and dividers across macOS native and in-app menus (Signal Preprocessing & Cleaning, Micro-Events & Transient Detection, Polygraphy: Respiratory & PLM, Advanced Sleep EEG Pipeline, Interactive Viewer Tools, Reporting & Export).
+* **100% Zero-Python Architecture (Pure Dart Statistical Engine):** Group statistical analysis runs entirely in native Dart (LMM, GLM/ANOVA Type II, FDR, Tukey HSD, Bonferroni, effect sizes) with native Flutter CustomPainter plotting, eliminating all external Python dependencies.
+* **Multi-Row Post-Hoc Scalp Topoplots:** Group statistics scalp topoplots now display multi-row pairwise difference contrasts for all cohort pairs (`OLD − MID`, `YNG − MID`, `YNG − OLD`) with empirical spatial significance markers (`*` for $p < 0.05$).
+* **Cross-Platform Reliability & UI Polish:** Fixed Windows and Linux file path resolution in batch statistical workflows, added interactive factor filtering, robust outlier scaling (winsorization), sample size counts, and removed redundant Group Analysis action bar buttons.
 
 > 📜 For older release highlights and detailed historical changes, see the complete **[CHANGELOG.md](CHANGELOG.md)**.
 

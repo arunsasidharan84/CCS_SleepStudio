@@ -4,6 +4,34 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.37.4]
+*   **Unified PSG Batch Analysis Pipeline with Toggleable Substeps:**
+    - Merged previously separate "EEG Analysis Pipeline" and "Polygraphy: OSA & PLM" sub-tabs into a single unified **PSG Analysis** pipeline.
+    - All stages are now toggleable substeps that can be freely combined in any sequence: `[✓ Autoscore] -> [✓ Preprocess] -> [✓ EEG Features] -> [✓ Respiratory / OSA] -> [✓ Limb / PLM] -> [✓ Compile]`.
+    - Each substep features its own collapsible settings card, in-pipeline toggle switch, and a dedicated "Run this step only" action.
+    - Automatic integration of companion polygraphy metrics (`_respiratory.json` and `_plm.json`) into `AnalyseNidra_master_sheet_<timestamp>.csv`, including AHI, ODI, hypoxic burden, SpO2 min, and PLMS indices.
+    - Standalone compilation of `psg_batch_summary_<timestamp>.csv` when polygraphy is run without EEG feature extraction.
+*   **Restructured Utilities Menu:**
+    - Reorganized the 15-item flat menu into 6 intuitive categories across both macOS native menu bar (`PlatformMenu`) and in-app menus (`SubmenuButton`):
+      1. Signal Preprocessing & Cleaning (Preprocessing Pipeline, Auto DBS Stim Removal, EEG Utilities)
+      2. Micro-Events & Transient Detection (MT-Spindle, MT-KCD, AnalyseNidra Spindles & Slow-Waves, CAP Analysis)
+      3. Polygraphy: Respiratory (OSA) & PLM (Respiratory / OSA Analysis, PLMS Analysis, Show / Remove Markers)
+      4. Advanced Sleep EEG Pipeline (AnalyseNidra, Feature Selection & Parameters)
+      5. Interactive Viewer Tools (Zoom on Selected EEG `[Z]`, Find Similar Epochs)
+      6. Reporting & Export (Export Sleep Report PDF)
+    - Enhanced with styled section headers, leading icons, and dividers.
+*   **Zero-Python Migration (Pure Dart Statistical Engine):**
+    - Removed all external Python runtime dependencies (`statsmodels`, `scipy`, `numpy`, `matplotlib`, `seaborn`) for Group Analysis.
+    - Pure Dart implementation of Linear Mixed-Effects Models (LMM), General Linear Models (GLM) / ANOVA Type II, multiple comparison adjustments (FDR, Tukey HSD, Bonferroni), effect sizes (Cohen's d, partial $\eta^2$), and descriptive statistics.
+    - Native Flutter `CustomPainter` rendering for interactive boxplots with jittered points, unclipped titles, robust y-scaling, explicit units, sample counts, and legends placed outside the plot canvas.
+*   **Multi-Row Post-Hoc Scalp Topoplots:**
+    - Scalp topographic maps now display multi-row pairwise difference contrasts for all cohort pairs (`OLD − MID`, `YNG − MID`, `YNG − OLD`) with empirical significance markers (`*` for $p < 0.05$).
+*   **Cross-Platform Fixes:**
+    - Resolved Windows and Linux file path resolution in batch statistical workflows.
+    - Removed redundant Group Analysis action bar button.
+
+---
+
 ## [1.30.1]
 *   **Windows In-App Updater Resilience & Certificate Bypass:**
     - Resolved `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` during in-app updates on Windows by supporting SSL cert bypass for GitHub/AWS domains, chained HTTP redirects (up to 10 redirects), and built-in `curl.exe -L -k` / PowerShell `Invoke-WebRequest` fallback.

@@ -140,6 +140,7 @@ fn parse_analyses(value: &str) -> Result<HashSet<String>> {
             "slow_waves" | "slowwaves" | "sw" => "slow_waves",
             "spindles" | "sp" => "spindles",
             "nlg" | "neuroloopgain" => "nlg",
+            "architecture" | "macro" | "macroarchitecture" | "none" => continue,
             other => bail!("unknown analysis '{other}' (use {})", ALL_ANALYSES.join(",")),
         };
         out.insert(canonical.to_string());

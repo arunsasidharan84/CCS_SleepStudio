@@ -1,4 +1,4 @@
-use crate::edf::{EdfData, read_selected};
+use crate::edf::{EdfData, read_available};
 use crate::config::FeatureConfig;
 use crate::features::{acw50, bandpowers_with_bands};
 use crate::hypnogram::{
@@ -8,7 +8,7 @@ use crate::hypnogram::{
 use crate::nonlinear;
 use crate::signal::{preprocess_mne_250hz, rereference, resample_channels_mne};
 use crate::spectral::{fooof_features_with_bands, irasa_features_with_bands};
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -55,9 +55,6 @@ pub fn load_with_epoch(
     lights_on_seconds: Option<f64>,
     epoch_length_sec: f64,
 ) -> Result<LoadedRecording> {
-    if channels.is_empty() {
-        bail!("at least one EEG channel is required");
-    }
     let mut requested = channels.to_vec();
     for reference in references {
         if !requested
@@ -67,14 +64,38 @@ pub fn load_with_epoch(
             requested.push(reference.clone());
         }
     }
-    let mut edf = read_selected(edf_path, &requested)?;
+    let mut edf = if requested.is_empty() {
+        let labels = crate::edf::read_channel_labels(edf_path)?;
+        if labels.is_empty() {
+            bail!("no signals found in EDF file {}", edf_path.display());
+        }
+        read_available(edf_path, &[labels[0].clone()])?
+    } else {
+        match read_available(edf_path, &requested) {
+            Ok(data) => data,
+            Err(e) => {
+                let labels = crate::edf::read_channel_labels(edf_path).unwrap_or_default();
+                if !labels.is_empty() {
+                    eprintln!("Warning: none of requested channels found; loading {} for timing/architecture: {}", labels[0], e);
+                    read_available(edf_path, &[labels[0].clone()])?
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    };
     if (edf.sfreq - crate::TARGET_SFREQ).abs() >= 1e-9 {
         let source_rate = edf.sfreq;
         resample_channels_mne(&mut edf.data_uv, source_rate, crate::TARGET_SFREQ);
         edf.sfreq = crate::TARGET_SFREQ;
     }
     let stages = read_sleepgpt(scoring_path)?;
-    let sample_stages = upsample_with_epoch_sec(&stages, edf.sfreq, edf.data_uv[0].len(), epoch_length_sec);
+    let n_samples = if !edf.data_uv.is_empty() {
+        edf.data_uv[0].len()
+    } else {
+        (edf.duration_seconds * edf.sfreq).round() as usize
+    };
+    let sample_stages = upsample_with_epoch_sec(&stages, edf.sfreq, n_samples, epoch_length_sec);
     let window = ArchitectureWindow::from_seconds(
         edf.duration_seconds,
         lights_off_seconds,
@@ -89,30 +110,34 @@ pub fn load_with_epoch(
         }
     }
     if !references.is_empty() {
-        let reference_indices = references
+        let reference_indices: Vec<usize> = references
             .iter()
-            .map(|reference| {
+            .filter_map(|reference| {
                 edf.channels
                     .iter()
                     .position(|channel| channel.eq_ignore_ascii_case(reference))
-                    .with_context(|| format!("reference channel {reference} was not loaded"))
             })
-            .collect::<Result<Vec<_>>>()?;
-        rereference(&mut edf.data_uv, &reference_indices);
+            .collect();
+        if !reference_indices.is_empty() {
+            rereference(&mut edf.data_uv, &reference_indices);
+        }
     }
-    if !crate::edf::is_already_mne_filtered(edf_path) {
+    if !crate::edf::is_already_mne_filtered(edf_path) && !edf.data_uv.is_empty() {
         preprocess_mne_250hz(&mut edf.data_uv);
     }
     let mut selected_data = Vec::with_capacity(channels.len());
+    let mut loaded_channels = Vec::with_capacity(channels.len());
     for channel in channels {
-        let index = edf
+        if let Some(index) = edf
             .channels
             .iter()
             .position(|loaded| loaded.eq_ignore_ascii_case(channel))
-            .with_context(|| format!("EEG channel {channel} was not loaded"))?;
-        selected_data.push(std::mem::take(&mut edf.data_uv[index]));
+        {
+            selected_data.push(std::mem::take(&mut edf.data_uv[index]));
+            loaded_channels.push(channel.clone());
+        }
     }
-    edf.channels = channels.to_vec();
+    edf.channels = loaded_channels;
     edf.data_uv = selected_data;
     Ok(LoadedRecording {
         edf,

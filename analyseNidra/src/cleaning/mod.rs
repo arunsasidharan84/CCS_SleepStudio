@@ -75,7 +75,7 @@ pub fn run_preprocessing(
     println!("PROGRESS 0.10 Loading EDF file: {:?}", input_path);
 
     let raw_edf = if let Some(ref picks) = config.eeg_channels {
-        crate::edf::read_selected(input_path, picks)
+        crate::edf::read_available(input_path, picks)
             .with_context(|| format!("Reading selected channels from {:?}", input_path))?
     } else {
         crate::edf::read_eeg_channels(input_path)

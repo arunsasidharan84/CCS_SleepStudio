@@ -70,6 +70,7 @@ class PipelineStep {
     required this.title,
     required this.build,
     this.onSuccess,
+    this.dependsOn = const [],
   });
 
   final String key;
@@ -80,6 +81,9 @@ class PipelineStep {
 
   /// Called with the step's log after a successful run.
   final void Function(PipelineRecording recording, List<String> log)? onSuccess;
+
+  /// Explicit dependencies: step keys that must complete successfully for this step.
+  final List<String> dependsOn;
 }
 
 /// Path printed by the engine after `OUTPUT_<kind>` (quotes optional).
@@ -205,13 +209,23 @@ class _PipelineRunDialogState extends State<PipelineRunDialog> {
       for (final r in widget.recordings) {
         if (_cancelled) break;
         if (!mounted) return;
-        final blocked = widget.steps
-            .takeWhile((s) => s.key != step.key)
-            .any((s) => r.status[s.key] == PipelineStatus.failed || r.status[s.key] == PipelineStatus.blocked);
-        if (blocked) {
+        String? blockedReason;
+        for (final dep in step.dependsOn) {
+          if (r.status[dep] == PipelineStatus.failed || r.status[dep] == PipelineStatus.blocked) {
+            blockedReason = 'step "$dep" failed';
+            break;
+          }
+        }
+        if (blockedReason == null &&
+            (step.key == 'features' || step.key == 'cap') &&
+            (r.scoring.isEmpty || !File(r.scoring).existsSync()) &&
+            r.status['autoscore'] == PipelineStatus.failed) {
+          blockedReason = 'autoscore failed';
+        }
+        if (blockedReason != null) {
           setState(() {
             r.status[step.key] = PipelineStatus.blocked;
-            r.notes[step.key] = 'an earlier step failed';
+            r.notes[step.key] = blockedReason!;
             _done++;
           });
           continue;

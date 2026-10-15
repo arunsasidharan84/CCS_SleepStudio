@@ -219,13 +219,13 @@ pub fn read_eeg_channels(path: &Path) -> Result<EdfData> {
     read_selected(path, &picked)
 }
 
-pub fn read_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
+fn read_selected_internal(path: &Path, requested: &[String], allow_missing: bool) -> Result<EdfData> {
     if requested.is_empty() {
         bail!("at least one EDF channel must be selected");
     }
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
     if ext == "vhdr" {
-        return read_vhdr_selected(path, requested);
+        return read_vhdr_internal(path, requested, allow_missing);
     }
     let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mut fixed = [0_u8; 256];
@@ -238,13 +238,33 @@ pub fn read_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
     let headers = read_edf_headers(&mut file, path, num_signals)?;
     file.seek(SeekFrom::Start(header_bytes as u64))?;
 
-    let selected: Vec<usize> = requested
-        .iter()
-        .map(|name| {
-            find_header_index(&headers, name)
-                .with_context(|| format!("EDF channel {name} is missing"))
-        })
-        .collect::<Result<_>>()?;
+    let mut selected = Vec::new();
+    let mut loaded_names = Vec::new();
+    let mut missing = Vec::new();
+
+    for name in requested {
+        if let Some(i) = find_header_index(&headers, name) {
+            selected.push(i);
+            loaded_names.push(name.clone());
+        } else {
+            missing.push(name.clone());
+        }
+    }
+
+    if !missing.is_empty() {
+        if !allow_missing || selected.is_empty() {
+            bail!("EDF channel {} is missing from {}", missing.join(", "), path.display());
+        } else {
+            eprintln!(
+                "Notice: {} channel(s) ({}) not found in {}; reading {} available channel(s)",
+                missing.len(),
+                missing.join(", "),
+                path.display(),
+                selected.len()
+            );
+        }
+    }
+
     let selected_lookup: HashMap<usize, usize> = selected
         .iter()
         .enumerate()
@@ -259,7 +279,7 @@ pub fn read_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
         bail!("selected EDF channels do not share one sampling frequency");
     }
     let sfreq = first_spr as f64 / record_duration;
-    let mut data = requested
+    let mut data = loaded_names
         .iter()
         .map(|_| Vec::with_capacity(num_records * first_spr))
         .collect::<Vec<_>>();
@@ -321,9 +341,20 @@ pub fn read_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
     Ok(EdfData {
         sfreq,
         duration_seconds: num_records as f64 * record_duration,
-        channels: requested.to_vec(),
+        channels: loaded_names,
         data_uv: data,
     })
+}
+
+pub fn read_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
+    read_selected_internal(path, requested, false)
+}
+
+/// Reads all channels from `requested` that are present in the file.
+/// If some channels are missing, logs a notice and continues with the available channels.
+/// Fails only if none of the requested channels are found.
+pub fn read_available(path: &Path, requested: &[String]) -> Result<EdfData> {
+    read_selected_internal(path, requested, true)
 }
 
 /// Loose channel-label key: case-insensitive, ignores "EEG "/"POL " prefixes,
@@ -343,7 +374,26 @@ pub fn channel_match_key(label: &str) -> String {
     key
 }
 
-fn find_header_index(headers: &[SignalHeader], name: &str) -> Option<usize> {
+/// Bidirectional 10-20 <-> 10-10 channel alias mapping (e.g. T3 <-> T7, T4 <-> T8, T5 <-> P7, T6 <-> P8, A1 <-> M1, A2 <-> M2).
+pub fn channel_1020_alias(name: &str) -> Option<&'static str> {
+    match name.to_ascii_uppercase().as_str() {
+        "T3" => Some("T7"),
+        "T7" => Some("T3"),
+        "T4" => Some("T8"),
+        "T8" => Some("T4"),
+        "T5" => Some("P7"),
+        "P7" => Some("T5"),
+        "T6" => Some("P8"),
+        "P8" => Some("T6"),
+        "A1" => Some("M1"),
+        "M1" => Some("A1"),
+        "A2" => Some("M2"),
+        "M2" => Some("A2"),
+        _ => None,
+    }
+}
+
+fn find_header_index_direct(headers: &[SignalHeader], name: &str) -> Option<usize> {
     let wanted = canonical_channel(name).to_ascii_lowercase();
     if let Some(i) = headers.iter().position(|h| h.label.to_ascii_lowercase() == wanted) {
         return Some(i);
@@ -375,6 +425,39 @@ fn find_header_index(headers: &[SignalHeader], name: &str) -> Option<usize> {
             h_root.eq_ignore_ascii_case(wanted_root)
         }) {
             return Some(i);
+        }
+    }
+    None
+}
+
+fn find_header_index(headers: &[SignalHeader], name: &str) -> Option<usize> {
+    if let Some(i) = find_header_index_direct(headers, name) {
+        return Some(i);
+    }
+    // Check standard 10-20 / 10-10 alias (e.g., T7 <-> T3, T8 <-> T4, P7 <-> T5, P8 <-> T6)
+    if let Some(alias) = channel_1020_alias(name) {
+        if let Some(i) = find_header_index_direct(headers, alias) {
+            return Some(i);
+        }
+    }
+    // Check root alias (e.g. requested "T7" or "T7-M2" when header is "EEG T3-Ref")
+    let key = channel_match_key(name);
+    let wanted_root = key.split(['-', '_']).next().unwrap_or("");
+    if !wanted_root.is_empty() {
+        if let Some(alias_root) = channel_1020_alias(wanted_root) {
+            if let Some(i) = headers.iter().position(|h| {
+                let h_key = channel_match_key(&h.label);
+                let h_root = h_key.split(['-', '_']).next().unwrap_or("");
+                h_root.eq_ignore_ascii_case(alias_root)
+            }).or_else(|| {
+                headers.iter().position(|h| {
+                    let h_key = channel_match_key(&h.raw_label);
+                    let h_root = h_key.split(['-', '_']).next().unwrap_or("");
+                    h_root.eq_ignore_ascii_case(alias_root)
+                })
+            }) {
+                return Some(i);
+            }
         }
     }
     None
@@ -641,7 +724,7 @@ pub fn read_edf_annotations(path: &Path) -> Result<Vec<EdfAnnotation>> {
     Ok(out)
 }
 
-fn read_vhdr_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
+fn read_vhdr_internal(path: &Path, requested: &[String], allow_missing: bool) -> Result<EdfData> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed reading .vhdr header {}", path.display()))?;
 
@@ -735,26 +818,53 @@ fn read_vhdr_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
         .enumerate()
         .map(|(index, label)| (label.to_ascii_lowercase(), index))
         .collect();
-    let selected: Vec<usize> = requested
-        .iter()
-        .map(|name| {
-            let wanted = canonical_channel(name).to_ascii_lowercase();
-            by_name
-                .get(&wanted)
-                .copied()
-                .or_else(|| {
-                    let key = channel_match_key(name);
-                    by_name.iter().find_map(|(k, &idx)| {
-                        if channel_match_key(k) == key {
-                            Some(idx)
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .with_context(|| format!("VHDR channel {name} is missing"))
-        })
-        .collect::<Result<_>>()?;
+    let find_vhdr_channel = |name: &str| -> Option<usize> {
+        let wanted = canonical_channel(name).to_ascii_lowercase();
+        if let Some(&idx) = by_name.get(&wanted) {
+            return Some(idx);
+        }
+        let key = channel_match_key(name);
+        if let Some((_, &idx)) = by_name.iter().find(|(k, _)| channel_match_key(k) == key) {
+            return Some(idx);
+        }
+        if let Some(alias) = channel_1020_alias(name) {
+            let wanted_alias = canonical_channel(alias).to_ascii_lowercase();
+            if let Some(&idx) = by_name.get(&wanted_alias) {
+                return Some(idx);
+            }
+            let alias_key = channel_match_key(alias);
+            if let Some((_, &idx)) = by_name.iter().find(|(k, _)| channel_match_key(k) == alias_key) {
+                return Some(idx);
+            }
+        }
+        None
+    };
+
+    let mut selected = Vec::new();
+    let mut loaded_names = Vec::new();
+    let mut missing = Vec::new();
+    for name in requested {
+        if let Some(idx) = find_vhdr_channel(name) {
+            selected.push(idx);
+            loaded_names.push(name.clone());
+        } else {
+            missing.push(name.clone());
+        }
+    }
+
+    if !missing.is_empty() {
+        if !allow_missing || selected.is_empty() {
+            bail!("VHDR channel {} is missing from {}", missing.join(", "), path.display());
+        } else {
+            eprintln!(
+                "Notice: {} channel(s) ({}) not found in {}; reading {} available channel(s)",
+                missing.len(),
+                missing.join(", "),
+                path.display(),
+                selected.len()
+            );
+        }
+    }
 
     let parent = path.parent().unwrap_or_else(|| Path::new(""));
     let mut data_path = parent.join(&data_file);
@@ -784,7 +894,7 @@ fn read_vhdr_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
         bail!("Data file {} contains 0 complete samples", data_path.display());
     }
 
-    let mut data = vec![vec![0.0f64; total_samples]; requested.len()];
+    let mut data = vec![vec![0.0f64; total_samples]; loaded_names.len()];
 
     let is_vectorized = orientation == "VECTORIZED";
     for (out_idx, &in_idx) in selected.iter().enumerate() {
@@ -824,9 +934,17 @@ fn read_vhdr_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
     Ok(EdfData {
         sfreq,
         duration_seconds: total_samples as f64 / sfreq,
-        channels: requested.to_vec(),
+        channels: loaded_names,
         data_uv: data,
     })
+}
+
+pub fn read_vhdr_selected(path: &Path, requested: &[String]) -> Result<EdfData> {
+    read_vhdr_internal(path, requested, false)
+}
+
+pub fn read_vhdr_available(path: &Path, requested: &[String]) -> Result<EdfData> {
+    read_vhdr_internal(path, requested, true)
 }
 
 
@@ -963,6 +1081,57 @@ mod tests {
         assert_eq!(find_header_index(&headers, "f4"), Some(1));
         assert_eq!(find_header_index(&headers, "F4"), Some(1));
         assert_eq!(find_header_index(&headers, "f4-ref"), Some(1));
+    }
+
+    #[test]
+    fn test_channel_1020_alias_matching() {
+        assert_eq!(channel_1020_alias("t7"), Some("T3"));
+        assert_eq!(channel_1020_alias("T3"), Some("T7"));
+        assert_eq!(channel_1020_alias("t8"), Some("T4"));
+        assert_eq!(channel_1020_alias("T4"), Some("T8"));
+        assert_eq!(channel_1020_alias("p7"), Some("T5"));
+        assert_eq!(channel_1020_alias("T5"), Some("P7"));
+        assert_eq!(channel_1020_alias("p8"), Some("T6"));
+        assert_eq!(channel_1020_alias("T6"), Some("P8"));
+        assert_eq!(channel_1020_alias("a1"), Some("M1"));
+        assert_eq!(channel_1020_alias("M1"), Some("A1"));
+
+        // Match when header has 10-20 label (T3-M2) and query is 10-10 (T7)
+        let headers = vec![
+            SignalHeader {
+                label: "T3-M2".to_string(),
+                raw_label: "EEG T3-M2".to_string(),
+                unit: "uV".to_string(),
+                transducer: "".to_string(),
+                physical_min: -500.0,
+                physical_max: 500.0,
+                digital_min: -32768.0,
+                digital_max: 32767.0,
+                prefilter: "".to_string(),
+                samples_per_record: 256,
+            },
+            SignalHeader {
+                label: "T8-REF".to_string(),
+                raw_label: "EEG T8-REF".to_string(),
+                unit: "uV".to_string(),
+                transducer: "".to_string(),
+                physical_min: -500.0,
+                physical_max: 500.0,
+                digital_min: -32768.0,
+                digital_max: 32767.0,
+                prefilter: "".to_string(),
+                samples_per_record: 256,
+            },
+        ];
+
+        // T7 should resolve to T3-M2 via alias
+        assert_eq!(find_header_index(&headers, "T7"), Some(0));
+        assert_eq!(find_header_index(&headers, "t7"), Some(0));
+        assert_eq!(find_header_index(&headers, "T3"), Some(0));
+
+        // T4 should resolve to T8-REF via alias
+        assert_eq!(find_header_index(&headers, "T4"), Some(1));
+        assert_eq!(find_header_index(&headers, "T8"), Some(1));
     }
 }
 

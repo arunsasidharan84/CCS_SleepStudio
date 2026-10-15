@@ -8517,6 +8517,30 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               path = '$inDir${Platform.pathSeparator}${inStem}_analyse_regional.csv';
             }
           }
+          if (!File(path).existsSync()) {
+            final scoring = (r.scoring.isNotEmpty && File(r.scoring).existsSync())
+                ? r.scoring
+                : (r.autoscored != null && File(r.autoscored!).existsSync() ? r.autoscored! : null);
+            if (scoring != null && File(r.source).existsSync()) {
+              try {
+                final exe = detectAnalyseNidraExecutable();
+                final res = await Process.run(exe, [
+                  r.source,
+                  scoring,
+                  '-',
+                  '-',
+                  '-',
+                  '-',
+                  path,
+                  '--analyses',
+                  'none',
+                ]);
+                if (res.exitCode == 0 && File(path).existsSync()) {
+                  r.regional = path;
+                }
+              } catch (_) {}
+            }
+          }
           if (File(path).existsSync()) {
             files.add(path);
             recordingFor[path] = r.source;

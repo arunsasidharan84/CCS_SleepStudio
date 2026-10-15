@@ -223,6 +223,10 @@ pub fn compile(
         .copied()
         .unwrap_or(0.0);
 
+    if recording.edf.channels.is_empty() {
+        return BTreeMap::new();
+    }
+
     let mut channels = BTreeMap::<String, RegionalRow>::new();
     for channel in &recording.edf.channels {
         let spindle = spindle_by_channel.get(channel.as_str()).copied();
@@ -587,6 +591,24 @@ pub fn write_csv_with_bands(
             } else {
                 String::new()
             });
+        }
+        for column in &stage_dyn_columns {
+            let value = recording.architecture.values.get(column).copied().unwrap_or(f64::NAN);
+            values.push(if value.is_finite() { value.to_string() } else { String::new() });
+        }
+        writeln!(writer, "{}", values.join(","))?;
+    }
+    if rows.is_empty() {
+        let mut values = Vec::with_capacity(columns.len());
+        for column in ARCHITECTURE_COLUMNS {
+            let value = recording.architecture.values.get(column).copied().unwrap_or(f64::NAN);
+            values.push(if value.is_finite() { value.to_string() } else { String::new() });
+        }
+        values.push(csv_escape(recording_name));
+        values.push(String::new());
+        values.push("Global".into());
+        for _ in event_columns().into_iter().chain(feat_columns.clone()).chain(nlg_columns()) {
+            values.push(String::new());
         }
         for column in &stage_dyn_columns {
             let value = recording.architecture.values.get(column).copied().unwrap_or(f64::NAN);

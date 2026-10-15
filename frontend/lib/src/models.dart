@@ -1074,3 +1074,134 @@ void applyAasmFiltersToAll(Iterable<ChannelConfig> channels) {
   }
 }
 
+extension StringCaseExtension on String {
+  bool equalsIgnoreCase(String other) => toLowerCase() == other.toLowerCase();
+}
+
+/// Matches an electrode target (e.g. "F4", "M1", "E1") to an available recording channel label,
+/// taking into account standard prefixes (EEG, POL), suffixes (-Ref), and standard clinical aliases
+/// (A1<->M1, A2<->M2, T3<->T7, T4<->T8, T5<->P7, T6<->P8, E1<->EOG1, E2<->EOG2, etc.).
+String? findMatchingElectrode(String target, List<String> available) {
+  // 1. Direct case-insensitive match
+  for (final ch in available) {
+    if (ch.equalsIgnoreCase(target)) return ch;
+  }
+
+  String clean(String s) {
+    return s
+        .toUpperCase()
+        .replaceAll(RegExp(r'^(EEG\s*|POL\s*)'), '')
+        .replaceAll(RegExp(r'(-REF|\s*REF)$'), '')
+        .replaceAll(RegExp(r'[^A-Z0-9]'), '');
+  }
+
+  final targetClean = clean(target);
+  for (final ch in available) {
+    if (clean(ch) == targetClean) return ch;
+  }
+
+  // 2. Clinical aliases, mastoids, EOG, EMG, and 10-20 <-> 10-10 equivalences
+  final aliases = <String, List<String>>{
+    // Mastoids / Auricular references
+    'M1': ['A1', 'TP9', 'M1REF', 'A1REF'],
+    'M2': ['A2', 'TP10', 'M2REF', 'A2REF'],
+    'A1': ['M1', 'TP9', 'M1REF', 'A1REF'],
+    'A2': ['M2', 'TP10', 'M2REF', 'A2REF'],
+
+    // 10-20 to 10-10 equivalences
+    'T3': ['T7'],
+    'T7': ['T3'],
+    'T4': ['T8'],
+    'T8': ['T4'],
+    'T5': ['P7'],
+    'P7': ['T5'],
+    'T6': ['P8'],
+    'P8': ['T6'],
+
+    // EOG / Eye channels
+    'E1': [
+      'EOG1',
+      'LOC',
+      'EOGL',
+      'LEOG',
+      'EOGLEFT',
+      'LEFTEOG',
+      'EYE1',
+      'EYEL',
+      'EOG1REF',
+    ],
+    'EOG1': [
+      'E1',
+      'LOC',
+      'EOGL',
+      'LEOG',
+      'EOGLEFT',
+      'LEFTEOG',
+      'EYE1',
+      'EYEL',
+    ],
+    'LOC': ['E1', 'EOG1', 'EOGL', 'LEOG', 'EOGLEFT', 'LEFTEOG'],
+    'E2': [
+      'EOG2',
+      'ROC',
+      'EOGR',
+      'REOG',
+      'EOGRIGHT',
+      'RIGHTEOG',
+      'EYE2',
+      'EYER',
+      'EOG2REF',
+    ],
+    'EOG2': [
+      'E2',
+      'ROC',
+      'EOGR',
+      'REOG',
+      'EOGRIGHT',
+      'RIGHTEOG',
+      'EYE2',
+      'EYER',
+    ],
+    'ROC': ['E2', 'EOG2', 'EOGR', 'REOG', 'EOGRIGHT', 'RIGHTEOG'],
+
+    // EMG / Chin channels
+    'CHIN1': [
+      'EMG1',
+      'CHINL',
+      'CHINLEFT',
+      'EMGL',
+      'SUBMENTAL1',
+      'CHIN',
+      'EMG',
+    ],
+    'EMG1': [
+      'CHIN1',
+      'CHINL',
+      'CHINLEFT',
+      'EMGL',
+      'SUBMENTAL1',
+      'CHIN',
+      'EMG',
+    ],
+    'CHIN2': ['EMG2', 'CHINR', 'CHINRIGHT', 'EMGR', 'CHINZ', 'SUBMENTAL2'],
+    'EMG2': ['CHIN2', 'CHINR', 'CHINRIGHT', 'EMGR', 'CHINZ', 'SUBMENTAL2'],
+    'CHIN': ['EMG', 'CHIN1', 'EMG1', 'SUBMENTAL'],
+    'EMG': ['CHIN', 'EMG1', 'CHIN1', 'SUBMENTAL'],
+
+    // ECG / EKG
+    'ECG': ['EKG', 'ECG1', 'EKG1', 'HEART'],
+    'EKG': ['ECG', 'ECG1', 'EKG1', 'HEART'],
+  };
+
+  final candList = aliases[targetClean];
+  if (candList != null) {
+    for (final cand in candList) {
+      for (final ch in available) {
+        if (clean(ch) == cand) return ch;
+      }
+    }
+  }
+
+  return null;
+}
+

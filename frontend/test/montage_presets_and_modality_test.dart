@@ -253,5 +253,44 @@ void main() {
       expect(emg.filterLpEnabled, isTrue);
       expect(emg.filterLpCutoff, equals(100.0));
     });
+
+    test('generateMontagePresetChannels correctly binds sourceIndex to raw GoaSleep EDF channels', () {
+      final goaRawChannels = [
+        'EEG F3-Ref', // 0
+        'EEG F4-Ref', // 1
+        'EEG CZ-Ref', // 2
+        'EEG O1-Ref', // 3
+        'EEG O2-Ref', // 4
+        'EEG A1-Ref', // 5
+        'EEG A2-Ref', // 6
+        'POL EOG1',   // 7
+        'POL EOG2',   // 8
+        'POL EMG1',   // 9
+        'POL EMG2',   // 10
+        'POL EMG3',   // 11
+      ];
+
+      final aasmPreset = builtInMontagePresets.firstWhere((p) => p.name.contains('AASM'));
+      final channels = generateMontagePresetChannels(
+        preset: aasmPreset,
+        availableChannels: goaRawChannels,
+      );
+
+      final visible = channels.where((c) => c.displayOnScreen).toList();
+
+      final eog1 = visible.firstWhere((c) => c.name.contains('EOG1'));
+      final eog2 = visible.firstWhere((c) => c.name.contains('EOG2'));
+      final f4 = visible.firstWhere((c) => c.name.contains('F4'));
+      final o2 = visible.firstWhere((c) => c.name.contains('O2'));
+
+      // Crucial: sourceIndex MUST match the actual index of the active electrode in raw channels, NOT 0!
+      expect(eog1.sourceIndex, equals(7), reason: 'POL EOG1 must bind to raw index 7');
+      expect(eog2.sourceIndex, equals(8), reason: 'POL EOG2 must bind to raw index 8');
+      expect(f4.sourceIndex, equals(1), reason: 'EEG F4-Ref must bind to raw index 1');
+      expect(o2.sourceIndex, equals(4), reason: 'EEG O2-Ref must bind to raw index 4');
+
+      expect(eog1.reReference, equals('EEG A2-Ref'));
+      expect(eog2.reReference, equals('EEG A1-Ref'));
+    });
   });
 }

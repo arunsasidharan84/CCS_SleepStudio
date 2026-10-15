@@ -6188,27 +6188,26 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         config: _config,
         availableChannels: available,
         onApply: (newCfg) {
-          final oldCfg = _config;
+          final eeg = _loadedEeg;
+          if (eeg != null) {
+            newCfg.bindLoadedChannels(eeg.channelLabels, sampleRateHz: eeg.sampleRateHz);
+          }
           setState(() {
             _config = newCfg;
           });
           if (_activePath != null) {
             unawaited(saveAutoConfig(_activePath!, newCfg));
           }
-          final eeg = _loadedEeg;
           final v = _viewport;
           if (eeg != null && v != null) {
-            final displayChanged = !_sameChannelConfig(oldCfg.channels, newCfg.channels);
-            if (displayChanged) _backend.clearDisplayCache();
+            _backend.clearDisplayCache();
             final current = _viewport ?? v;
-            final base = displayChanged
-                ? _backend.rebuildViewportForEpochSync(
-                    current,
-                    eeg,
-                    current.currentEpoch,
-                    config: newCfg,
-                  )
-                : current;
+            final base = _backend.rebuildViewportForEpochSync(
+              current,
+              eeg,
+              current.currentEpoch,
+              config: newCfg,
+            );
             setState(() {
               _viewport = base;
               _status = 'Montage applied (${newCfg.channels.where((c) => c.displayOnScreen).length} visible channels)';

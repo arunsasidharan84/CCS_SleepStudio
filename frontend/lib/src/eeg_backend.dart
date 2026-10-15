@@ -1408,6 +1408,7 @@ class EegBackend {
   final _tfImageCache = <String, ui.Image>{};
   final _tfImageCacheOrder = <String>[];
   final _tfScaleCache = <String, ({double min, double max})>{};
+  List<String> _currentLoadedChannelLabels = const [];
 
   /// Night-level amplitude statistics per channel (keyed by the sample list),
   /// used to auto-scale polygraphic channels.
@@ -1778,6 +1779,7 @@ class EegBackend {
           channelCfg,
           config,
           applyFilters: applyFilters,
+          resolvedSourceIndex: channelIndex,
         );
       }
       return const [];
@@ -1791,6 +1793,7 @@ class EegBackend {
       channelCfg,
       config,
       applyFilters: applyFilters,
+      resolvedSourceIndex: visible.indices[channelIndex],
     );
   }
 
@@ -2913,6 +2916,7 @@ class EegBackend {
         // Level signals (SpO2, pulse…) are drawn on an absolute range, which
         // a high-pass or notch filter would shift.
         applyFilters: channelCfg.effectiveDisplayMode != kChannelDisplayLevel,
+        resolvedSourceIndex: channel,
       );
       if (segment.isEmpty) {
         waves.add(Float32List(0));
@@ -3116,6 +3120,7 @@ class EegBackend {
     List<ChannelConfig> configs,
   })
   _visibleChannelProjection(LoadedEeg eeg, AppConfig cfg) {
+    _currentLoadedChannelLabels = eeg.channelLabels;
     final indices = <int>[];
     final labels = <String>[];
     final colors = <String>[];
@@ -3141,6 +3146,7 @@ class EegBackend {
         cfg,
         i,
         eeg.channelSamples.length,
+        rawLabels: eeg.channelLabels,
       );
       if (sourceIdx < 0 || sourceIdx >= eeg.channelSamples.length) continue;
       indices.add(sourceIdx);
@@ -3206,8 +3212,9 @@ class EegBackend {
     ChannelConfig channelCfg,
     AppConfig cfg,
     int fallbackIndex,
-    int channelCount,
-  ) {
+    int channelCount, {
+    List<String>? rawLabels,
+  }) {
     final explicit = channelCfg.sourceIndex;
     if (explicit != null && explicit >= 0 && explicit < channelCount) {
       return explicit;
@@ -3215,32 +3222,82 @@ class EegBackend {
     final sourceName = channelCfg.derived
         ? (channelCfg.sourceChannel ?? channelCfg.name)
         : channelCfg.name;
-    final byName = cfg.channels.indexWhere((c) => c.name == sourceName);
+
+    // 1. Direct match against raw recording channel labels
+    final labels = rawLabels ?? _currentLoadedChannelLabels;
+    if (labels.isNotEmpty) {
+      final exact = labels.indexWhere((l) => l.equalsIgnoreCase(sourceName));
+      if (exact >= 0 && exact < channelCount) {
+        channelCfg.sourceIndex = exact;
+        return exact;
+      }
+      final matched = findMatchingElectrode(sourceName, labels);
+      if (matched != null) {
+        final idx = labels.indexOf(matched);
+        if (idx >= 0 && idx < channelCount) {
+          channelCfg.sourceIndex = idx;
+          return idx;
+        }
+      }
+    }
+
+    // 2. Search other channels in cfg (which may have sourceIndex already bound)
+    final byName = cfg.channels.indexWhere((c) =>
+        c.name.equalsIgnoreCase(sourceName) ||
+        (c.sourceChannel?.equalsIgnoreCase(sourceName) == true));
     if (byName >= 0) {
       final mapped = cfg.channels[byName].sourceIndex;
-      if (mapped != null && mapped >= 0 && mapped < channelCount) return mapped;
-      if (byName < channelCount) return byName;
+      if (mapped != null && mapped >= 0 && mapped < channelCount) {
+        channelCfg.sourceIndex = mapped;
+        return mapped;
+      }
+      if (byName < channelCount && labels.isEmpty) {
+        channelCfg.sourceIndex = byName;
+        return byName;
+      }
     }
-    return fallbackIndex < channelCount ? fallbackIndex : -1;
+
+    return fallbackIndex >= 0 && fallbackIndex < channelCount ? fallbackIndex : -1;
   }
 
   int? _referenceIndexForConfig(
     ChannelConfig channelCfg,
     AppConfig cfg,
-    int channelCount,
-  ) {
+    int channelCount, {
+    List<String>? rawLabels,
+  }) {
     final refName = channelCfg.reReference;
     if (refName == 'None' || refName.isEmpty) return null;
-    final refConfigIndex = cfg.channels.indexWhere((c) => c.name == refName);
-    if (refConfigIndex < 0) return null;
-    final refCfg = cfg.channels[refConfigIndex];
-    final sourceIdx = _sourceIndexForConfig(
-      refCfg,
-      cfg,
-      refConfigIndex,
-      channelCount,
-    );
-    return sourceIdx >= 0 && sourceIdx < channelCount ? sourceIdx : null;
+
+    // 1. Direct match against raw recording channel labels
+    final labels = rawLabels ?? _currentLoadedChannelLabels;
+    if (labels.isNotEmpty) {
+      final exact = labels.indexWhere((l) => l.equalsIgnoreCase(refName));
+      if (exact >= 0 && exact < channelCount) return exact;
+      final matched = findMatchingElectrode(refName, labels);
+      if (matched != null) {
+        final idx = labels.indexOf(matched);
+        if (idx >= 0 && idx < channelCount) return idx;
+      }
+    }
+
+    // 2. Search other channels in cfg
+    final refConfigIndex = cfg.channels.indexWhere((c) =>
+        c.name.equalsIgnoreCase(refName) ||
+        (c.sourceChannel?.equalsIgnoreCase(refName) == true));
+    if (refConfigIndex >= 0) {
+      final refCfg = cfg.channels[refConfigIndex];
+      final sourceIdx = _sourceIndexForConfig(
+        refCfg,
+        cfg,
+        refConfigIndex,
+        channelCount,
+        rawLabels: labels,
+      );
+      if (sourceIdx >= 0 && sourceIdx < channelCount) return sourceIdx;
+    }
+
+    return null;
   }
 
   String _channelConfigSignature(ChannelConfig c) {
@@ -3276,19 +3333,31 @@ class EegBackend {
     ChannelConfig channelCfg,
     AppConfig cfg, {
     required bool applyFilters,
+    int? resolvedSourceIndex,
+    List<String>? rawLabels,
   }) {
     if (channels.isEmpty || start >= end) return const [];
-    final sourceIdx = _sourceIndexForConfig(
-      channelCfg,
-      cfg,
-      channelCfg.sourceIndex ?? 0,
-      channels.length,
-    );
+    final sourceIdx = (resolvedSourceIndex != null &&
+            resolvedSourceIndex >= 0 &&
+            resolvedSourceIndex < channels.length)
+        ? resolvedSourceIndex
+        : _sourceIndexForConfig(
+            channelCfg,
+            cfg,
+            channelCfg.sourceIndex ?? 0,
+            channels.length,
+            rawLabels: rawLabels,
+          );
     if (sourceIdx < 0 || sourceIdx >= channels.length) return const [];
     final source = channels[sourceIdx];
     final safeEnd = math.min(end, source.length);
     if (start >= safeEnd) return const [];
-    final refIdx = _referenceIndexForConfig(channelCfg, cfg, channels.length);
+    final refIdx = _referenceIndexForConfig(
+      channelCfg,
+      cfg,
+      channels.length,
+      rawLabels: rawLabels,
+    );
     final ref = refIdx == null ? null : channels[refIdx];
     final sos = applyFilters
         ? _displayFilterSos(channelCfg, sampleRate)

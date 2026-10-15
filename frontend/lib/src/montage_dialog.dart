@@ -203,9 +203,11 @@ class _MontageDialogState extends State<MontageDialog> {
       orElse: () => _channels.first,
     );
 
+    final activeIdx = widget.availableChannels.indexOf(active);
     final added = ChannelConfig(
       name: label,
       sourceChannel: active,
+      sourceIndex: activeIdx >= 0 ? activeIdx : null,
       reReference: ref,
       derived: ref != 'None',
       flipPolarity: _flipPolarity,
@@ -642,134 +644,6 @@ class _MontageDialogState extends State<MontageDialog> {
   }
 }
 
-extension on String {
-  bool equalsIgnoreCase(String other) => toLowerCase() == other.toLowerCase();
-}
-
-String? findMatchingElectrode(String target, List<String> available) {
-  // 1. Direct case-insensitive match
-  for (final ch in available) {
-    if (ch.equalsIgnoreCase(target)) return ch;
-  }
-
-  String clean(String s) {
-    return s
-        .toUpperCase()
-        .replaceAll(RegExp(r'^(EEG\s*|POL\s*)'), '')
-        .replaceAll(RegExp(r'(-REF|\s*REF)$'), '')
-        .replaceAll(RegExp(r'[^A-Z0-9]'), '');
-  }
-
-  final targetClean = clean(target);
-  for (final ch in available) {
-    if (clean(ch) == targetClean) return ch;
-  }
-
-  // 2. Clinical aliases, mastoids, EOG, EMG, and 10-20 <-> 10-10 equivalences
-  final aliases = <String, List<String>>{
-    // Mastoids / Auricular references
-    'M1': ['A1', 'TP9', 'M1REF', 'A1REF'],
-    'M2': ['A2', 'TP10', 'M2REF', 'A2REF'],
-    'A1': ['M1', 'TP9', 'M1REF', 'A1REF'],
-    'A2': ['M2', 'TP10', 'M2REF', 'A2REF'],
-
-    // 10-20 to 10-10 equivalences
-    'T3': ['T7'],
-    'T7': ['T3'],
-    'T4': ['T8'],
-    'T8': ['T4'],
-    'T5': ['P7'],
-    'P7': ['T5'],
-    'T6': ['P8'],
-    'P8': ['T6'],
-
-    // EOG / Eye channels
-    'E1': [
-      'EOG1',
-      'LOC',
-      'EOGL',
-      'LEOG',
-      'EOGLEFT',
-      'LEFTEOG',
-      'EYE1',
-      'EYEL',
-      'EOG1REF',
-    ],
-    'EOG1': [
-      'E1',
-      'LOC',
-      'EOGL',
-      'LEOG',
-      'EOGLEFT',
-      'LEFTEOG',
-      'EYE1',
-      'EYEL',
-    ],
-    'LOC': ['E1', 'EOG1', 'EOGL', 'LEOG', 'EOGLEFT', 'LEFTEOG'],
-    'E2': [
-      'EOG2',
-      'ROC',
-      'EOGR',
-      'REOG',
-      'EOGRIGHT',
-      'RIGHTEOG',
-      'EYE2',
-      'EYER',
-      'EOG2REF',
-    ],
-    'EOG2': [
-      'E2',
-      'ROC',
-      'EOGR',
-      'REOG',
-      'EOGRIGHT',
-      'RIGHTEOG',
-      'EYE2',
-      'EYER',
-    ],
-    'ROC': ['E2', 'EOG2', 'EOGR', 'REOG', 'EOGRIGHT', 'RIGHTEOG'],
-
-    // EMG / Chin channels
-    'CHIN1': [
-      'EMG1',
-      'CHINL',
-      'CHINLEFT',
-      'EMGL',
-      'SUBMENTAL1',
-      'CHIN',
-      'EMG',
-    ],
-    'EMG1': [
-      'CHIN1',
-      'CHINL',
-      'CHINLEFT',
-      'EMGL',
-      'SUBMENTAL1',
-      'CHIN',
-      'EMG',
-    ],
-    'CHIN2': ['EMG2', 'CHINR', 'CHINRIGHT', 'EMGR', 'CHINZ', 'SUBMENTAL2'],
-    'EMG2': ['CHIN2', 'CHINR', 'CHINRIGHT', 'EMGR', 'CHINZ', 'SUBMENTAL2'],
-    'CHIN': ['EMG', 'CHIN1', 'EMG1', 'SUBMENTAL'],
-    'EMG': ['CHIN', 'EMG1', 'CHIN1', 'SUBMENTAL'],
-
-    // ECG / EKG
-    'ECG': ['EKG', 'ECG1', 'EKG1', 'HEART'],
-    'EKG': ['ECG', 'ECG1', 'EKG1', 'HEART'],
-  };
-
-  final candList = aliases[targetClean];
-  if (candList != null) {
-    for (final cand in candList) {
-      for (final ch in available) {
-        if (clean(ch) == cand) return ch;
-      }
-    }
-  }
-
-  return null;
-}
-
 List<ChannelConfig> generateMontagePresetChannels({
   required MontagePreset preset,
   required List<String> availableChannels,
@@ -796,10 +670,12 @@ List<ChannelConfig> generateMontagePresetChannels({
       );
 
       final label = '$active-$ref';
+      final activeIndex = availableChannels.indexOf(active);
       newChannels.add(
         ChannelConfig(
           name: label,
           sourceChannel: active,
+          sourceIndex: activeIndex >= 0 ? activeIndex : null,
           reReference: ref,
           derived: true,
           displayOnScreen: true,
@@ -831,10 +707,12 @@ List<ChannelConfig> generateMontagePresetChannels({
         );
         final label =
             ref != null && !ref.equalsIgnoreCase(e1) ? '$e1-$ref' : e1;
+        final e1Index = availableChannels.indexOf(e1);
         newChannels.add(
           ChannelConfig(
             name: label,
             sourceChannel: e1,
+            sourceIndex: e1Index >= 0 ? e1Index : null,
             reReference:
                 ref != null && !ref.equalsIgnoreCase(e1) ? ref : 'None',
             derived: ref != null && !ref.equalsIgnoreCase(e1),
@@ -852,10 +730,12 @@ List<ChannelConfig> generateMontagePresetChannels({
         );
         final label =
             ref != null && !ref.equalsIgnoreCase(e2) ? '$e2-$ref' : e2;
+        final e2Index = availableChannels.indexOf(e2);
         newChannels.add(
           ChannelConfig(
             name: label,
             sourceChannel: e2,
+            sourceIndex: e2Index >= 0 ? e2Index : null,
             reReference:
                 ref != null && !ref.equalsIgnoreCase(e2) ? ref : 'None',
             derived: ref != null && !ref.equalsIgnoreCase(e2),
@@ -879,10 +759,12 @@ List<ChannelConfig> generateMontagePresetChannels({
           (c) => c.name.equalsIgnoreCase(chin1),
           orElse: () => ChannelConfig(name: chin1),
         );
+        final chin1Index = availableChannels.indexOf(chin1);
         newChannels.add(
           ChannelConfig(
             name: '$chin1-$chin2',
             sourceChannel: chin1,
+            sourceIndex: chin1Index >= 0 ? chin1Index : null,
             reReference: chin2,
             derived: true,
             displayOnScreen: true,
@@ -895,10 +777,12 @@ List<ChannelConfig> generateMontagePresetChannels({
           (c) => c.name.equalsIgnoreCase(chin1),
           orElse: () => ChannelConfig(name: chin1),
         );
+        final chin1Index = availableChannels.indexOf(chin1);
         newChannels.add(
           ChannelConfig(
             name: chin1,
             sourceChannel: chin1,
+            sourceIndex: chin1Index >= 0 ? chin1Index : null,
             reReference: 'None',
             derived: false,
             displayOnScreen: true,
@@ -916,10 +800,12 @@ List<ChannelConfig> generateMontagePresetChannels({
         (c) => c.name.equalsIgnoreCase(ecg),
         orElse: () => ChannelConfig(name: ecg),
       );
+      final ecgIndex = availableChannels.indexOf(ecg);
       newChannels.add(
         ChannelConfig(
           name: ecg,
           sourceChannel: ecg,
+          sourceIndex: ecgIndex >= 0 ? ecgIndex : null,
           reReference: 'None',
           derived: false,
           displayOnScreen: true,
@@ -939,11 +825,11 @@ List<ChannelConfig> generateMontagePresetChannels({
     for (final orig in baseList) {
       final baseName = orig.sourceChannel ?? orig.name;
       if (!newChannels.any(
-        (n) =>
-            n.name.equalsIgnoreCase(orig.name) ||
-            (n.derived && n.name.startsWith('$baseName-')),
+        (n) => n.name.equalsIgnoreCase(orig.name),
       )) {
         final copy = orig.copy();
+        final rawIdx = availableChannels.indexOf(baseName);
+        if (rawIdx >= 0) copy.sourceIndex = rawIdx;
         copy.displayOnScreen = false;
         newChannels.add(copy);
       }

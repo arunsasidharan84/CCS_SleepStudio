@@ -389,12 +389,13 @@ to write results automatically"
             .unwrap_or("recording");
 
         // (slot index, name suffix, extension)
+        let csv_suffix = if per_channel { "channel" } else { "regional" };
         let slots: &[(usize, &str, &str)] = &[
             (0, "core", "json"),
             (1, "pac", "json"),
             (2, "slow_waves", "json"),
             (3, "spindles", "json"),
-            (4, "regional", "csv"),
+            (4, csv_suffix, "csv"),
         ];
 
         for &(idx, name, ext) in slots {
@@ -850,9 +851,11 @@ fn handle_cap_cli(args: Vec<OsString>) -> Result<()> {
         }
         for d in dirs {
             for st in [edf_stem, out_stem] {
-                let reg_csv = d.join(format!("{st}_analyse_regional.csv"));
-                if reg_csv.exists() {
-                    let _ = regional::inject_cap_summary_into_csv(&reg_csv, &report.summary);
+                for suffix in ["_analyse_regional.csv", "_analyse_channel.csv"] {
+                    let reg_csv = d.join(format!("{st}{suffix}"));
+                    if reg_csv.exists() {
+                        let _ = regional::inject_cap_summary_into_csv(&reg_csv, &report.summary);
+                    }
                 }
             }
         }
@@ -1314,8 +1317,9 @@ fn main() -> Result<()> {
             .unwrap_or(raw_stem);
         regional::write_csv_with_bands(output_path, recording_name, &recording, &rows, &feature_config.bands)?;
         regional::try_inject_companion_cap_into_csv(output_path, &edf_path, cli.out_dir.as_deref());
+        let csv_label = if cli.per_channel { "channel" } else { "regional" };
         println!(
-            "wrote final regional CSV to {} ({} rows) in {:.3}s",
+            "wrote final {csv_label} CSV to {} ({} rows) in {:.3}s",
             output_path.display(),
             rows.len(),
             regional_started.elapsed().as_secs_f64()

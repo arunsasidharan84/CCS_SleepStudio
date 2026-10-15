@@ -186,8 +186,11 @@ Future<String> compileRegionalCsvFiles(
 List<String> candidateCompanionPaths(File file, String? srcPath, String suffix) {
   final candidates = <String>[];
   var regionalStem = file.uri.pathSegments.last;
-  if (regionalStem.toLowerCase().endsWith('_analyse_regional.csv')) {
-    regionalStem = regionalStem.substring(0, regionalStem.length - '_analyse_regional.csv'.length);
+  for (final s in const ['_analyse_regional.csv', '_analyse_channel.csv']) {
+    if (regionalStem.toLowerCase().endsWith(s)) {
+      regionalStem = regionalStem.substring(0, regionalStem.length - s.length);
+      break;
+    }
   }
   candidates.add('${file.parent.path}${Platform.pathSeparator}$regionalStem$suffix');
   final parentOfParent = file.parent.parent.path;
@@ -391,9 +394,10 @@ String resolveRegionalCsvEdfPath(
 
 String _regionalCsvPathToEdfPath(String path) {
   final lower = path.toLowerCase();
-  const suffix = '_analyse_regional.csv';
-  if (lower.endsWith(suffix)) {
-    return '${path.substring(0, path.length - suffix.length)}.edf';
+  for (final suffix in const ['_analyse_regional.csv', '_analyse_channel.csv']) {
+    if (lower.endsWith(suffix)) {
+      return '${path.substring(0, path.length - suffix.length)}.edf';
+    }
   }
   if (lower.endsWith('.csv')) {
     return '${path.substring(0, path.length - '.csv'.length)}.edf';

@@ -46,6 +46,18 @@ void main() {
     expect(resolveRegionalCsvEdfPath(regional.path), edf.path);
   });
 
+  test('resolves channel CSV source path to matching EDF path', () async {
+    final directory = await Directory.systemTemp.createTemp('analyse_edf_ch_');
+    final edf = await File(
+      '${directory.path}/AS_CNT_10_Night1.edf',
+    ).writeAsString('edf placeholder');
+    final channelCsv = await File(
+      '${directory.path}/AS_CNT_10_Night1_analyse_channel.csv',
+    ).writeAsString('Chan,N2_ACW\nF3,0.12\n');
+
+    expect(resolveRegionalCsvEdfPath(channelCsv.path), edf.path);
+  });
+
   test('merges companion _cap.json summary metrics into compiled master sheet', () async {
     final directory = await Directory.systemTemp.createTemp('analyse_cap_');
     final regional = await File(

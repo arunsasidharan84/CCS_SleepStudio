@@ -75,4 +75,19 @@ void main() {
     expect(row[header.indexOf('Group')], 'Placebo');
     expect(row[header.indexOf('Power')], '1.5');
   });
+
+  test('master sheet matches metadata columns for channel-wise CSV', () async {
+    final csv = File('${dir.path}/rec1_analyse_channel.csv')
+      ..writeAsStringSync('Chan,Power\nF3,1.5\n');
+    final metaFile = File('${dir.path}/m2.csv')..writeAsStringSync('Subject ID,Group\nrec1,Active\n');
+    final meta = await readBatchMetadataFile(metaFile.path);
+    final out = await compileRegionalCsvFiles([csv.path], metadata: meta);
+    final lines = const LineSplitter().convert(out);
+    expect(lines.first, contains('Group'));
+    final header = parseCsvLine(lines.first);
+    final row = parseCsvLine(lines[1]);
+    expect(row[header.indexOf('Subject Identifier')], 'rec1');
+    expect(row[header.indexOf('Group')], 'Active');
+    expect(row[header.indexOf('Power')], '1.5');
+  });
 }

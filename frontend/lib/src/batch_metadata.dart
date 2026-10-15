@@ -94,6 +94,7 @@ String normalizeRecordingKey(String name) {
   if (dot > 0 && s.length - dot <= 6) s = s.substring(0, dot);
   for (final suffix in const [
     '_analyse_regional',
+    '_analyse_channel',
     '_scoring',
     '_autoscore',
     '_clean',

@@ -2442,8 +2442,13 @@ def load_and_merge_cap_sidecars(df: pd.DataFrame, csv_path: Path) -> pd.DataFram
 
     cap_candidates = []
     stem = csv_path.name
-    if stem.lower().endswith("_analyse_regional.csv"):
-        base_stem = stem[:-len("_analyse_regional.csv")]
+    matched_suffix = None
+    for sfx in ["_analyse_regional.csv", "_analyse_channel.csv"]:
+        if stem.lower().endswith(sfx):
+            matched_suffix = sfx
+            break
+    if matched_suffix:
+        base_stem = stem[:-len(matched_suffix)]
         clean_base = re.sub(r"(_clean|_stimclean|_cleaned|_preprocessed)$", "", base_stem, flags=re.I)
         cap_candidates.extend([
             csv_path.parent / f"{base_stem}_cap.json",

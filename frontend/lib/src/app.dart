@@ -2982,11 +2982,18 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           final existingRegionalFiles = <String>[];
           for (final job in jobs) {
             final targetPath = job.originalPath ?? job.edfPath;
-            final csvPath = (outputDir != null && outputDir.trim().isNotEmpty)
-                ? '${outputDir.trim()}${Platform.pathSeparator}${_basename(targetPath).replaceAll(RegExp(r'\.[^.]+$'), '')}_analyse_regional.csv'
-                : '${_sidecarPath(targetPath, '')}_analyse_regional.csv';
-            if (File(csvPath).existsSync()) {
-              existingRegionalFiles.add(csvPath);
+            final baseDir = (outputDir != null && outputDir.trim().isNotEmpty)
+                ? outputDir.trim()
+                : File(targetPath).parent.path;
+            final stem = _basename(targetPath).replaceAll(RegExp(r'\.[^.]+$'), '');
+            final channelCsv = '$baseDir${Platform.pathSeparator}${stem}_analyse_channel.csv';
+            final regionalCsv = '$baseDir${Platform.pathSeparator}${stem}_analyse_regional.csv';
+            final primaryCsv = perChannel ? channelCsv : regionalCsv;
+            final fallbackCsv = perChannel ? regionalCsv : channelCsv;
+            if (File(primaryCsv).existsSync()) {
+              existingRegionalFiles.add(primaryCsv);
+            } else if (File(fallbackCsv).existsSync()) {
+              existingRegionalFiles.add(fallbackCsv);
             }
           }
           setState(() {
@@ -3002,7 +3009,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 ? outputDir.trim()
                 : File(jobs.first.edfPath).parent.path;
             final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
-            final masterCsvPath = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet_$stamp.csv';
+            final isChannelWise = perChannel ||
+                existingRegionalFiles.any((f) => f.toLowerCase().endsWith('_analyse_channel.csv'));
+            final masterPrefix = isChannelWise
+                ? 'AnalyseNidra_channel_master_sheet'
+                : 'AnalyseNidra_regional_master_sheet';
+            final masterCsvPath = '$targetDir${Platform.pathSeparator}${masterPrefix}_$stamp.csv';
             unawaited(() async {
               try {
                 final compiled = await compileRegionalCsvFiles(
@@ -3014,7 +3026,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 if (mounted) {
                   setState(() => _lastBatchMasterSheetPath = masterCsvPath);
                   _setStatus(
-                    'Auto-compiled ${existingRegionalFiles.length} regional CSV(s) into ${_basename(masterCsvPath)}',
+                    'Auto-compiled ${existingRegionalFiles.length} ${isChannelWise ? "channel" : "regional"} CSV(s) into ${_basename(masterCsvPath)}',
                   );
                 }
               } catch (e) {
@@ -3219,9 +3231,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     }
 
     final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
+    final isChannelWise = paths.any((p) => p.toLowerCase().endsWith('_analyse_channel.csv'));
+    final defaultPrefix = isChannelWise
+        ? 'AnalyseNidra_channel_master_sheet'
+        : 'AnalyseNidra_regional_master_sheet';
     final output = await FilePicker.saveFile(
       dialogTitle: 'Save AnalyseNidra master sheet',
-      fileName: 'AnalyseNidra_master_sheet_$stamp.csv',
+      fileName: '${defaultPrefix}_$stamp.csv',
       type: FileType.custom,
       allowedExtensions: ['csv'],
     );
@@ -3241,7 +3257,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       );
       if (empty.isNotEmpty) {
         _showTextDialog(
-          'Empty regional CSVs left out',
+          'Empty CSVs left out',
           '${empty.length} file(s) had no data rows and were not compiled. '
               'Re-run feature extraction with Resume ticked to rebuild them:\n\n'
               '${empty.map(_basename).join('\n')}',
@@ -3253,23 +3269,26 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     }
   }
 
-  /// Compiles every `*_analyse_regional.csv` in a folder (not recursive).
+  /// Compiles every `*_analyse_regional.csv` or `*_analyse_channel.csv` in a folder (not recursive).
   Future<void> _compileAnalyseNidraFolder() async {
     final dir = await FilePicker.getDirectoryPath(
-      dialogTitle: 'Folder with AnalyseNidra regional CSV files',
+      dialogTitle: 'Folder with AnalyseNidra CSV files',
     );
     if (dir == null) return;
     final files = Directory(dir)
         .listSync()
         .whereType<File>()
         .map((f) => f.path)
-        .where((p) => p.toLowerCase().endsWith('_analyse_regional.csv'))
+        .where((p) {
+          final l = p.toLowerCase();
+          return l.endsWith('_analyse_regional.csv') || l.endsWith('_analyse_channel.csv');
+        })
         .toList()
       ..sort();
     if (files.isEmpty) {
       _showTextDialog(
         'Master sheet compilation',
-        'No *_analyse_regional.csv files in $dir.',
+        'No *_analyse_regional.csv or *_analyse_channel.csv files in $dir.',
       );
       return;
     }
@@ -5083,11 +5102,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
     List<Map<String, String>> regionalRows = const [];
     if (_activePath != null) {
-      final regionalPath =
-          '${_sidecarPath(_activePath!, '')}_analyse_regional.csv';
-      final regionalFile = File(regionalPath);
-      if (await regionalFile.exists()) {
-        regionalRows = parseCsvTable(await regionalFile.readAsString());
+      final base = _sidecarPath(_activePath!, '');
+      final regionalFile = File('${base}_analyse_regional.csv');
+      final channelFile = File('${base}_analyse_channel.csv');
+      final targetFile = (await regionalFile.exists())
+          ? regionalFile
+          : ((await channelFile.exists()) ? channelFile : null);
+      if (targetFile != null) {
+        regionalRows = parseCsvTable(await targetFile.readAsString());
       }
     }
 
@@ -5161,7 +5183,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       final spindleFile = File('${base}_analyse_spindles.json');
       final slowWaveFile = File('${base}_analyse_slow_waves.json');
       final pacFile = File('${base}_analyse_pac.json');
-      final regionalFile = File('${base}_analyse_regional.csv');
+      var regionalFile = File('${base}_analyse_regional.csv');
+      if (!regionalFile.existsSync()) {
+        final chFile = File('${base}_analyse_channel.csv');
+        if (chFile.existsSync()) regionalFile = chFile;
+      }
 
       try {
         if (await coreFile.exists()) {
@@ -8301,7 +8327,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   (() {
                     final stem = _basename(r.source).replaceAll(RegExp(r'\.[^.]+$'), '');
                     final dir = outDir ?? File(r.source).parent.path;
-                    return '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
+                    final chCsv = '$dir${Platform.pathSeparator}${stem}_analyse_channel.csv';
+                    final regCsv = '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
+                    if (_batchAnalysePerChannel && File(chCsv).existsSync()) return chCsv;
+                    if (File(regCsv).existsSync()) return regCsv;
+                    if (File(chCsv).existsSync()) return chCsv;
+                    return _batchAnalysePerChannel ? chCsv : regCsv;
                   })();
             },
           ),
@@ -8349,7 +8380,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   (() {
                     final stem = _basename(r.source).replaceAll(RegExp(r'\.[^.]+$'), '');
                     final dir = outDir ?? File(r.source).parent.path;
-                    return '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
+                    final chCsv = '$dir${Platform.pathSeparator}${stem}_analyse_channel.csv';
+                    final regCsv = '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
+                    if (_batchAnalysePerChannel && File(chCsv).existsSync()) return chCsv;
+                    if (File(regCsv).existsSync()) return regCsv;
+                    if (File(chCsv).existsSync()) return chCsv;
+                    return _batchAnalysePerChannel ? chCsv : regCsv;
                   })();
               final cFile = File(capOut);
               final rFile = File(regPath);
@@ -8506,14 +8542,29 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           if (path == null) {
             final stem = _basename(r.source).replaceAll(RegExp(r'\.[^.]+$'), '');
             final dir = outDir ?? File(r.source).parent.path;
-            final primary = '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
+            final chCsv = '$dir${Platform.pathSeparator}${stem}_analyse_channel.csv';
+            final regCsv = '$dir${Platform.pathSeparator}${stem}_analyse_regional.csv';
+            final primary = _batchAnalysePerChannel ? chCsv : regCsv;
+            final fallback = _batchAnalysePerChannel ? regCsv : chCsv;
             if (File(primary).existsSync()) {
               path = primary;
+            } else if (File(fallback).existsSync()) {
+              path = fallback;
             } else {
               final input = featureInput(r);
               final inStem = _basename(input).replaceAll(RegExp(r'\.[^.]+$'), '');
               final inDir = outDir ?? File(input).parent.path;
-              path = '$inDir${Platform.pathSeparator}${inStem}_analyse_regional.csv';
+              final inCh = '$inDir${Platform.pathSeparator}${inStem}_analyse_channel.csv';
+              final inReg = '$inDir${Platform.pathSeparator}${inStem}_analyse_regional.csv';
+              final inPrimary = _batchAnalysePerChannel ? inCh : inReg;
+              final inFallback = _batchAnalysePerChannel ? inReg : inCh;
+              if (File(inPrimary).existsSync()) {
+                path = inPrimary;
+              } else if (File(inFallback).existsSync()) {
+                path = inFallback;
+              } else {
+                path = primary;
+              }
             }
           }
           if (!File(path).existsSync()) {
@@ -8533,6 +8584,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   path,
                   '--analyses',
                   'none',
+                  if (_batchAnalysePerChannel) '--per-channel',
                 ]);
                 if (res.exitCode == 0 && File(path).existsSync()) {
                   r.regional = path;
@@ -8549,18 +8601,23 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         final stamp = DateTime.now().toIso8601String().replaceAll(':', '').split('.').first;
 
         if (files.isEmpty) {
-          // If no regional CSV files exist, check if PSG summary can be compiled from reports
+          // If no regional/channel CSV files exist, check if PSG summary can be compiled from reports
           final psgSummary = await _writePsgBatchSummaryFromRecordings(recs, targetDir, stamp);
           if (psgSummary != null) {
             return 'Compiled PSG batch summary into ${_basename(psgSummary)}';
           }
-          return 'No regional CSV files or PSG reports to compile.';
+          return 'No regional or channel CSV files or PSG reports to compile.';
         }
 
         final empty = await regionalCsvFilesWithoutData(files);
         final usable = files.where((f) => !empty.contains(f)).toList();
-        if (usable.isEmpty) return 'All regional CSV files are empty; re-run feature extraction.';
-        final master = '$targetDir${Platform.pathSeparator}AnalyseNidra_master_sheet_$stamp.csv';
+        if (usable.isEmpty) return 'All CSV files are empty; re-run feature extraction.';
+        final isChannelWise = _batchAnalysePerChannel ||
+            usable.any((f) => f.toLowerCase().endsWith('_analyse_channel.csv'));
+        final masterPrefix = isChannelWise
+            ? 'AnalyseNidra_channel_master_sheet'
+            : 'AnalyseNidra_regional_master_sheet';
+        final master = '$targetDir${Platform.pathSeparator}${masterPrefix}_$stamp.csv';
         final compiledContent = await compileRegionalCsvFiles(
           usable,
           metadata: _batchMetadata,
@@ -13754,6 +13811,7 @@ List<String> _analyseNidraArguments(
   final fileName = File(targetPath).path.split(Platform.isWindows ? r'\' : '/').last;
   final stem = fileName.replaceAll(RegExp(r'\.[^.]+$'), '');
   final base = '$baseDir${Platform.pathSeparator}$stem';
+  final csvSuffix = perChannel ? '_analyse_channel.csv' : '_analyse_regional.csv';
 
   final args = [
     job.edfPath,
@@ -13762,7 +13820,7 @@ List<String> _analyseNidraArguments(
     writeJsonSidecars ? '${base}_analyse_pac.json' : '-',
     writeJsonSidecars ? '${base}_analyse_slow_waves.json' : '-',
     writeJsonSidecars ? '${base}_analyse_spindles.json' : '-',
-    writeRegional ? '${base}_analyse_regional.csv' : '-',
+    writeRegional ? '$base$csvSuffix' : '-',
     '--channels',
     channels.join(','),
     '--references',

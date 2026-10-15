@@ -4,6 +4,21 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.37.7]
+*   **10-20 to 10-10 Channel Alias Matching:**
+    - Added bidirectional matching in `find_header_index` for standard international 10-20 $\leftrightarrow$ 10-10 electrode nomenclature across EDF and BrainVision (`.vhdr`) loaders (`T3` $\leftrightarrow$ `T7`, `T4` $\leftrightarrow$ `T8`, `T5` $\leftrightarrow$ `P7`, `T6` $\leftrightarrow$ `P8`, `A1` $\leftrightarrow$ `M1`, `A2` $\leftrightarrow$ `M2`).
+*   **Lenient Channel Loading (`read_available`):**
+    - Switched Preprocessing (`run_preprocessing`) and Feature Extraction (`load_recording`) from strict channel verification (`read_selected`) to lenient channel loading (`read_available`).
+    - Recordings missing individual electrodes (such as `T7`) now cleanly proceed through preprocessing and feature extraction on all available channels with clear warning logs instead of failing the file.
+*   **Decoupled PSG Batch Pipeline Execution:**
+    - In `batch_pipeline.dart`, removed indiscriminate blocking where a failure in Preprocessing blocked all subsequent stages.
+    - Subsequent steps (Features, CAP, Respiratory / OSA, PLM) continue independently, with feature extraction falling back to raw recording when a cleaned version is not present.
+*   **Guaranteed Sleep Macro-Architecture in Master Sheet:**
+    - Master sheet compilation now guarantees inclusion of all scored recordings: if a recording has a hypnogram but lacks regional spectral features, `analyse-nidra` computes macro-architecture metrics via `--analyses none`.
+    - All 38 sleep macro-architecture metrics (TST, WASO, SE, SOL, stage durations & percentages, transitions, bout dynamics) are preserved in `AnalyseNidra_master_sheet_<timestamp>.csv`.
+
+---
+
 ## [1.37.6]
 *   **Unified PSG Batch Analysis Pipeline with Toggleable Substeps:**
     - Merged previously separate "EEG Analysis Pipeline" and "Polygraphy: OSA & PLM" sub-tabs into a single unified **PSG Analysis** pipeline.

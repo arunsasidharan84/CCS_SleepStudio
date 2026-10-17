@@ -4,7 +4,7 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
-## [1.38.1]
+## [1.38.2]
 *   **Streamlined Output File Formats (`.ccs*`):**
     - Introduced dedicated, intuitive extensions replacing scattered and ambiguous `.json` sidecars across all subsystems:
       - Configuration: `<stem>.ccsconfig` (replaces `<stem>.config.json` / `<stem>_config.json`)

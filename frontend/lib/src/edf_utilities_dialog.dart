@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -8,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import 'eeg_backend.dart';
 import 'models.dart';
+import 'scoring_io.dart';
 
 /// Class containing parameters for EDF modification
 class EdfTransformOptions {
@@ -717,6 +719,13 @@ Future<void> processEdfFile(
   } finally {
     await raf.close();
   }
+
+  // Preserve epochs, markers, protocols, and transform options in <recording>.edf.ccsmeta
+  await _writeCcsMetaSidecar(
+    inputPath: inputPath,
+    outputPath: outputPath,
+    options: options,
+  );
 }
 
 Future<void> _writeLoadedEegToEdf(
@@ -836,5 +845,58 @@ Future<void> _writeLoadedEegToEdf(
     }
   } finally {
     await raf.close();
+  }
+
+  await _writeCcsMetaSidecar(
+    inputPath: outputPath,
+    outputPath: outputPath,
+    options: options,
+  );
+}
+
+Future<void> _writeCcsMetaSidecar({
+  required String inputPath,
+  required String outputPath,
+  required EdfTransformOptions options,
+}) async {
+  try {
+    final metaPath = '$outputPath.ccsmeta';
+    final outFile = File(outputPath);
+    final outBytes = await outFile.exists() ? await outFile.length() : 0;
+
+    // Load any existing scoring/events for the input recording
+    final scoringResult = await tryLoadAutoScoring(inputPath, 0);
+    final events = await tryLoadAutoEvents(inputPath);
+    final autoConfig = await tryLoadAutoConfig(inputPath);
+
+    final meta = <String, dynamic>{
+      'schema': 'ccs-recording-metadata-v1',
+      'data_file': outFile.uri.pathSegments.last,
+      'data_bytes': outBytes,
+      'export_timestamp': DateTime.now().toIso8601String(),
+      'transform_options': {
+        'downsample': options.downsample,
+        'target_sample_rate_hz': options.targetSampleRateHz,
+        'crop_time': options.cropTime,
+        'start_time_sec': options.startTimeSec,
+        'end_time_sec': options.endTimeSec,
+        'anonymize_header': options.anonymizeHeader,
+        'rename_channels': options.renameChannels,
+        'channel_name_map': options.channelNameMap,
+        'selected_channels': options.selectedChannels,
+      },
+      if (scoringResult != null) ...{
+        'stages': [for (final s in scoringResult.stages) s.name],
+        'stages_confidence': scoringResult.stagesConfidence,
+        'stage_source_format': scoringResult.sourceFormat,
+      },
+      'markers': [for (final e in events) e.toJson()],
+      if (autoConfig != null) 'config': autoConfig.toJson(),
+    };
+
+    final metaFile = File(metaPath);
+    await metaFile.writeAsString(jsonEncode(meta));
+  } catch (e) {
+    debugPrint('Failed to write .ccsmeta sidecar: $e');
   }
 }

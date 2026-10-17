@@ -123,20 +123,29 @@ Future<String> compileRegionalCsvFiles(
       subjectId = meta[idCol] ?? '';
     }
 
-    // Look for companion reports (_cap.json, _respiratory.json, _plm.json) beside the regional CSV or the source recording
+    // Look for companion reports (.ccscap, .ccsrespiratory, .ccsplm or legacy _cap.json, etc.)
     final srcPath = recordingPaths[path] ?? edfPath;
     final capSummary = extractCompanionJsonSummary(
-      candidateCompanionPaths(file, srcPath, '_cap.json'),
+      [
+        ...candidateCompanionPaths(file, srcPath, '.ccscap'),
+        ...candidateCompanionPaths(file, srcPath, '_cap.json'),
+      ],
       prefix: 'CAP_',
       sections: const ['summary'],
     );
     final respSummary = extractCompanionJsonSummary(
-      candidateCompanionPaths(file, srcPath, '_respiratory.json'),
+      [
+        ...candidateCompanionPaths(file, srcPath, '.ccsrespiratory'),
+        ...candidateCompanionPaths(file, srcPath, '_respiratory.json'),
+      ],
       prefix: 'RESP_',
       sections: const ['summary', 'flags'],
     );
     final plmSummary = extractCompanionJsonSummary(
-      candidateCompanionPaths(file, srcPath, '_plm.json'),
+      [
+        ...candidateCompanionPaths(file, srcPath, '.ccsplm'),
+        ...candidateCompanionPaths(file, srcPath, '_plm.json'),
+      ],
       prefix: 'PLM_',
       sections: const ['summary', 'flags'],
     );

@@ -152,6 +152,7 @@ List<String> _autoScoringCandidatePaths(
     if (!directory.existsSync()) continue;
     for (final stem in stems) {
       final basePath = '${directory.path}${Platform.pathSeparator}$stem';
+      add('$basePath.ccsscoring');
       add('${basePath}_scoring.json');
       add('$basePath.json');
     }
@@ -184,12 +185,17 @@ List<String> _autoScoringCandidatePaths(
 
 bool _isAutoscoreSidecarForStem(String path, String stem) {
   final name = path.split(Platform.pathSeparator).last;
-  if (!name.startsWith('${stem}_') || !name.toLowerCase().endsWith('.json')) {
+  final lower = name.toLowerCase();
+  final stemLower = stem.toLowerCase();
+  if (!lower.startsWith('${stemLower}_') && !lower.startsWith('$stemLower.')) {
     return false;
   }
-  final suffix = name.substring(stem.length).toLowerCase();
+  if (!lower.endsWith('.json') && !lower.endsWith('.ccsscoring')) {
+    return false;
+  }
+  final suffix = lower.substring(stemLower.length);
   return RegExp(
-    r'^_(yasa|gssc|tinysleepnet|seqsleepnet|sleeptransformer|usleep|luna|dreamento|sleepeegpy)(?:_sleepgpt)?(?:_scoring)?\.json$',
+    r'^[._](yasa|gssc|tinysleepnet|seqsleepnet|sleeptransformer|usleep|luna|dreamento|sleepeegpy)(?:_sleepgpt)?(?:_scoring)?\.(?:json|ccsscoring)$',
   ).hasMatch(suffix);
 }
 
@@ -221,31 +227,40 @@ Future<List<ScoredEvent>> tryLoadAutoEvents(
   return const [];
 }
 
-/// Load config from the JSON file that lives next to the EDF (auto-loaded on open).
+/// Load config from the sidecar file next to the EDF (auto-loaded on open).
+/// Checks `<stem>.ccsconfig` first, falling back to legacy `<stem>.config.json` and `<stem>_config.json`.
 Future<AppConfig?> tryLoadAutoConfig(String activePath) async {
   final dotIdx = activePath.lastIndexOf('.');
   final base = dotIdx >= 0 ? activePath.substring(0, dotIdx) : activePath;
-  final configPath = '$base.config.json';
-  var file = File(configPath);
 
-  // Also try an alternative naming convention: base_config.json
-  if (!file.existsSync()) {
-    final altPath = '${base}_config.json';
-    final altFile = File(altPath);
-    if (altFile.existsSync()) {
-      file = altFile;
-    } else {
-      // Filesystem might not have synced yet — retry once after a brief delay
-      await Future.delayed(const Duration(milliseconds: 50));
-      if (file.existsSync()) {
-        // Found after brief delay
-      } else if (altFile.existsSync()) {
-        file = altFile;
-      } else {
-        return null;
+  final candidatePaths = [
+    '$base.ccsconfig',
+    '$base.config.json',
+    '${base}_config.json',
+  ];
+
+  File? file;
+  for (final path in candidatePaths) {
+    final f = File(path);
+    if (f.existsSync()) {
+      file = f;
+      break;
+    }
+  }
+
+  if (file == null) {
+    // Filesystem might not have synced yet — retry once after a brief delay
+    await Future.delayed(const Duration(milliseconds: 50));
+    for (final path in candidatePaths) {
+      final f = File(path);
+      if (f.existsSync()) {
+        file = f;
+        break;
       }
     }
   }
+
+  if (file == null) return null;
 
   try {
     final content = await file.readAsString();
@@ -273,15 +288,22 @@ Future<AppConfig?> tryLoadAutoConfig(String activePath) async {
   return null;
 }
 
-/// Save config next to the EDF file (e.g. base.config.json).
+/// Save config next to the EDF file as `<stem>.ccsconfig`.
+/// If a legacy `<stem>.config.json` already existed, keep it updated as well for 100% backward compatibility.
 Future<void> saveAutoConfig(String activePath, AppConfig config) async {
   final dotIdx = activePath.lastIndexOf('.');
   final base = dotIdx >= 0 ? activePath.substring(0, dotIdx) : activePath;
-  final configPath = '$base.config.json';
+  final configPath = '$base.ccsconfig';
   try {
     final file = File(configPath);
     final json = jsonEncode(config.toPythonJson());
     await file.writeAsString(json);
+
+    // If an existing legacy file is present, update it as well
+    final legacyFile = File('$base.config.json');
+    if (legacyFile.existsSync()) {
+      await legacyFile.writeAsString(json);
+    }
   } catch (e) {
     // Non-fatal
   }
@@ -290,7 +312,12 @@ Future<void> saveAutoConfig(String activePath, AppConfig config) async {
 String _jsonPathForEdf(String edfPath) {
   final dotIdx = edfPath.lastIndexOf('.');
   final base = dotIdx >= 0 ? edfPath.substring(0, dotIdx) : edfPath;
-  return '${base}_scoring.json';
+  // If an existing legacy _scoring.json exists, keep saving to it, otherwise save to .ccsscoring
+  final legacyPath = '${base}_scoring.json';
+  if (File(legacyPath).existsSync()) {
+    return legacyPath;
+  }
+  return '$base.ccsscoring';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -653,10 +680,10 @@ Future<ScoringFormatDetection> detectScoringFormat(String path) async {
       displayName: 'Sleepyland annotation',
     );
   }
-  if (lower.endsWith('.json')) {
+  if (lower.endsWith('.ccsscoring') || lower.endsWith('.json')) {
     return const ScoringFormatDetection(
       parserType: 'scoringhero',
-      displayName: 'ScoringHero JSON',
+      displayName: 'ScoringHero JSON / CCSSCORING',
     );
   }
 
@@ -1321,16 +1348,14 @@ Future<void> exportScoringDialog(
   List<Map<SleepStage, double>>? stageProbabilities,
   required void Function(String) onStatus,
 }) async {
-  final ext = ['json', 'txt', 'csv', 'vis'];
-
   String? defaultName;
   if (activePath != null) {
     final base = activePath.split(Platform.pathSeparator).last;
     final dot = base.lastIndexOf('.');
     final name = dot >= 0 ? base.substring(0, dot) : base;
-    defaultName = '${name}_scoring.json';
+    defaultName = '$name.ccsscoring';
   } else {
-    defaultName = 'scoring.json';
+    defaultName = 'scoring.ccsscoring';
   }
 
   String? savePath = await FilePicker.saveFile(
@@ -1344,19 +1369,23 @@ Future<void> exportScoringDialog(
   }
 
   if (!savePath.contains('.')) {
-    savePath = '${savePath}_scoring.json';
+    savePath = '$savePath.ccsscoring';
   } else if (savePath.toLowerCase().endsWith('.json') &&
-      !savePath.toLowerCase().endsWith('_scoring.json')) {
+      !savePath.toLowerCase().endsWith('_scoring.json') &&
+      !savePath.toLowerCase().endsWith('.scoring.json')) {
     savePath = '${savePath.substring(0, savePath.length - 5)}_scoring.json';
   }
 
   // Determine format from extension
   String filetype = 'scoringhero';
-  for (var i = 0; i < ext.length; i++) {
-    if (savePath.toLowerCase().endsWith('.${ext[i]}')) {
-      filetype = ['scoringhero', 'yasa', 'sleeptrip', 'vis'][i];
-      break;
-    }
+  if (savePath.toLowerCase().endsWith('.txt')) {
+    filetype = 'yasa';
+  } else if (savePath.toLowerCase().endsWith('.csv')) {
+    filetype = 'sleeptrip';
+  } else if (savePath.toLowerCase().endsWith('.vis')) {
+    filetype = 'vis';
+  } else {
+    filetype = 'scoringhero';
   }
 
   try {

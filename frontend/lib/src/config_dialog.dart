@@ -3,12 +3,15 @@
 // Configuration dialog matching PyQt sleep EEG app's multi-tab layout.
 //
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'eeg_backend.dart';
 import 'models.dart';
 import 'feature_config_dialog.dart';
+import 'legacy_file_migration.dart';
+import 'recording_storage.dart';
 
 class ConfigDialog extends StatefulWidget {
   const ConfigDialog({
@@ -398,6 +401,108 @@ class _ConfigDialogState extends State<ConfigDialog> {
                             ],
                             onChanged: (v) =>
                                 setState(() => _working.hypnogramZoom = v),
+                          ),
+                          const Divider(height: 28),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: DropdownButtonFormField<RecordingFileFormat>(
+                                  isExpanded: true,
+                                  value: RecordingStorage.preferredFormat,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Saved recording format (all workflows)',
+                                    helperText: 'EDF exports include companion JSON metadata in recording.edf.ccsmeta, preserving epochs, markers, protocols, and processing history.',
+                                    helperMaxLines: 3,
+                                  ),
+                                  items: const [
+                                    DropdownMenuItem(
+                                      value: RecordingFileFormat.ccseeg,
+                                      child: Text('CCSEEG · native portable'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: RecordingFileFormat.fif,
+                                      child: Text('FIF · floating-point EEG / epochs'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: RecordingFileFormat.edf,
+                                      child: Text('EDF+ · 16-bit + .ccsmeta metadata'),
+                                    ),
+                                  ],
+                                  onChanged: (v) {
+                                    if (v != null) {
+                                      setState(() {
+                                        RecordingStorage.setPreferredFormat(v);
+                                      });
+                                    }
+                                  },
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: OutlinedButton.icon(
+                                  icon: const Icon(Icons.drive_file_rename_outline),
+                                  label: const Text('Organise legacy filenames…'),
+                                  onPressed: () async {
+                                    final folder = await FilePicker.getDirectoryPath();
+                                    if (folder == null || !context.mounted) return;
+                                    try {
+                                      final plan = await LegacyFileMigration.plan(folder);
+                                      if (!context.mounted) return;
+                                      final confirmed = await showDialog<bool>(
+                                        context: context,
+                                        builder: (ctx) => AlertDialog(
+                                          title: Text('${plan.length} legacy output filenames to migrate'),
+                                          content: SizedBox(
+                                            width: 600,
+                                            child: SingleChildScrollView(
+                                              child: Text(
+                                                plan.isEmpty
+                                                    ? 'No known legacy output filenames (.config.json, _scoring.json, etc.) need changing in this directory.'
+                                                    : plan.entries
+                                                        .map(
+                                                          (e) =>
+                                                              '${e.key.split(RegExp(r"[/\\]")).last} → ${e.value.split(RegExp(r"[/\\]")).last}',
+                                                        )
+                                                        .join('\n'),
+                                              ),
+                                            ),
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(ctx, false),
+                                              child: const Text('Cancel'),
+                                            ),
+                                            if (plan.isNotEmpty)
+                                              FilledButton(
+                                                onPressed: () => Navigator.pop(ctx, true),
+                                                child: const Text('Rename outputs'),
+                                              ),
+                                          ],
+                                        ),
+                                      );
+                                      if (confirmed == true) {
+                                        await LegacyFileMigration.apply(folder, plan);
+                                        if (context.mounted) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text('Successfully migrated ${plan.length} file(s) to streamlined format.'),
+                                            ),
+                                          );
+                                        }
+                                      }
+                                    } catch (e) {
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(content: Text('$e')),
+                                        );
+                                      }
+                                    }
+                                  },
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),

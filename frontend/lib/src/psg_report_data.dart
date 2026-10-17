@@ -58,18 +58,52 @@ String psgSidecarBase(String recordingPath) {
   return dot > sep ? recordingPath.substring(0, dot) : recordingPath;
 }
 
-String respiratoryReportPath(String recordingPath) =>
-    '${psgSidecarBase(recordingPath)}_respiratory.json';
+String respiratoryReportPath(String recordingPath) {
+  final base = psgSidecarBase(recordingPath);
+  final streamlined = '$base.ccsrespiratory';
+  if (File(streamlined).existsSync()) return streamlined;
+  final legacy = '${base}_respiratory.json';
+  if (File(legacy).existsSync()) return legacy;
+  return streamlined;
+}
 
-String plmReportPath(String recordingPath) =>
-    '${psgSidecarBase(recordingPath)}_plm.json';
+String plmReportPath(String recordingPath) {
+  final base = psgSidecarBase(recordingPath);
+  final streamlined = '$base.ccsplm';
+  if (File(streamlined).existsSync()) return streamlined;
+  final legacy = '${base}_plm.json';
+  if (File(legacy).existsSync()) return legacy;
+  return streamlined;
+}
 
-String capReportPath(String recordingPath) =>
-    '${psgSidecarBase(recordingPath)}_cap.json';
+String capReportPath(String recordingPath) {
+  final base = psgSidecarBase(recordingPath);
+  final streamlined = '$base.ccscap';
+  if (File(streamlined).existsSync()) return streamlined;
+  final legacy = '${base}_cap.json';
+  if (File(legacy).existsSync()) return legacy;
+  return streamlined;
+}
 
 Future<Map<String, dynamic>?> loadPsgReport(String path) async {
   try {
-    final file = File(path);
+    var file = File(path);
+    if (!await file.exists()) {
+      // Try fallback between streamlined and legacy
+      if (path.endsWith('.ccsrespiratory')) {
+        file = File(path.replaceAll(RegExp(r'\.ccsrespiratory$'), '_respiratory.json'));
+      } else if (path.endsWith('_respiratory.json')) {
+        file = File(path.replaceAll(RegExp(r'_respiratory\.json$'), '.ccsrespiratory'));
+      } else if (path.endsWith('.ccsplm')) {
+        file = File(path.replaceAll(RegExp(r'\.ccsplm$'), '_plm.json'));
+      } else if (path.endsWith('_plm.json')) {
+        file = File(path.replaceAll(RegExp(r'_plm\.json$'), '.ccsplm'));
+      } else if (path.endsWith('.ccscap')) {
+        file = File(path.replaceAll(RegExp(r'\.ccscap$'), '_cap.json'));
+      } else if (path.endsWith('_cap.json')) {
+        file = File(path.replaceAll(RegExp(r'_cap\.json$'), '.ccscap'));
+      }
+    }
     if (!await file.exists()) return null;
     final decoded = jsonDecode(await file.readAsString());
     return decoded is Map<String, dynamic> ? decoded : null;

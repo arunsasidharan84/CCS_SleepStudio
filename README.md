@@ -161,8 +161,8 @@ Built from the ground up using **Flutter** for a lightweight, fluid UI and a nat
 
 * **Multi-Montage Consensus Scoring**: AutoscoreNidra independently scores every selected EEG channel and clinically valid reference combination. It then combines their epoch-wise probabilities into one consensus hypnogram, reducing dependence on any single channel or montage.
 * **Optional SleepGPT Sequence Refinement**: After the base consensus scoring, SleepGPT can apply a condition-agnostic sequence correction pass. It uses the temporal sleep-stage sequence to reduce implausible transitions without requiring a diagnosis-specific model.
-* **Single-Channel EEG Support**: AutoscoreNidra can score recordings containing only one usable EEG channel. When multiple channels or reference combinations are available, it automatically expands to the multi-montage consensus workflow.
-* **Clear Scoring Filenames**: Final hypnograms use the suffix `_scoring.json`, for example `recording_yasa_scoring.json` or `recording_yasa_sleepgpt_scoring.json`, so they are easy to distinguish from AnalyseNidra and diagnostic JSON files.
+* **Clear, Intuitive Sidecar Filenames (`.ccs*`)**: Final hypnograms use the streamlined extension `.ccsscoring` (e.g., `recording.ccsscoring` or `recording_yasa.ccsscoring`), replacing ambiguous generic `.json` files across the application. Detection outputs use dedicated extensions (`.ccsspindles`, `.ccsslowwaves`, `.ccspac`, `.ccscore`, `.ccsnlg`, `.ccsrespiratory`, `.ccsplm`, `.ccscap`), with 100% backward compatibility for legacy `.json` datasets and a built-in migration tool.
+* **Flexible Recording Storage Formats (CCSEEG, FIF, EDF+)**: Choose your preferred signal save format in Configuration. EDF exports automatically bundle companion `.ccsmeta` metadata preserving epochs, markers, protocols, and processing history together.
 * **9 Supported Staging Models**:
   1. **YASA LightGBM Consensus**: Lightweight boosted tree stager.
   2. **Offline U-Sleep Consensus**: Local convolutional neural network inference.

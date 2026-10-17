@@ -130,6 +130,7 @@ Future<List<ScoredEvent>> _loadJsonEvents(String activePath) async {
   final base = dotIdx >= 0 ? activePath.substring(0, dotIdx) : activePath;
 
   final candidates = [
+    '$base.ccsscoring',
     '${base}_scoring.json',
     '$base.json',
     '${base}_events.json',
@@ -684,6 +685,7 @@ Future<List<ScoredEvent>> loadAnalyseNidraSpindles(String activePath) async {
   final dotIdx = activePath.lastIndexOf('.');
   final base = dotIdx >= 0 ? activePath.substring(0, dotIdx) : activePath;
   final candidates = [
+    '$base.ccsspindles',
     '${base}_analyse_spindles.json',
     '$base.spindles.json',
     '${base}_spindles.json',
@@ -729,6 +731,7 @@ Future<List<ScoredEvent>> loadAnalyseNidraSlowWaves(String activePath) async {
   final dotIdx = activePath.lastIndexOf('.');
   final base = dotIdx >= 0 ? activePath.substring(0, dotIdx) : activePath;
   final candidates = [
+    '$base.ccsslowwaves',
     '${base}_analyse_slow_waves.json',
     '$base.slow_waves.json',
     '${base}_slow_waves.json',

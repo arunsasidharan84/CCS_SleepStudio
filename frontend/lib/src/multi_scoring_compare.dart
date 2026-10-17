@@ -172,7 +172,7 @@ String compareLabelForPath(String path, String stem) {
   var core = suffix.contains('.') ? suffix.substring(0, suffix.lastIndexOf('.')) : suffix;
   if (core.contains('manual')) return 'Manual scoring${ext == 'edf' ? ' (EDF)' : ''}';
   core = core.replaceAll(RegExp(r'_?scoring$'), '');
-  if (core.isEmpty) return ext == 'json' ? 'Saved scoring' : name;
+  if (core.isEmpty) return (ext == 'json' || ext == 'ccsscoring') ? 'Saved scoring' : name;
   final sleepgpt = core.endsWith('_sleepgpt');
   final algo = sleepgpt ? core.substring(0, core.length - '_sleepgpt'.length) : core;
   final label = autoscoreAlgorithmLabel(algo);
@@ -196,14 +196,26 @@ List<String> findScoringSidecars(String recordingPath) {
     if (lower.contains('_analyse_') ||
         lower.endsWith('.config.json') ||
         lower.endsWith('_config.json') ||
+        lower.endsWith('.ccsconfig') ||
         lower.endsWith('_respiratory.json') ||
+        lower.endsWith('.ccsrespiratory') ||
         lower.endsWith('_plm.json') ||
+        lower.endsWith('.ccsplm') ||
         lower.endsWith('_cap.json') ||
+        lower.endsWith('.ccscap') ||
         lower.endsWith('_events.json') ||
-        lower.endsWith('_markers.json')) {
+        lower.endsWith('_markers.json') ||
+        lower.endsWith('.ccsspindles') ||
+        lower.endsWith('.ccsslowwaves') ||
+        lower.endsWith('.ccspac') ||
+        lower.endsWith('.ccscore') ||
+        lower.endsWith('.ccsnlg') ||
+        lower.endsWith('.ccsmeta') ||
+        lower.endsWith('.ccseeg')) {
       continue;
     }
-    final isScoring = lower.endsWith('.json') ||
+    final isScoring = lower.endsWith('.ccsscoring') ||
+        lower.endsWith('.json') ||
         lower.endsWith('.vis') ||
         lower.endsWith('.annot') ||
         lower.endsWith('.esrc') ||

@@ -30,6 +30,7 @@ import 'markers_dialog.dart';
 import 'preprocess_dialog.dart';
 import 'psg_analysis.dart';
 import 'publication_sleep_report.dart';
+import 'recording_storage.dart';
 import 'regional_csv.dart';
 import 'scoring_io.dart';
 import 'update_checker.dart';
@@ -210,6 +211,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     _tabController.addListener(_handleTabChange);
     FocusManager.instance.addListener(_handlePrimaryFocusChange);
     _viewport = _backend.loadDemoViewport();
+    unawaited(RecordingStorage.loadPreferences());
     unawaited(_loadAppVersion());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkForUpdatesAtStartup();
@@ -2626,7 +2628,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               return stems.any((s) {
                 final sl = s.toLowerCase();
                 return (name.startsWith('${sl}_') || name.startsWith(sl)) &&
-                    (name.endsWith('_scoring.json') ||
+                    (name.endsWith('.ccsscoring') ||
+                        name.endsWith('_scoring.json') ||
                         name.endsWith('_scoring.csv') ||
                         name.endsWith('.json') ||
                         name.endsWith('.csv'));
@@ -2944,13 +2947,21 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             final base = _sidecarPath(targetPath, '');
             final anSpindles = File('${base}_analyse_spindles.json');
             final stdSpindles = File('${base}_spindles.json');
+            final ccsSpindles = File('$base.ccsspindles');
             if (anSpindles.existsSync() && !stdSpindles.existsSync()) {
               try { anSpindles.copySync(stdSpindles.path); } catch (_) {}
             }
+            if (anSpindles.existsSync() && !ccsSpindles.existsSync()) {
+              try { anSpindles.copySync(ccsSpindles.path); } catch (_) {}
+            }
             final anSlowWaves = File('${base}_analyse_slow_waves.json');
             final stdSlowWaves = File('${base}_slow_waves.json');
+            final ccsSlowWaves = File('$base.ccsslowwaves');
             if (anSlowWaves.existsSync() && !stdSlowWaves.existsSync()) {
               try { anSlowWaves.copySync(stdSlowWaves.path); } catch (_) {}
+            }
+            if (anSlowWaves.existsSync() && !ccsSlowWaves.existsSync()) {
+              try { anSlowWaves.copySync(ccsSlowWaves.path); } catch (_) {}
             }
           }
 
@@ -4515,6 +4526,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       if (f.existsSync()) {
         try {
           await f.copy('$dstStem$suffix');
+          // Also copy to streamlined extension if applicable
+          if (suffix.contains('spindles')) {
+            await f.copy('$dstStem.ccsspindles');
+          } else if (suffix.contains('slow_waves')) {
+            await f.copy('$dstStem.ccsslowwaves');
+          }
           break;
         } catch (_) {}
       }
@@ -13689,10 +13706,12 @@ String _sidecarPath(String path, String suffix) {
 }
 
 String _analyseNidraScoringPath(String edfPath) {
+  final streamlined = '${_sidecarPath(edfPath, '')}.ccsscoring';
+  if (File(streamlined).existsSync()) return streamlined;
   final scoringPath = '${_sidecarPath(edfPath, '')}_scoring.json';
   if (File(scoringPath).existsSync()) return scoringPath;
   final legacyPath = _sidecarPath(edfPath, '.json');
-  return File(legacyPath).existsSync() ? legacyPath : scoringPath;
+  return File(legacyPath).existsSync() ? legacyPath : streamlined;
 }
 
 (double, double, double) _pdfStageColor(SleepStage stage) {

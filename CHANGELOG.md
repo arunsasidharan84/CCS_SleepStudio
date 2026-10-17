@@ -4,7 +4,36 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
-## [1.37.7]
+## [1.38.1]
+*   **Streamlined Output File Formats (`.ccs*`):**
+    - Introduced dedicated, intuitive extensions replacing scattered and ambiguous `.json` sidecars across all subsystems:
+      - Configuration: `<stem>.ccsconfig` (replaces `<stem>.config.json` / `<stem>_config.json`)
+      - Sleep Staging: `<stem>.ccsscoring` and `<stem>_<model>.ccsscoring` (replaces `<stem>_scoring.json` / `<stem>_<model>_scoring.json`)
+      - Spindle Detections: `<stem>.ccsspindles` (replaces `<stem>_analyse_spindles.json` / `<stem>_spindles.json`)
+      - Slow-Wave Detections: `<stem>.ccsslowwaves` (replaces `<stem>_analyse_slow_waves.json` / `<stem>_slow_waves.json`)
+      - Phase-Amplitude Coupling (PAC): `<stem>.ccspac` (replaces `<stem>_analyse_pac.json`)
+      - Core Spectral Metrics: `<stem>.ccscore` (replaces `<stem>_analyse_core.json`)
+      - NeuroLoopGain Dynamics: `<stem>.ccsnlg` (replaces `<stem>_analyse_nlg.json`)
+      - Respiratory / OSA Reports: `<stem>.ccsrespiratory` (replaces `<stem>_respiratory.json`)
+      - Periodic Limb Movements (PLM): `<stem>.ccsplm` (replaces `<stem>_plm.json`)
+      - Cyclic Alternating Pattern (CAP): `<stem>.ccscap` (replaces `<stem>_cap.json`)
+*   **Recording Storage Architecture (CCSEEG, FIF, EDF+):**
+    - Added user-configurable recording storage formats (`RecordingStorage`), matching the architecture in CCS EEG Studio:
+      - **CCSEEG**: Native portable floating-point JSON format (`ccseeg-v1`).
+      - **FIF**: Floating-point continuous and epoched EEG storage.
+      - **EDF+**: 16-bit signal storage paired with `.ccsmeta` metadata.
+    - Added preferences persistence to `~/.config/ccs-sleep-studio/storage.ccssettings` (or `%APPDATA%/ccs-sleep-studio/storage.ccssettings` on Windows).
+    - Added format selector dropdown in **Configuration Dialog -> Configuration tab**.
+*   **EDF Exports with Companion Metadata (`recording.edf.ccsmeta`):**
+    - All EDF export and transformation pipelines (`processEdfFile`, `_writeLoadedEegToEdf`) automatically write a companion `recording.edf.ccsmeta` file alongside the binary EDF.
+    - Preserves epoch lengths, channel labels, scored event markers, hypnograms/stages, protocols, and transformation provenance together in one place.
+*   **Backward Compatibility & One-Click Migration Tool (`LegacyFileMigration`):**
+    - Fully backward compatible: All sidecar readers, loaders, and batch search routines check the new `.ccs*` extension first, seamlessly falling back to legacy `.json` naming.
+    - Added **"Organise legacy filenames…"** tool in the Configuration dialog allowing users to scan any dataset directory and preview/rename legacy filenames safely with undo manifest generation (`legacy_names.ccsmigration`).
+
+---
+
+## [1.38.0]
 *   **10-20 to 10-10 Channel Alias Matching:**
     - Added bidirectional matching in `find_header_index` for standard international 10-20 $\leftrightarrow$ 10-10 electrode nomenclature across EDF and BrainVision (`.vhdr`) loaders (`T3` $\leftrightarrow$ `T7`, `T4` $\leftrightarrow$ `T8`, `T5` $\leftrightarrow$ `P7`, `T6` $\leftrightarrow$ `P8`, `A1` $\leftrightarrow$ `M1`, `A2` $\leftrightarrow$ `M2`).
 *   **Lenient Channel Loading (`read_available`):**

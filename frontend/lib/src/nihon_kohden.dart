@@ -41,19 +41,50 @@ String _baseName(String path) {
   return parts.isEmpty ? path : parts.last;
 }
 
-/// Finds `<base>.<ext>` ignoring the case of the extension.
+/// Finds `<base>.<ext>` ignoring the case of the extension, with fallback
+/// to session-ID matching (e.g. FA7312L4 in `CNT_YNG_NC_Nap-181_D_FA7312L4_1-1+.edf`)
+/// and single-file fallback in the directory.
 File? nkCompanionFile(String anyPath, String ext) {
   final base = nkBasePath(anyPath);
+  final targetExt = ext.toLowerCase();
+
   for (final e in [ext.toUpperCase(), ext.toLowerCase(), ext]) {
     final f = File('$base.$e');
     if (f.existsSync()) return f;
   }
-  // Fall back to a case-insensitive scan of the folder (e.g. "fa7312q6.log").
+
+  // Fall back to scanning the folder
   try {
     final dir = Directory(_dirOf(anyPath));
-    final want = '${_baseName(base)}.$ext'.toLowerCase();
-    for (final ent in dir.listSync(followLinks: false)) {
-      if (ent is File && _baseName(ent.path).toLowerCase() == want) return ent;
+    if (!dir.existsSync()) return null;
+
+    final want = '${_baseName(base)}.$targetExt'.toLowerCase();
+    final entries = dir.listSync(followLinks: false).whereType<File>().toList();
+
+    // 1. Exact base name match (case-insensitive)
+    for (final ent in entries) {
+      if (_baseName(ent.path).toLowerCase() == want) return ent;
+    }
+
+    // 2. Nihon Kohden session code match: e.g. FA7312L4 from CNT_YNG_NC_Nap-181_D_FA7312L4_1-1+
+    final sessionMatch = RegExp(r'[A-Za-z]{2}\d{4}[A-Za-z0-9]{2}').firstMatch(_baseName(base));
+    if (sessionMatch != null) {
+      final sessionId = sessionMatch.group(0)!.toLowerCase();
+      for (final ent in entries) {
+        final entName = _baseName(ent.path).toLowerCase();
+        if (entName.endsWith('.$targetExt') && entName.contains(sessionId)) {
+          return ent;
+        }
+      }
+    }
+
+    // 3. If there is only one file with this extension in the directory, use it
+    final matchingExtFiles = entries.where((ent) {
+      final name = _baseName(ent.path).toLowerCase();
+      return name.endsWith('.$targetExt');
+    }).toList();
+    if (matchingExtFiles.length == 1) {
+      return matchingExtFiles.first;
     }
   } catch (_) {}
   return null;

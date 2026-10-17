@@ -137,4 +137,19 @@ void main() {
     cam2.offsetSec = -10;
     expect(cam2.segmentIndexAt(10), -1);
   });
+
+  test('nkCompanionFile finds session-ID matching .21E and fallback in directory', () {
+    final sessionEdf = '${dir.path}/CNT_YNG_NC_Nap-181_D_FA7312L4_1-1+.edf';
+    File('${dir.path}/FA7312L4.21E').writeAsStringSync(
+      '[ELECTRODE]\r\n0000=FP1\r\n0007=T7\r\n0026=EOG1\r\n0027=EOG2\r\n',
+    );
+    final companion = nkCompanionFile(sessionEdf, '21E');
+    expect(companion, isNotNull);
+    expect(companion!.path, endsWith('FA7312L4.21E'));
+
+    final names = readNk21eNames(sessionEdf);
+    expect(names[7], 'T7');
+    expect(names[26], 'EOG1');
+    expect(names[27], 'EOG2');
+  });
 }

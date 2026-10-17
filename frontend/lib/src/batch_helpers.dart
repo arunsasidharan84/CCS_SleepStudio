@@ -326,16 +326,32 @@ Future<List<String>> extractRecordingChannels(String filePath) async {
       final count = int.tryParse(countStr) ?? 0;
       if (count <= 0) return [];
       final labelBytes = await raf.read(count * 16);
-      final labels = <String>[];
+      final resolvedLabels = <String>[];
+      final e21 = readNk21eNames(filePath);
       for (var i = 0; i < count; i++) {
         final raw = latin1.decode(labelBytes.sublist(i * 16, (i + 1) * 16)).trim();
         if (raw.isNotEmpty &&
             !raw.toLowerCase().contains('status') &&
             !raw.toLowerCase().contains('annotation')) {
-          labels.add(raw);
+          // If this EDF has a companion Nihon Kohden .21E electrode table,
+          // map generic hardware positions (or check if e21 defines this slot).
+          if (e21.containsKey(i)) {
+            final e21Name = e21[i]!;
+            final cleanRaw = raw
+                .replaceAll(RegExp(r'^(EEG\s*|POL\s*)', caseSensitive: false), '')
+                .replaceAll(RegExp(r'(-Ref|-REF|\s*Ref)$', caseSensitive: false), '')
+                .trim();
+            if (e21Name.isNotEmpty &&
+                cleanRaw.isNotEmpty &&
+                cleanRaw.toLowerCase() != e21Name.toLowerCase()) {
+              resolvedLabels.add('$raw [$e21Name]');
+              continue;
+            }
+          }
+          resolvedLabels.add(raw);
         }
       }
-      return labels;
+      return resolvedLabels;
     } catch (_) {
       return [];
     } finally {
@@ -452,18 +468,31 @@ Future<List<String>?> showChannelSelectionDialog({
   required String recordingPath,
   required List<String> availableChannels,
   required List<String> initialSelectedChannels,
+  bool singleSelect = false,
 }) async {
   final fileName = recordingPath.split(Platform.isWindows ? r'\' : '/').last;
   final selected = <String>{};
+
+  // Helper to extract base channel identifier for clean comparison
+  String cleanName(String ch) {
+    return ch
+        .replaceAll(RegExp(r'\s*\[.*?\]'), '')
+        .replaceAll(RegExp(r'^(EEG\s*|POL\s*)', caseSensitive: false), '')
+        .replaceAll(RegExp(r'(-Ref|-REF|\s*Ref)$', caseSensitive: false), '')
+        .trim();
+  }
 
   // Normalize initial selections to match available channels
   for (final sel in initialSelectedChannels) {
     for (final avail in availableChannels) {
       if (avail.toLowerCase() == sel.toLowerCase() ||
-          avail.toLowerCase().replaceAll(' ', '') == sel.toLowerCase().replaceAll(' ', '')) {
+          avail.toLowerCase().replaceAll(' ', '') == sel.toLowerCase().replaceAll(' ', '') ||
+          cleanName(avail).toLowerCase() == sel.toLowerCase()) {
         selected.add(avail);
+        if (singleSelect) break;
       }
     }
+    if (singleSelect && selected.isNotEmpty) break;
   }
 
   String filterQuery = '';
@@ -492,7 +521,9 @@ Future<List<String>?> showChannelSelectionDialog({
                       Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 2),
                       Text(
-                        'Extracted from 1st file: $fileName (${availableChannels.length} channels)',
+                        singleSelect
+                            ? 'Extracted from: $fileName (${availableChannels.length} channels) — Select 1 channel'
+                            : 'Extracted from 1st file: $fileName (${availableChannels.length} channels)',
                         style: TextStyle(fontSize: 12, color: Colors.grey.shade700, fontWeight: FontWeight.normal),
                       ),
                     ],
@@ -525,38 +556,40 @@ Future<List<String>?> showChannelSelectionDialog({
                           onChanged: (val) => setState(() => filterQuery = val.trim()),
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue.shade50,
-                          foregroundColor: Colors.blue.shade900,
-                          elevation: 0,
-                        ),
-                        onPressed: () {
-                          setState(() {
-                            for (final ch in availableChannels) {
-                              if (isLikelyEegChannel(ch)) {
-                                selected.add(ch);
+                      if (!singleSelect) ...[
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue.shade50,
+                            foregroundColor: Colors.blue.shade900,
+                            elevation: 0,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              for (final ch in availableChannels) {
+                                if (isLikelyEegChannel(ch)) {
+                                  selected.add(ch);
+                                }
                               }
-                            }
-                          });
-                        },
-                        child: const Text('Select EEG Only'),
-                      ),
+                            });
+                          },
+                          child: const Text('Select EEG Only'),
+                        ),
+                        const SizedBox(width: 6),
+                        OutlinedButton(
+                          onPressed: () {
+                            setState(() {
+                              selected.addAll(displayedChannels);
+                            });
+                          },
+                          child: const Text('All'),
+                        ),
+                      ],
                       const SizedBox(width: 6),
                       OutlinedButton(
                         onPressed: () {
                           setState(() {
-                            selected.addAll(displayedChannels);
-                          });
-                        },
-                        child: const Text('All'),
-                      ),
-                      const SizedBox(width: 6),
-                      OutlinedButton(
-                        onPressed: () {
-                          setState(() {
-                            selected.removeAll(displayedChannels);
+                            selected.clear();
                           });
                         },
                         child: const Text('Clear'),
@@ -568,10 +601,12 @@ Future<List<String>?> showChannelSelectionDialog({
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        'Selected ${selected.length} of ${availableChannels.length} channel(s):',
+                        singleSelect
+                            ? 'Selected: ${selected.isEmpty ? '(none — auto)' : selected.first}'
+                            : 'Selected ${selected.length} of ${availableChannels.length} channel(s):',
                         style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                       ),
-                      if (selected.isNotEmpty)
+                      if (!singleSelect && selected.isNotEmpty)
                         Flexible(
                           child: Text(
                             selected.join(', '),
@@ -632,10 +667,15 @@ Future<List<String>?> showChannelSelectionDialog({
                                     checkmarkColor: Colors.blue.shade900,
                                     onSelected: (val) {
                                       setState(() {
-                                        if (val) {
-                                          selected.add(channel);
+                                        if (singleSelect) {
+                                          selected.clear();
+                                          if (val) selected.add(channel);
                                         } else {
-                                          selected.remove(channel);
+                                          if (val) {
+                                            selected.add(channel);
+                                          } else {
+                                            selected.remove(channel);
+                                          }
                                         }
                                       });
                                     },
@@ -659,11 +699,32 @@ Future<List<String>?> showChannelSelectionDialog({
                   foregroundColor: Colors.white,
                 ),
                 onPressed: () {
+                  // For channels that have an alias bracket e.g. "EEG X1 [EOG1]", extract the primary or alias
+                  String cleanResult(String ch) {
+                    final bracket = RegExp(r'\[(.*?)\]').firstMatch(ch);
+                    if (bracket != null && bracket.group(1)!.trim().isNotEmpty) {
+                      return bracket.group(1)!.trim();
+                    }
+                    return ch;
+                  }
+
+                  if (singleSelect) {
+                    if (selected.isEmpty) {
+                      Navigator.of(dialogContext).pop(<String>[]);
+                    } else {
+                      Navigator.of(dialogContext).pop([cleanResult(selected.first)]);
+                    }
+                    return;
+                  }
+
                   // Maintain channel ordering from availableChannels
-                  final ordered = availableChannels.where((c) => selected.contains(c)).toList();
+                  final ordered = availableChannels
+                      .where((c) => selected.contains(c))
+                      .map(cleanResult)
+                      .toList();
                   Navigator.of(dialogContext).pop(ordered);
                 },
-                child: Text('Apply (${selected.length} channels)'),
+                child: Text(singleSelect ? 'Select' : 'Apply (${selected.length} channels)'),
               ),
             ],
           );

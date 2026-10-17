@@ -2809,6 +2809,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     required TextEditingController controller,
     required String? firstFile,
     required String title,
+    bool singleSelect = false,
   }) async {
     if (firstFile == null || firstFile.isEmpty) {
       _batchSnack('Add recordings first: channels are listed from the first file in the batch.');
@@ -2826,6 +2827,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       recordingPath: firstFile,
       availableChannels: available,
       initialSelectedChannels: _parseChannelList(controller.text),
+      singleSelect: singleSelect,
     );
     if (selected != null && mounted) {
       setState(() => controller.text = selected.join(','));
@@ -2835,15 +2837,19 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   Widget _batchChannelPickerButton(
     TextEditingController controller,
     String? firstFile,
-    String title,
-  ) {
+    String title, {
+    bool singleSelect = false,
+  }) {
     return IconButton(
       icon: const Icon(Icons.playlist_add_check),
-      tooltip: 'Choose from the channel list of the first recording…',
+      tooltip: singleSelect
+          ? 'Choose a channel from the first recording…'
+          : 'Choose from the channel list of the first recording…',
       onPressed: () => _pickBatchChannelsInto(
         controller: controller,
         firstFile: firstFile,
         title: title,
+        singleSelect: singleSelect,
       ),
     );
   }
@@ -7795,7 +7801,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
-  Widget _batchPsgField(TextEditingController c, String label, String title) {
+  Widget _batchPsgField(
+    TextEditingController c,
+    String label,
+    String title, {
+    bool singleSelect = true,
+  }) {
     final first = _pipelineFirstRecording;
     return SizedBox(
       width: 250,
@@ -7806,7 +7817,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           hintText: 'blank = auto-detect',
           isDense: true,
           border: const OutlineInputBorder(),
-          suffixIcon: _batchChannelPickerButton(c, first, title),
+          suffixIcon: _batchChannelPickerButton(
+            c,
+            first,
+            title,
+            singleSelect: singleSelect,
+          ),
         ),
       ),
     );

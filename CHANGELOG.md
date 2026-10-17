@@ -4,7 +4,7 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
-## [1.38.3]
+## [1.39.0]
 *   **AnalyseNidra Multi-Rate Channel Selection & Spindle / Slow-Wave Detection:**
     - Resolved sampling rate mismatch failures in native `analyse-nidra` spindle and slow-wave detection when reading EDFs with multi-rate auxiliary channels (e.g. `S4.edf` where EEG runs at 200 Hz, Snore at 500 Hz, SpO2 at 1 Hz).
     - Grouped channels by modal sampling rate in `read_available`, dynamically loading matching EEG channels while cleanly skipping non-matching auxiliary channels with diagnostic notices instead of aborting.

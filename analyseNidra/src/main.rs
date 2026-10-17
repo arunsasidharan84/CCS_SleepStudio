@@ -1143,12 +1143,15 @@ fn main() -> Result<()> {
         feature_config.epoch_length_sec,
     )
     .with_context(|| format!("loading {}", edf_path.display()))?;
+    if recording.edf.channels.is_empty() || recording.edf.data_uv.is_empty() {
+        bail!("no EEG channels could be loaded from {}", edf_path.display());
+    }
     println!(
         "loaded {} EEG channels ({}) referenced to {} x {} samples at {:.1} Hz in {:.3}s",
         recording.edf.channels.len(),
         recording.edf.channels.join(","),
         cli.references.join(","),
-        recording.edf.data_uv[0].len(),
+        recording.edf.data_uv.first().map_or(0, |ch| ch.len()),
         recording.edf.sfreq,
         started.elapsed().as_secs_f64()
     );

@@ -4,6 +4,24 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.38.3]
+*   **AnalyseNidra Multi-Rate Channel Selection & Spindle / Slow-Wave Detection:**
+    - Resolved sampling rate mismatch failures in native `analyse-nidra` spindle and slow-wave detection when reading EDFs with multi-rate auxiliary channels (e.g. `S4.edf` where EEG runs at 200 Hz, Snore at 500 Hz, SpO2 at 1 Hz).
+    - Grouped channels by modal sampling rate in `read_available`, dynamically loading matching EEG channels while cleanly skipping non-matching auxiliary channels with diagnostic notices instead of aborting.
+    - Upgraded channel selection fallback to utilize `read_eeg_channels` matching normalized roots (e.g. `F3` matches `EEG F3-A2`), and added bounds guards preventing empty channel index panics.
+    - Spindle and Slow-Wave dialogs now filter channels to EEG and mastoids and auto-default reference to 'None' for pre-referenced channels.
+*   **Top-Level Events Menu & Comprehensive Marker Management:**
+    - Promoted "Show / Remove Markers & Polygraphy Events" to the top-level **Events** menu on macOS (`PlatformMenu`) and in-app menus for rapid discovery.
+    - Expanded event management to include **Sleep Spindles**, **Slow Waves**, and **K-complexes** alongside Apneas, Hypopneas, Desaturations, EEG Arousals, PLMs, and CAP phases.
+    - Added live event count indicators for each event category in the current recording, plus "Select All" and "Deselect All" quick action chips.
+    - Added automated marker reload hooks restoring detections immediately without requiring file reload.
+*   **Clinical AASM Montage Derivations & Pre-Referenced Waveform Preservation:**
+    - Reordered `AASM Sleep Standard` montage preset to place EOG derivations at rows 1 & 2 at the top of the display, matching clinical PSG standards.
+    - Introduced `findPreReferencedChannel` to automatically detect existing pre-referenced channels (e.g., `E1:M2`, `E2:M2`, `LOC-A2`, `ROC-A1`). Pre-referenced channels bind directly with `reReference: 'None'`, preventing artificial subtraction and eliminating sleep spindle contamination in EOG traces.
+    - Enforced modality color standards: EOG is displayed in **Blue**, EMG in **Orange**, and ECG in **Magenta**.
+
+---
+
 ## [1.38.2]
 *   **Streamlined Output File Formats (`.ccs*`):**
     - Introduced dedicated, intuitive extensions replacing scattered and ambiguous `.json` sidecars across all subsystems:

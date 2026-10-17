@@ -1076,6 +1076,14 @@ class AppConfig {
           ? (channel.sourceChannel ?? channel.name)
           : channel.name;
 
+      // 0. If channel.sourceIndex is already valid and matches sourceName, keep it
+      if (channel.sourceIndex != null &&
+          channel.sourceIndex! >= 0 &&
+          channel.sourceIndex! < loadedLabels.length &&
+          loadedLabels[channel.sourceIndex!].equalsIgnoreCase(sourceName)) {
+        continue;
+      }
+
       // 1. Exact match
       var byName = rawNameToIndex[sourceName];
 
@@ -1090,12 +1098,21 @@ class AppConfig {
         }
       }
 
-      // 3. Partial match (e.g. "EEG L" matches "EEG L-M2")
+      // 3. Clinical electrode matcher (e.g. "E1" matches "POL EOG1" or "E1")
+      if (byName == null) {
+        final matched = findMatchingElectrode(sourceName, loadedLabels);
+        if (matched != null) {
+          byName = rawNameToIndex[matched];
+        }
+      }
+
+      // 4. Token match (e.g. "EEG F3" matches "F3")
       if (byName == null) {
         final normName = sourceName.toLowerCase().trim();
         for (final entry in rawNameToIndex.entries) {
           final normKey = entry.key.toLowerCase().trim();
-          if (normKey.contains(normName) || normName.contains(normKey)) {
+          final keyTokens = normKey.split(RegExp(r'[^a-z0-9]')).where((t) => t.isNotEmpty);
+          if (keyTokens.contains(normName)) {
             byName = entry.value;
             break;
           }
@@ -3566,11 +3583,21 @@ class EegBackend {
   }
 
   String _defaultChannelColorName(String label) {
-    final upper = label.toUpperCase();
-    if (upper.contains('EOG')) return 'Blue';
-    if (upper.contains('ECG')) return 'Magenta';
-    if (upper.contains('EMG')) return 'Orange';
-    return 'Black';
+    final modality = detectChannelModality(label);
+    switch (modality) {
+      case ChannelModality.eog:
+        return 'Blue';
+      case ChannelModality.emg:
+        return 'Orange';
+      case ChannelModality.ecg:
+        return 'Magenta';
+      default:
+        final upper = label.toUpperCase();
+        if (upper.contains('EOG')) return 'Blue';
+        if (upper.contains('ECG')) return 'Magenta';
+        if (upper.contains('EMG')) return 'Orange';
+        return 'Black';
+    }
   }
 
   Future<List<List<double>>> _timeFrequencyForEpoch(

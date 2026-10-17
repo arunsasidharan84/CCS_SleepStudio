@@ -265,19 +265,61 @@ fn read_selected_internal(path: &Path, requested: &[String], allow_missing: bool
         }
     }
 
+    let first_spr = if allow_missing {
+        // Group by samples_per_record to find modal sampling rate among matching channels
+        let mut counts: HashMap<usize, usize> = HashMap::new();
+        for &idx in &selected {
+            *counts.entry(headers[idx].samples_per_record).or_insert(0) += 1;
+        }
+        let modal_spr = counts
+            .into_iter()
+            .max_by_key(|&(_, c)| c)
+            .map(|(spr, _)| spr)
+            .unwrap_or(headers[selected[0]].samples_per_record);
+
+        if selected.iter().any(|&idx| headers[idx].samples_per_record != modal_spr) {
+            let mut filtered_selected = Vec::new();
+            let mut filtered_names = Vec::new();
+            let mut dropped_names = Vec::new();
+            for (&idx, name) in selected.iter().zip(loaded_names.iter()) {
+                if headers[idx].samples_per_record == modal_spr {
+                    filtered_selected.push(idx);
+                    filtered_names.push(name.clone());
+                } else {
+                    dropped_names.push(format!(
+                        "{} ({:.1} Hz)",
+                        name,
+                        headers[idx].samples_per_record as f64 / record_duration
+                    ));
+                }
+            }
+            eprintln!(
+                "Notice: skipped channel(s) with non-matching sampling rate: {}; proceeding with {} channel(s) at {:.1} Hz",
+                dropped_names.join(", "),
+                filtered_selected.len(),
+                modal_spr as f64 / record_duration
+            );
+            selected = filtered_selected;
+            loaded_names = filtered_names;
+        }
+        modal_spr
+    } else {
+        let spr = headers[selected[0]].samples_per_record;
+        if selected
+            .iter()
+            .any(|&index| headers[index].samples_per_record != spr)
+        {
+            bail!("selected EDF channels do not share one sampling frequency");
+        }
+        spr
+    };
+
     let selected_lookup: HashMap<usize, usize> = selected
         .iter()
         .enumerate()
         .map(|(output, &input)| (input, output))
         .collect();
 
-    let first_spr = headers[selected[0]].samples_per_record;
-    if selected
-        .iter()
-        .any(|&index| headers[index].samples_per_record != first_spr)
-    {
-        bail!("selected EDF channels do not share one sampling frequency");
-    }
     let sfreq = first_spr as f64 / record_duration;
     let mut data = loaded_names
         .iter()

@@ -292,5 +292,56 @@ void main() {
       expect(eog1.reReference, equals('EEG A2-Ref'));
       expect(eog2.reReference, equals('EEG A1-Ref'));
     });
+
+    test('findPreReferencedChannel finds pre-referenced channels with colon, hyphen, or space', () {
+      final available = ['E1:M2', 'E2:M2', 'EEG F3-A2', 'EMG1-EMG2', 'M1', 'M2'];
+      expect(findPreReferencedChannel('E1', 'M2', available), equals('E1:M2'));
+      expect(findPreReferencedChannel('E2', 'M2', available), equals('E2:M2'));
+      expect(findPreReferencedChannel('F3', 'A2', available), equals('EEG F3-A2'));
+      expect(findPreReferencedChannel('E1', 'M1', available), isNull);
+    });
+
+    test('AASM Sleep Standard places EOG at top and preserves pre-referenced EOG channels', () {
+      final preRefChannels = [
+        'E1:M2', // 0
+        'E2:M2', // 1
+        'F3',    // 2
+        'F4',    // 3
+        'C3',    // 4
+        'C4',    // 5
+        'O1',    // 6
+        'O2',    // 7
+        'M1',    // 8
+        'M2',    // 9
+        'CHIN1', // 10
+        'CHIN2', // 11
+        'ECG',   // 12
+      ];
+
+      final aasmPreset = builtInMontagePresets.firstWhere((p) => p.name.contains('AASM'));
+      final channels = generateMontagePresetChannels(
+        preset: aasmPreset,
+        availableChannels: preRefChannels,
+      );
+
+      final visible = channels.where((c) => c.displayOnScreen).toList();
+      // EOG channels should be at the top of the visible derivations (indices 0 and 1)
+      expect(visible[0].name, anyOf(contains('E1'), contains('EOG1')));
+      expect(visible[1].name, anyOf(contains('E2'), contains('EOG2')));
+
+      // Pre-referenced E1:M2 and E2:M2 should bind directly to source index 0 and 1 without re-subtraction
+      final e1 = visible[0];
+      final e2 = visible[1];
+      expect(e1.name, equals('E1:M2'));
+      expect(e1.sourceIndex, equals(0));
+      expect(e1.reReference, anyOf(isEmpty, equals('None')));
+      expect(e1.color, equals('Blue'));
+
+      expect(e2.name, equals('E2:M2'));
+      expect(e2.sourceIndex, equals(1));
+      expect(e2.reReference, anyOf(isEmpty, equals('None')));
+      expect(e2.color, equals('Blue'));
+    });
   });
 }
+

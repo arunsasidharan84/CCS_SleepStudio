@@ -25,16 +25,16 @@ class MontagePreset {
 const List<MontagePreset> builtInMontagePresets = [
   MontagePreset(
     name: 'AASM Sleep Standard',
-    description: 'Standard AASM clinical PSG derivation: F4-M1, C4-M1, O2-M1, F3-M2, C3-M2, O1-M2, EOGs, EMG',
+    description: 'Standard AASM clinical PSG derivation: EOGs (E1-M2, E2-M1/M2), F4-M1, C4-M1, O2-M1, F3-M2, C3-M2, O1-M2, EMG',
     derivations: [
+      ('E1', 'M2'),
+      ('E2', 'M1'),
       ('F4', 'M1'),
       ('C4', 'M1'),
       ('O2', 'M1'),
       ('F3', 'M2'),
       ('C3', 'M2'),
       ('O1', 'M2'),
-      ('E1', 'M2'),
-      ('E2', 'M1'),
       ('CHIN1', 'CHIN2'),
     ],
   ),
@@ -657,6 +657,42 @@ List<ChannelConfig> generateMontagePresetChannels({
   final isAasm = preset.name.contains('AASM');
 
   for (final pair in preset.derivations) {
+    // 1. Check if the recording already has this differential channel pre-referenced
+    final preRef = findPreReferencedChannel(pair.$1, pair.$2, availableChannels);
+    if (preRef != null) {
+      final existing = baseList.firstWhere(
+        (c) =>
+            c.name.equalsIgnoreCase(preRef) ||
+            c.sourceChannel?.equalsIgnoreCase(preRef) == true,
+        orElse: () => ChannelConfig(name: preRef, sourceChannel: preRef),
+      );
+      final preIndex = availableChannels.indexOf(preRef);
+      final modality = detectChannelModality(preRef);
+      final color = modality == ChannelModality.eog
+          ? 'Blue'
+          : modality == ChannelModality.emg
+              ? 'Orange'
+              : modality == ChannelModality.ecg
+                  ? 'Magenta'
+                  : existing.color;
+      newChannels.add(
+        ChannelConfig(
+          name: preRef,
+          sourceChannel: preRef,
+          sourceIndex: preIndex >= 0 ? preIndex : null,
+          reReference: 'None',
+          derived: false,
+          displayOnScreen: true,
+          color: color,
+          scalingFactor: existing.scalingFactor,
+          verticalShift: existing.verticalShift,
+          displayMode: existing.displayMode,
+        ),
+      );
+      continue;
+    }
+
+    // 2. Otherwise derive active - ref in software
     final active = findMatchingElectrode(pair.$1, availableChannels);
     final ref = findMatchingElectrode(pair.$2, availableChannels);
 
@@ -671,6 +707,14 @@ List<ChannelConfig> generateMontagePresetChannels({
 
       final label = '$active-$ref';
       final activeIndex = availableChannels.indexOf(active);
+      final modality = detectChannelModality(label);
+      final color = modality == ChannelModality.eog
+          ? 'Blue'
+          : modality == ChannelModality.emg
+              ? 'Orange'
+              : modality == ChannelModality.ecg
+                  ? 'Magenta'
+                  : existing.color;
       newChannels.add(
         ChannelConfig(
           name: label,
@@ -679,7 +723,7 @@ List<ChannelConfig> generateMontagePresetChannels({
           reReference: ref,
           derived: true,
           displayOnScreen: true,
-          color: existing.color,
+          color: color,
           scalingFactor: existing.scalingFactor,
           verticalShift: existing.verticalShift,
           displayMode: existing.displayMode,

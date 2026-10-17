@@ -4359,12 +4359,22 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
     final hasStages = v.stages.any((s) => s.isScored);
 
+    final allLabels = _config.channels.isNotEmpty
+        ? _config.channels.map((c) => c.name).toList()
+        : eeg.channelLabels;
+    final eegLabels = allLabels.where((label) {
+      final modality = detectChannelModality(label);
+      return modality == ChannelModality.eeg ||
+          label.toUpperCase().contains('A1') ||
+          label.toUpperCase().contains('A2') ||
+          label.toUpperCase().contains('M1') ||
+          label.toUpperCase().contains('M2');
+    }).toList();
+
     showDialog(
       context: context,
       builder: (_) => AnalyseNidraDetectionDialog(
-        channelLabels: _config.channels.isNotEmpty
-            ? _config.channels.map((c) => c.name).toList()
-            : eeg.channelLabels,
+        channelLabels: eegLabels.isNotEmpty ? eegLabels : allLabels,
         hasStages: hasStages,
         onRun: (settings) async {
           bool progressShowing = true;
@@ -4573,14 +4583,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     return File(scoringPath).existsSync() ? scoringPath : null;
   }
 
-  void _replacePsgEvents(
-    bool Function(int digit) isOld,
+  void _replaceEvents(
+    bool Function(ScoredEvent e) isOld,
     List<ScoredEvent> fresh,
     String status,
   ) {
     final v = _viewport;
     if (v == null) return;
-    final kept = v.scoredEvents.where((e) => !isOld(e.digit)).toList();
+    final kept = v.scoredEvents.where((e) => !isOld(e)).toList();
     final merged = [...kept, ...fresh]
       ..sort((a, b) => a.startSec.compareTo(b.startSec));
     setState(() {
@@ -4596,6 +4606,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       stagesConfidence: _viewport!.stagesConfidence,
       stageProbabilities: _viewport!.stageProbabilities,
     );
+  }
+
+  void _replacePsgEvents(
+    bool Function(int digit) isOld,
+    List<ScoredEvent> fresh,
+    String status,
+  ) {
+    _replaceEvents((e) => isOld(e.digit), fresh, status);
   }
 
   Future<void> _runRespiratoryAnalysis() async {
@@ -4913,11 +4931,23 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final resp = await loadPsgReport(respiratoryReportPath(path));
     final plm = await loadPsgReport(plmReportPath(path));
     final cap = await loadPsgReport(capReportPath(path));
+    final spindles = await loadAnalyseNidraSpindles(path);
+    final slowWaves = await loadAnalyseNidraSlowWaves(path);
+
+    final counts = <PsgMarkerGroup, int>{};
+    for (final g in PsgMarkerGroup.values) {
+      counts[g] = v.scoredEvents
+          .where((e) => g.matches(e.digit, eventLabel: e.label, eventType: e.type))
+          .length;
+    }
+
     final shown = {
       for (final g in PsgMarkerGroup.values)
-        if (v.scoredEvents.any((e) => g.matches(e.digit))) g,
+        if ((counts[g] ?? 0) > 0) g,
     };
     final available = {
+      if (spindles.isNotEmpty) PsgMarkerGroup.spindles,
+      if (slowWaves.isNotEmpty) PsgMarkerGroup.slowWaves,
       if (resp != null) ...[PsgMarkerGroup.respiratory, PsgMarkerGroup.desaturations],
       if (resp != null &&
           ((resp['arousals'] as List?)?.any((a) => a is Map && a['source'] != 'manual') ?? false))
@@ -4928,7 +4958,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     if (!mounted) return;
     final selected = await showDialog<Set<PsgMarkerGroup>>(
       context: context,
-      builder: (_) => PsgMarkerManagerDialog(shown: shown, available: available),
+      builder: (_) => PsgMarkerManagerDialog(
+        shown: shown,
+        available: available,
+        counts: counts,
+      ),
     );
     if (selected == null) return;
     final fresh = <ScoredEvent>[];
@@ -4940,6 +4974,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       replace.add(g);
       if (!want) continue;
       final List<ScoredEvent> source = switch (g) {
+        PsgMarkerGroup.spindles => spindles,
+        PsgMarkerGroup.slowWaves => slowWaves,
+        PsgMarkerGroup.kComplexes => const <ScoredEvent>[],
         PsgMarkerGroup.respiratory || PsgMarkerGroup.desaturations || PsgMarkerGroup.arousals =>
           resp == null ? const <ScoredEvent>[] : respiratoryEventsFromReport(resp),
         PsgMarkerGroup.limbMovements =>
@@ -4949,13 +4986,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         PsgMarkerGroup.capSequences =>
           cap == null ? const <ScoredEvent>[] : capEventsFromReport(cap, aPhases: false),
       };
-      fresh.addAll(source.where((e) => g.matches(e.digit)));
+      fresh.addAll(source.where((e) => g.matches(e.digit, eventLabel: e.label, eventType: e.type)));
     }
     if (replace.isEmpty) return;
-    _replacePsgEvents(
-      (digit) => replace.any((g) => g.matches(digit)),
+    _replaceEvents(
+      (e) => replace.any((g) => g.matches(e.digit, eventLabel: e.label, eventType: e.type)),
       fresh,
-      'Analysis markers updated',
+      'Markers updated',
     );
   }
 
@@ -7171,6 +7208,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             onSelected: _showEditEventNamesDialog,
           ),
           PlatformMenuItem(
+            label: 'Show / Remove Markers & Polygraphy Events…',
+            onSelected: _managePsgMarkers,
+          ),
+          PlatformMenuItem(
             label: 'Erase events in drawn selection [Backspace]',
             onSelected: _eraseEventsInSelections,
           ),
@@ -7243,7 +7284,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 onSelected: _runPlmAnalysis,
               ),
               PlatformMenuItem(
-                label: 'Show / Remove OSA, PLM & CAP Markers…',
+                label: 'Show / Remove Markers & Polygraphy Events…',
                 onSelected: _managePsgMarkers,
               ),
             ],
@@ -7597,6 +7638,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 onPressed: _showEditEventNamesDialog,
                 child: const Text('Configure Event Names…'),
               ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.checklist_rtl, size: 18),
+                onPressed: _managePsgMarkers,
+                child: const Text('Show / Remove Markers & Polygraphy Events…'),
+              ),
               const Divider(height: 1),
               MenuItemButton(
                 onPressed: _eraseEventsInSelections,
@@ -7664,9 +7710,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 child: const Text('Periodic Limb Movement (PLMS) Analysis…'),
               ),
               MenuItemButton(
-                leadingIcon: const Icon(Icons.bookmark_border, size: 18),
+                leadingIcon: const Icon(Icons.checklist_rtl, size: 18),
                 onPressed: _managePsgMarkers,
-                child: const Text('Show / Remove OSA, PLM & CAP Markers…'),
+                child: const Text('Show / Remove Markers & Polygraphy Events…'),
               ),
               const Divider(height: 8),
               _menuSectionHeader('ADVANCED SLEEP EEG PIPELINE'),

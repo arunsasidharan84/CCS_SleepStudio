@@ -23,7 +23,7 @@ Rebuilt from the ground up using **Flutter** for a lightweight, fluid UI, and **
 
 No installation of Python, MATLAB, or other runtime dependencies is required. Standing alone as pre-compiled binaries, you can download the latest builds directly from the GitHub Releases Page:
 
-👉 **[Download Application Packages from GitHub Releases Page](https://github.com/arunsasidharan84/CCS-Sleep-Studio/releases)**
+👉 **[Download Application Packages from GitHub Releases Page](https://github.com/arunsasidharan84/CCS_SleepStudio/releases)**
 
 ### For Mac Users
 Because the application is signed ad-hoc, you must clear the macOS Gatekeeper quarantine flag after downloading and extracting it:

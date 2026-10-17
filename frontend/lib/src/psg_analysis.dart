@@ -976,9 +976,12 @@ List<String> buildCapArgs({
 
 /// Marker groups the user can show or remove on the waveform and hypnogram.
 enum PsgMarkerGroup {
+  spindles('Sleep Spindles [F8]'),
+  slowWaves('Slow Waves [F7]'),
+  kComplexes('K-Complexes [F6]'),
   respiratory('Respiratory events (apneas, hypopneas, RERAs)'),
   desaturations('Oxygen desaturations'),
-  arousals('Arousals detected automatically (respiratory analysis)'),
+  arousals('Arousals (respiratory analysis)'),
   limbMovements('Leg movements / PLMs'),
   capAPhases('CAP A-phases (A1 / A2 / A3)'),
   capSequences('CAP sequences');
@@ -986,15 +989,40 @@ enum PsgMarkerGroup {
   const PsgMarkerGroup(this.label);
   final String label;
 
-  bool matches(int digit) => switch (this) {
-    PsgMarkerGroup.respiratory =>
-      isRespiratoryEventDigit(digit) && digit != kDigitDesaturation,
-    PsgMarkerGroup.desaturations => digit == kDigitDesaturation,
-    PsgMarkerGroup.arousals => isArousalDigit(digit),
-    PsgMarkerGroup.limbMovements => isLimbMovementDigit(digit),
-    PsgMarkerGroup.capAPhases => isCapAPhaseDigit(digit),
-    PsgMarkerGroup.capSequences => isCapSequenceDigit(digit),
-  };
+  bool matches(int digit, {String? eventLabel, String? eventType}) {
+    final lowerLabel = eventLabel?.toLowerCase() ?? '';
+    final lowerType = eventType?.toLowerCase() ?? '';
+    return switch (this) {
+      PsgMarkerGroup.spindles =>
+        digit == 8 ||
+        lowerLabel.contains('spindle') ||
+        lowerType.contains('spindle'),
+      PsgMarkerGroup.slowWaves =>
+        digit == 7 ||
+        lowerLabel.contains('slow') ||
+        lowerType.contains('slow'),
+      PsgMarkerGroup.kComplexes =>
+        digit == 6 ||
+        lowerLabel.contains('k-complex') ||
+        lowerLabel.contains('mt-kcd') ||
+        lowerType.contains('kcd'),
+      PsgMarkerGroup.respiratory =>
+        (isRespiratoryEventDigit(digit) && digit != kDigitDesaturation) ||
+        lowerLabel.contains('apnea') ||
+        lowerLabel.contains('hypopnea') ||
+        lowerLabel.contains('rera'),
+      PsgMarkerGroup.desaturations =>
+        digit == kDigitDesaturation || lowerLabel.contains('desat'),
+      PsgMarkerGroup.arousals =>
+        isArousalDigit(digit) || lowerLabel.contains('arousal'),
+      PsgMarkerGroup.limbMovements =>
+        isLimbMovementDigit(digit) || lowerLabel.contains('plm') || lowerLabel.contains('leg'),
+      PsgMarkerGroup.capAPhases =>
+        isCapAPhaseDigit(digit) || lowerLabel.startsWith('cap a'),
+      PsgMarkerGroup.capSequences =>
+        isCapSequenceDigit(digit) || lowerLabel.contains('cap seq'),
+    };
+  }
 }
 
 /// Lets the user choose which analysis marker groups are displayed. Returns
@@ -1004,6 +1032,7 @@ class PsgMarkerManagerDialog extends StatefulWidget {
     super.key,
     required this.shown,
     required this.available,
+    this.counts = const {},
   });
 
   /// groups currently present on the plots
@@ -1011,6 +1040,9 @@ class PsgMarkerManagerDialog extends StatefulWidget {
 
   /// groups for which saved results exist (can be (re)loaded)
   final Set<PsgMarkerGroup> available;
+
+  /// event counts per marker group in active recording
+  final Map<PsgMarkerGroup, int> counts;
 
   @override
   State<PsgMarkerManagerDialog> createState() => _PsgMarkerManagerDialogState();
@@ -1022,32 +1054,86 @@ class _PsgMarkerManagerDialogState extends State<PsgMarkerManagerDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Show / Remove Analysis Markers'),
+      title: const Row(
+        children: [
+          Icon(Icons.checklist_rtl, color: Colors.indigo),
+          SizedBox(width: 8),
+          Text('Show / Remove Markers & Polygraphy Events'),
+        ],
+      ),
       content: SizedBox(
-        width: 480,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Ticked groups are drawn on the waveform and hypnogram; unticked groups are removed. '
-              'Saved results can be shown again at any time.',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
-            ),
-            const SizedBox(height: 8),
-            for (final g in PsgMarkerGroup.values)
-              CheckboxListTile(
-                dense: true,
-                value: _selected.contains(g),
-                onChanged: widget.available.contains(g) || widget.shown.contains(g)
-                    ? (v) => setState(() => v == true ? _selected.add(g) : _selected.remove(g))
-                    : null,
-                title: Text(g.label),
-                subtitle: widget.available.contains(g) || widget.shown.contains(g)
-                    ? null
-                    : const Text('Not analysed yet'),
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Checked groups are drawn on the waveforms and hypnogram; unchecked groups are removed from view. '
+                'Saved results can be restored from companion files at any time.',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
               ),
-          ],
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  ActionChip(
+                    label: const Text('Select All', style: TextStyle(fontSize: 11)),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () {
+                      setState(() {
+                        _selected.addAll(widget.available);
+                        _selected.addAll(widget.shown);
+                      });
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  ActionChip(
+                    label: const Text('Deselect All', style: TextStyle(fontSize: 11)),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () {
+                      setState(() {
+                        _selected.clear();
+                      });
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              for (final g in PsgMarkerGroup.values) ...[
+                Builder(
+                  builder: (context) {
+                    final isAvailable = widget.available.contains(g);
+                    final isShown = widget.shown.contains(g);
+                    final count = widget.counts[g] ?? 0;
+                    final subtitle = isShown
+                        ? '$count event${count == 1 ? '' : 's'} active'
+                        : isAvailable
+                            ? 'Saved on disk (can be loaded)'
+                            : 'Not analysed yet';
+                    return CheckboxListTile(
+                      dense: true,
+                      value: _selected.contains(g),
+                      onChanged: isAvailable || isShown
+                          ? (v) => setState(() => v == true ? _selected.add(g) : _selected.remove(g))
+                          : null,
+                      title: Text(g.label, style: const TextStyle(fontSize: 13)),
+                      subtitle: Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isShown
+                              ? Colors.indigo
+                              : isAvailable
+                                  ? Colors.teal.shade700
+                                  : Colors.grey,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ],
+          ),
         ),
       ),
       actions: [
@@ -1057,7 +1143,7 @@ class _PsgMarkerManagerDialogState extends State<PsgMarkerManagerDialog> {
         ),
         ElevatedButton(
           onPressed: () => Navigator.of(context).pop(_selected),
-          child: const Text('Apply'),
+          child: const Text('Apply Changes'),
         ),
       ],
     );

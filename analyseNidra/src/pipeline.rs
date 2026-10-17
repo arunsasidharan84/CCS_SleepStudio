@@ -8,7 +8,7 @@ use crate::hypnogram::{
 use crate::nonlinear;
 use crate::signal::{preprocess_mne_250hz, rereference, resample_channels_mne};
 use crate::spectral::{fooof_features_with_bands, irasa_features_with_bands};
-use anyhow::{Result, bail};
+use anyhow::Result;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -65,21 +65,25 @@ pub fn load_with_epoch(
         }
     }
     let mut edf = if requested.is_empty() {
-        let labels = crate::edf::read_channel_labels(edf_path)?;
-        if labels.is_empty() {
-            bail!("no signals found in EDF file {}", edf_path.display());
-        }
-        read_available(edf_path, &[labels[0].clone()])?
+        crate::edf::read_eeg_channels(edf_path)?
     } else {
         match read_available(edf_path, &requested) {
             Ok(data) => data,
             Err(e) => {
-                let labels = crate::edf::read_channel_labels(edf_path).unwrap_or_default();
-                if !labels.is_empty() {
-                    eprintln!("Warning: none of requested channels found; loading {} for timing/architecture: {}", labels[0], e);
-                    read_available(edf_path, &[labels[0].clone()])?
-                } else {
-                    return Err(e);
+                match crate::edf::read_eeg_channels(edf_path) {
+                    Ok(data) => {
+                        eprintln!("Warning: none of requested channels found; loading auto-detected EEG channels for timing/architecture: {}", e);
+                        data
+                    }
+                    Err(_) => {
+                        let labels = crate::edf::read_channel_labels(edf_path).unwrap_or_default();
+                        if !labels.is_empty() {
+                            eprintln!("Warning: none of requested channels found; loading {} for timing/architecture: {}", labels[0], e);
+                            read_available(edf_path, &[labels[0].clone()])?
+                        } else {
+                            return Err(e);
+                        }
+                    }
                 }
             }
         }
@@ -125,20 +129,32 @@ pub fn load_with_epoch(
     if !crate::edf::is_already_mne_filtered(edf_path) && !edf.data_uv.is_empty() {
         preprocess_mne_250hz(&mut edf.data_uv);
     }
-    let mut selected_data = Vec::with_capacity(channels.len());
-    let mut loaded_channels = Vec::with_capacity(channels.len());
+    let mut selected_data: Vec<Vec<f64>> = Vec::with_capacity(channels.len());
+    let mut loaded_channels: Vec<String> = Vec::with_capacity(channels.len());
     for channel in channels {
-        if let Some(index) = edf
-            .channels
-            .iter()
-            .position(|loaded| loaded.eq_ignore_ascii_case(channel))
-        {
-            selected_data.push(std::mem::take(&mut edf.data_uv[index]));
-            loaded_channels.push(channel.clone());
+        let ch_key = crate::edf::channel_match_key(channel);
+        let ch_root = ch_key.split('-').next().unwrap_or(&ch_key);
+        if let Some(index) = edf.channels.iter().position(|loaded| {
+            if loaded.eq_ignore_ascii_case(channel) {
+                return true;
+            }
+            let loaded_key = crate::edf::channel_match_key(loaded);
+            if loaded_key == ch_key {
+                return true;
+            }
+            let loaded_root = loaded_key.split('-').next().unwrap_or(&loaded_key);
+            !ch_root.is_empty() && loaded_root == ch_root
+        }) {
+            if !loaded_channels.iter().any(|c| c.eq_ignore_ascii_case(channel)) {
+                selected_data.push(std::mem::take(&mut edf.data_uv[index]));
+                loaded_channels.push(channel.clone());
+            }
         }
     }
-    edf.channels = loaded_channels;
-    edf.data_uv = selected_data;
+    if !selected_data.is_empty() {
+        edf.channels = loaded_channels;
+        edf.data_uv = selected_data;
+    }
     Ok(LoadedRecording {
         edf,
         stages,

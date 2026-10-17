@@ -1205,3 +1205,49 @@ String? findMatchingElectrode(String target, List<String> available) {
   return null;
 }
 
+/// Checks if [available] channels already contain a pre-referenced or pre-derived channel
+/// corresponding to the differential derivation [active] - [ref].
+/// E.g. ('F4', 'M1') matches 'EEG F4-A1', 'F4-M1', 'F4:M1'.
+/// E.g. ('E1', 'M2') matches 'E1:M2', 'E1-M2', 'EOG LOC-A2'.
+/// E.g. ('E2', 'M1') matches 'E2:M1', 'E2-M1', 'E2:M2', 'EOG ROC-A2'.
+String? findPreReferencedChannel(String active, String ref, List<String> available) {
+  final cleanActive = active.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
+  final cleanRef = ref.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
+
+  final activeAliases = <String>{cleanActive};
+  if (cleanActive == 'E1' || cleanActive == 'EOG1' || cleanActive == 'LOC') {
+    activeAliases.addAll(['E1', 'EOG1', 'LOC', 'EOGL', 'LEOG', 'EYE1']);
+  } else if (cleanActive == 'E2' || cleanActive == 'EOG2' || cleanActive == 'ROC') {
+    activeAliases.addAll(['E2', 'EOG2', 'ROC', 'EOGR', 'REOG', 'EYE2']);
+  } else if (cleanActive == 'CHIN1' || cleanActive == 'EMG1') {
+    activeAliases.addAll(['CHIN1', 'EMG1', 'CHIN', 'EMG']);
+  }
+
+  final refAliases = <String>{cleanRef};
+  if (cleanRef == 'M1' || cleanRef == 'A1') {
+    refAliases.addAll(['M1', 'A1', 'TP9', 'REF']);
+  } else if (cleanRef == 'M2' || cleanRef == 'A2') {
+    refAliases.addAll(['M2', 'A2', 'TP10', 'REF']);
+  }
+
+  final allowM2FallbackForE2 = cleanActive.startsWith('E2') || cleanActive == 'ROC';
+
+  for (final ch in available) {
+    final parts = ch.split(RegExp(r'[:\-_]'));
+    if (parts.length >= 2) {
+      final actPart = parts[0]
+          .replaceAll(RegExp(r'^(EEG\s*|POL\s*)', caseSensitive: false), '')
+          .replaceAll(RegExp(r'[^A-Za-z0-9]'), '')
+          .toUpperCase();
+      final refPart = parts.sublist(1).join('')
+          .replaceAll(RegExp(r'[^A-Za-z0-9]'), '')
+          .toUpperCase();
+      if (activeAliases.contains(actPart)) {
+        if (refAliases.contains(refPart)) return ch;
+        if (allowM2FallbackForE2 && (refPart == 'M2' || refPart == 'A2')) return ch;
+      }
+    }
+  }
+  return null;
+}
+

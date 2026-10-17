@@ -867,12 +867,20 @@ class _AnalyseNidraDetectionDialogState
       _selectedChannels.addAll(widget.channelLabels.take(4));
     }
     final alreadyBipolar = _selectedChannels.isNotEmpty &&
-        _selectedChannels.every((c) => c.contains('-'));
+        _selectedChannels.every((c) =>
+            c.contains('-') ||
+            c.contains(':') ||
+            c.toUpperCase().contains('A1') ||
+            c.toUpperCase().contains('A2') ||
+            c.toUpperCase().contains('M1') ||
+            c.toUpperCase().contains('M2'));
     if (!alreadyBipolar && m1Label != null && m2Label != null) {
       _linkedMastoidPair = [m1Label, m2Label];
       _selectedReference = '$m1Label, $m2Label (Linked Mastoids)';
     } else if (!alreadyBipolar && (m1Label != null || m2Label != null)) {
       _selectedReference = m1Label ?? m2Label!;
+    } else {
+      _selectedReference = 'None';
     }
   }
 

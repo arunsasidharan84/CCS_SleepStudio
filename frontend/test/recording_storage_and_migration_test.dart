@@ -14,7 +14,8 @@ void main() {
   group('RecordingStorage & Preferences', () {
     test('defaults to edf and persists selection', () async {
       final temp = await Directory.systemTemp.createTemp('ccs_storage_test_');
-      final prefFile = '${temp.path}/storage.ccssettings';
+      final sep = Platform.pathSeparator;
+      final prefFile = '${temp.path}${sep}storage.ccssettings';
 
       await RecordingStorage.loadPreferences(path: prefFile);
       expect(RecordingStorage.preferredFormat, RecordingFileFormat.edf);
@@ -33,6 +34,7 @@ void main() {
 
     test('saves LoadedEeg to CCSEEG and EDF+ with .ccsmeta sidecar', () async {
       final temp = await Directory.systemTemp.createTemp('ccs_save_test_');
+      final sep = Platform.pathSeparator;
       final loaded = LoadedEeg(
         sampleRateHz: 100.0,
         channelLabels: ['C3', 'C4'],
@@ -43,7 +45,7 @@ void main() {
         sourceDescription: 'Test recording',
       );
 
-      final ccsPath = '${temp.path}/recording.ccseeg';
+      final ccsPath = '${temp.path}${sep}recording.ccseeg';
       await RecordingStorage.save(
         loaded: loaded,
         path: ccsPath,
@@ -53,7 +55,7 @@ void main() {
       );
       expect(File(ccsPath).existsSync(), isTrue);
 
-      final edfPath = '${temp.path}/recording.edf';
+      final edfPath = '${temp.path}${sep}recording.edf';
       await RecordingStorage.save(
         loaded: loaded,
         path: edfPath,
@@ -75,54 +77,55 @@ void main() {
   group('LegacyFileMigration', () {
     test('plans and applies migration for legacy filenames', () async {
       final temp = await Directory.systemTemp.createTemp('ccs_migration_test_');
+      final sep = Platform.pathSeparator;
 
       // Create dummy legacy files
-      final legacyConfig = File('${temp.path}/night1.config.json');
+      final legacyConfig = File('${temp.path}${sep}night1.config.json');
       await legacyConfig.writeAsString('{"sampleRate": 250}');
 
-      final legacyScoring = File('${temp.path}/night1_scoring.json');
+      final legacyScoring = File('${temp.path}${sep}night1_scoring.json');
       await legacyScoring.writeAsString('[{"epoch": 1, "stage": "N2"}]');
 
-      final legacySpindles = File('${temp.path}/night1_spindles.json');
+      final legacySpindles = File('${temp.path}${sep}night1_spindles.json');
       await legacySpindles.writeAsString('{"events": []}');
 
-      final legacySlowWaves = File('${temp.path}/night1_slow_waves.json');
+      final legacySlowWaves = File('${temp.path}${sep}night1_slow_waves.json');
       await legacySlowWaves.writeAsString('{"events": []}');
 
-      final legacyResp = File('${temp.path}/night1_respiratory.json');
+      final legacyResp = File('${temp.path}${sep}night1_respiratory.json');
       await legacyResp.writeAsString('{"summary": {}}');
 
       final plan = await LegacyFileMigration.plan(temp.path);
-      expect(plan[legacyConfig.path], '${temp.path}/night1.ccsconfig');
-      expect(plan[legacyScoring.path], '${temp.path}/night1.ccsscoring');
-      expect(plan[legacySpindles.path], '${temp.path}/night1.ccsspindles');
-      expect(plan[legacySlowWaves.path], '${temp.path}/night1.ccsslowwaves');
-      expect(plan[legacyResp.path], '${temp.path}/night1.ccsrespiratory');
+      expect(plan[legacyConfig.path], '${temp.path}${sep}night1.ccsconfig');
+      expect(plan[legacyScoring.path], '${temp.path}${sep}night1.ccsscoring');
+      expect(plan[legacySpindles.path], '${temp.path}${sep}night1.ccsspindles');
+      expect(plan[legacySlowWaves.path], '${temp.path}${sep}night1.ccsslowwaves');
+      expect(plan[legacyResp.path], '${temp.path}${sep}night1.ccsrespiratory');
 
       await LegacyFileMigration.apply(temp.path, plan);
 
-      expect(File('${temp.path}/night1.ccsconfig').existsSync(), isTrue);
-      expect(File('${temp.path}/night1.ccsscoring').existsSync(), isTrue);
-      expect(File('${temp.path}/night1.ccsspindles').existsSync(), isTrue);
-      expect(File('${temp.path}/night1.ccsslowwaves').existsSync(), isTrue);
-      expect(File('${temp.path}/night1.ccsrespiratory').existsSync(), isTrue);
-      expect(File('${temp.path}/legacy_names.ccsmigration').existsSync(), isTrue);
+      expect(File('${temp.path}${sep}night1.ccsconfig').existsSync(), isTrue);
+      expect(File('${temp.path}${sep}night1.ccsscoring').existsSync(), isTrue);
+      expect(File('${temp.path}${sep}night1.ccsspindles').existsSync(), isTrue);
+      expect(File('${temp.path}${sep}night1.ccsslowwaves').existsSync(), isTrue);
+      expect(File('${temp.path}${sep}night1.ccsrespiratory').existsSync(), isTrue);
+      expect(File('${temp.path}${sep}legacy_names.ccsmigration').existsSync(), isTrue);
 
       // Verify that loaders seamlessly load the newly renamed files
-      final loadedCfg = await tryLoadAutoConfig('${temp.path}/night1.edf');
+      final loadedCfg = await tryLoadAutoConfig('${temp.path}${sep}night1.edf');
       expect(loadedCfg, isNotNull);
 
-      final loadedScoring = await loadScoringFile('${temp.path}/night1.ccsscoring');
+      final loadedScoring = await loadScoringFile('${temp.path}${sep}night1.ccsscoring');
       expect(loadedScoring, isNotNull);
       expect(loadedScoring!.stages.first, SleepStage.n2);
 
-      final loadedSpindles = await loadAnalyseNidraSpindles('${temp.path}/night1.edf');
+      final loadedSpindles = await loadAnalyseNidraSpindles('${temp.path}${sep}night1.edf');
       expect(loadedSpindles, isEmpty);
 
-      final loadedSlowWaves = await loadAnalyseNidraSlowWaves('${temp.path}/night1.edf');
+      final loadedSlowWaves = await loadAnalyseNidraSlowWaves('${temp.path}${sep}night1.edf');
       expect(loadedSlowWaves, isEmpty);
 
-      final loadedResp = await loadPsgReport('${temp.path}/night1.ccsrespiratory');
+      final loadedResp = await loadPsgReport('${temp.path}${sep}night1.ccsrespiratory');
       expect(loadedResp, isNotNull);
 
       await temp.delete(recursive: true);

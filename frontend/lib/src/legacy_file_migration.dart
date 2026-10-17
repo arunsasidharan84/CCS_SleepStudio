@@ -101,8 +101,10 @@ class LegacyFileMigration {
   }
 
   static Future<void> apply(String folder, Map<String, String> moves) async {
-    if (moves.isEmpty) return;
-    final manifest = File('$folder${Platform.pathSeparator}legacy_names.ccsmigration');
+    final cleanFolder = folder.endsWith('/') || folder.endsWith('\\')
+        ? folder.substring(0, folder.length - 1)
+        : folder;
+    final manifest = File('$cleanFolder${Platform.pathSeparator}legacy_names.ccsmigration');
     if (await manifest.exists()) {
       throw const FormatException('A migration manifest already exists in this folder.');
     }

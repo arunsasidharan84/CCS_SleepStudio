@@ -4,6 +4,12 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.39.1]
+*   **Windows CI Cross-Platform Path Normalization:**
+    - Resolved path separator mismatch (`\` vs `/`) in `recording_storage_and_migration_test.dart` and `LegacyFileMigration.apply` across Windows runners.
+
+---
+
 ## [1.39.0]
 *   **AnalyseNidra Multi-Rate Channel Selection & Spindle / Slow-Wave Detection:**
     - Resolved sampling rate mismatch failures in native `analyse-nidra` spindle and slow-wave detection when reading EDFs with multi-rate auxiliary channels (e.g. `S4.edf` where EEG runs at 200 Hz, Snore at 500 Hz, SpO2 at 1 Hz).

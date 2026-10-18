@@ -4,6 +4,51 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.40.0]
+*   **Guided Clinical Workflow Bar:**
+    - Integrated a top clinical workflow toolbar directly above the EEG viewport: `[1. Open File] ➔ [2. AASM Montage] ➔ [3. Autoscore] ➔ [4. Review] ➔ [5. Run Analyses] ➔ [6. Generate Report]`.
+    - Features live stage completion badges, current recommended step highlighting, and direct 1-click execution.
+*   **Unified Comprehensive Analysis Pipeline:**
+    - Added an All-in-One dialog (`_runComprehensiveAnalysisDialog`) with individual and batch toggle checkboxes for:
+      - AnalyseNidra Sleep EEG Pipeline (Spectral power, slow waves, spindles, PAC)
+      - NeuroLoopGain (NLG) Cortical Feedback Dynamics
+      - Rapid Eye Movement (REM) Ocular Saccade Dynamics
+      - Cyclic Alternating Pattern (CAP) NREM Instability
+      - Respiratory & Sleep Apnea (OSA, Hypopneas, ODI, AHI)
+      - Periodic Limb Movements in Sleep (PLMS & PLMI)
+    - Supports running all selected modules sequentially in a single automated click.
+*   **Research-Grade Rapid Eye Movement (REM) Detection:**
+    - Introduced conjugate out-of-phase EOG saccade detection module (`RemDetector`) analyzing bilateral ocular deflections (LOC/E1 and ROC/E2).
+    - Computes deflection velocity, peak amplitude, duration, and REM density (events/min REM).
+    - Saves standardized `<stem>.ccsrem` sidecar with legacy companion `<stem>_rem.json` and adds markers to the hypnogram and waveform.
+*   **Intuitive AnalyseNidra Progress Dialog:**
+    - Replaced the overwhelming raw terminal dump with an intuitive clinical interface:
+      - Interactive Pipeline Step Tracker (`Channels` ➔ `Core Spectral` ➔ `PAC` ➔ `Slow Waves` ➔ `Spindles` ➔ `NeuroLoopGain` ➔ `Regional Output`).
+      - High-level Active Status Card with percentage progress bar and recording indicators.
+      - Collapsible Terminal Log Console (`[Show / Hide Terminal Log Console]`) for troubleshooting when desired.
+*   **AASM Montage Clinical Ordering & Raw Channel Deduplication:**
+    - Enforced strict clinical PSG channel sequencing: EOG (Rows 1–2) ➔ Frontal ➔ Central ➔ Occipital ➔ Chin EMG.
+    - Added prefix (`EEG `, `POL `) and suffix (`-Ref`, `_Ref`) stripping during montage combination and canonical channel matching.
+    - Fixed raw channel leakage: unconfigured raw channels are set to `displayOnScreen = false` when montage channels exist, preventing duplicated raw traces on screen.
+*   **Extended Montages & Midline Fallbacks:**
+    - Added extended presets: `AASM Sleep + OSA (Respiratory)` and `AASM Sleep + PLM (Limb Movements)`.
+    - Implemented automatic midline electrode fallbacks (`Cz` when `C3/C4` missing, `Fz` for `F3/F4`, `Oz` for `O1/O2`) across both Rust and Dart backends.
+    - Added per-channel vertical scale selectors (20 µV to 1000 µV) and filter dialogs directly in the montage manager.
+*   **Legacy Sidecar Migration Tool & Startup Prompt:**
+    - Automatically checks recording directories upon opening files and prompts the user to migrate legacy `.json` files (`.config.json`, `_scoring.json`, `_spindles.json`) to modern `.ccs*` extensions.
+    - Added **Data / File ➔ Migrate Legacy Sidecars in Folder…** to batch-migrate any selected folder on disk with pre-scan preview.
+    - Updated configuration file pickers to accept both `.ccsconfig` and `.json`.
+*   **Marker Visibility & Group Management:**
+    - Integrated "Show / Remove Groups" button directly inside the **Markers & Annotations Manager [M]** dialog and main toolbar.
+    - Added full support for REM marker group visibility alongside Spindles, Slow Waves, Respiratory events, PLMs, and CAP.
+*   **NeuroLoopGain Referencing & Low Value Resolution:**
+    - Fixed reference alias matching bug where raw channels ending in `-Ref` were falsely flagged as pre-referenced, leaving them unreferenced and causing low gain output.
+    - Added automatic mastoid reference fallback (`M1/M2` / `A1/A2`) and updated CLI to support `--channels` and `--eeg`.
+*   **Clinical Sleep Report Generator:**
+    - Added clinical report generator dialog with input fields for Patient ID, Clinical Notes / History / Physician Impression, Study Site, and Reporting Physician.
+
+---
+
 ## [1.39.1]
 *   **Windows CI Cross-Platform Path Normalization:**
     - Resolved path separator mismatch (`\` vs `/`) in `recording_storage_and_migration_test.dart` and `LegacyFileMigration.apply` across Windows runners.

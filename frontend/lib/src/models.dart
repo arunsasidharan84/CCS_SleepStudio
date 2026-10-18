@@ -1090,8 +1090,8 @@ String? findMatchingElectrode(String target, List<String> available) {
   String clean(String s) {
     return s
         .toUpperCase()
-        .replaceAll(RegExp(r'^(EEG\s*|POL\s*)'), '')
-        .replaceAll(RegExp(r'(-REF|\s*REF)$'), '')
+        .replaceAll(RegExp(r'^(EEG|POL)[\s\-_]*'), '')
+        .replaceAll(RegExp(r'[\s\-_]*(REF|REFERENCE)$'), '')
         .replaceAll(RegExp(r'[^A-Z0-9]'), '');
   }
 
@@ -1100,8 +1100,16 @@ String? findMatchingElectrode(String target, List<String> available) {
     if (clean(ch) == targetClean) return ch;
   }
 
-  // 2. Clinical aliases, mastoids, EOG, EMG, and 10-20 <-> 10-10 equivalences
+  // 2. Clinical aliases, mastoids, EOG, EMG, 10-20 <-> 10-10 equivalences, and AASM midline fallbacks
   final aliases = <String, List<String>>{
+    // AASM Midline fallbacks (fallback to Cz, Fz, Oz when C3/C4, F3/F4, O1/O2 are missing)
+    'C3': ['CZ', 'C4'],
+    'C4': ['CZ', 'C3'],
+    'F3': ['FZ', 'F4'],
+    'F4': ['FZ', 'F3'],
+    'O1': ['OZ', 'O2'],
+    'O2': ['OZ', 'O1'],
+
     // Mastoids / Auricular references
     'M1': ['A1', 'TP9', 'M1REF', 'A1REF'],
     'M2': ['A2', 'TP10', 'M2REF', 'A2REF'],
@@ -1223,11 +1231,13 @@ String? findPreReferencedChannel(String active, String ref, List<String> availab
     activeAliases.addAll(['CHIN1', 'EMG1', 'CHIN', 'EMG']);
   }
 
+  // Notice: 'REF' is deliberately NOT added here. A generic "-Ref" suffix indicates
+  // an unreferenced recording against recording ground/reference, NOT a differential derivation!
   final refAliases = <String>{cleanRef};
   if (cleanRef == 'M1' || cleanRef == 'A1') {
-    refAliases.addAll(['M1', 'A1', 'TP9', 'REF']);
+    refAliases.addAll(['M1', 'A1', 'TP9']);
   } else if (cleanRef == 'M2' || cleanRef == 'A2') {
-    refAliases.addAll(['M2', 'A2', 'TP10', 'REF']);
+    refAliases.addAll(['M2', 'A2', 'TP10']);
   }
 
   final allowM2FallbackForE2 = cleanActive.startsWith('E2') || cleanActive == 'ROC';
@@ -1236,10 +1246,13 @@ String? findPreReferencedChannel(String active, String ref, List<String> availab
     final parts = ch.split(RegExp(r'[:\-_]'));
     if (parts.length >= 2) {
       final actPart = parts[0]
-          .replaceAll(RegExp(r'^(EEG\s*|POL\s*)', caseSensitive: false), '')
+          .replaceAll(RegExp(r'^(EEG|POL)[\s\-_]*', caseSensitive: false), '')
+          .replaceAll(RegExp(r'[\s\-_]*(REF|REFERENCE)$', caseSensitive: false), '')
           .replaceAll(RegExp(r'[^A-Za-z0-9]'), '')
           .toUpperCase();
       final refPart = parts.sublist(1).join('')
+          .replaceAll(RegExp(r'^(EEG|POL)[\s\-_]*', caseSensitive: false), '')
+          .replaceAll(RegExp(r'[\s\-_]*(REF|REFERENCE)$', caseSensitive: false), '')
           .replaceAll(RegExp(r'[^A-Za-z0-9]'), '')
           .toUpperCase();
       if (activeAliases.contains(actPart)) {
@@ -1249,5 +1262,14 @@ String? findPreReferencedChannel(String active, String ref, List<String> availab
     }
   }
   return null;
+}
+
+/// Strips common acquisition prefixes (EEG, POL) and reference suffixes (-Ref, _Ref)
+/// from a channel label to provide a clean clinical electrode name (e.g. "EEG F4-Ref" -> "F4").
+String cleanChannelLabel(String raw) {
+  var s = raw.trim();
+  s = s.replaceAll(RegExp(r'^(EEG|POL)[\s\-_]+', caseSensitive: false), '');
+  s = s.replaceAll(RegExp(r'[\s\-_]+(REF|REFERENCE)$', caseSensitive: false), '');
+  return s.trim();
 }
 

@@ -1467,25 +1467,42 @@ pub fn analyse_recording(
 ) -> Result<NlgReport> {
     let mut warnings = Vec::new();
     // Resolve derivations.
+    let mut resolved_refs = references.to_vec();
+    if resolved_refs.is_empty() {
+        // Auto-detect mastoid references if none specified
+        if let Ok(available) = crate::edf::read_channel_labels(edf_path) {
+            for m in &["M1", "M2", "A1", "A2"] {
+                if available.iter().any(|c| crate::edf::channel_match_key(c) == *m) {
+                    resolved_refs.push(m.to_string());
+                }
+            }
+        }
+    }
+
     let mut derivs: Vec<(String, String, Vec<String>)> = Vec::new();
     for ch in channels {
-        if let Some((a, b)) = ch.split_once('-').filter(|(a, b)| !a.is_empty() && !b.is_empty() && !references.iter().any(|r| r.eq_ignore_ascii_case(ch))) {
-            if crate::edf::read_signals_kemp(edf_path, &[ch.clone()])?.remove(0).is_some() {
-                derivs.push((ch.clone(), ch.clone(), vec![]));
-            } else {
-                derivs.push((ch.clone(), a.to_string(), vec![b.to_string()]));
+        let is_ref_suffix = ch.to_ascii_uppercase().ends_with("-REF")
+            || ch.to_ascii_uppercase().ends_with("_REF")
+            || ch.to_ascii_uppercase().ends_with(" REF");
+        if !is_ref_suffix {
+            if let Some((a, b)) = ch.split_once('-').filter(|(a, b)| !a.is_empty() && !b.is_empty() && !resolved_refs.iter().any(|r| r.eq_ignore_ascii_case(ch))) {
+                if crate::edf::read_signals_kemp(edf_path, &[ch.clone()])?.remove(0).is_some() {
+                    derivs.push((ch.clone(), ch.clone(), vec![]));
+                } else {
+                    derivs.push((ch.clone(), a.to_string(), vec![b.to_string()]));
+                }
+                continue;
             }
-        } else {
-            // An average reference (several reference channels, as in the
-            // AnalyseNidra pipeline) keeps the channel itself in the mean; a
-            // single reference equal to the channel is dropped.
-            let refs: Vec<String> = if references.len() > 1 {
-                references.to_vec()
-            } else {
-                references.iter().filter(|r| !r.eq_ignore_ascii_case(ch)).cloned().collect()
-            };
-            derivs.push((ch.clone(), ch.clone(), refs));
         }
+        // An average reference (several reference channels, as in the
+        // AnalyseNidra pipeline) keeps the channel itself in the mean; a
+        // single reference equal to the channel is dropped.
+        let refs: Vec<String> = if resolved_refs.len() > 1 {
+            resolved_refs.to_vec()
+        } else {
+            resolved_refs.iter().filter(|r| !r.eq_ignore_ascii_case(ch)).cloned().collect()
+        };
+        derivs.push((ch.clone(), ch.clone(), refs));
     }
     let mut wanted: Vec<String> = Vec::new();
     for (_, a, refs) in &derivs {

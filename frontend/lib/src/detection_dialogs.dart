@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 
 import 'analyse_options.dart';
 import 'autoscore_command.dart';
+import 'models.dart';
+import 'rem_detection.dart';
 
 class MtKcdDialog extends StatefulWidget {
   const MtKcdDialog({
@@ -1644,14 +1646,15 @@ class _AnalyseNidraDialogState extends State<AnalyseNidraDialog> {
     _channels = {};
     _references = {};
     for (final channel in widget.channelLabels) {
-      final upper = channel.toUpperCase();
-      final isReference =
-          upper == 'A1' ||
-          upper == 'A2' ||
-          upper == 'M1' ||
-          upper == 'M2' ||
-          upper.contains('REF');
-      final isDefaultEeg = RegExp(r'^(F3|F4|C3|C4|O1|O2)$').hasMatch(upper);
+      final clean = cleanChannelLabel(channel).toUpperCase();
+      final isReference = clean == 'A1' ||
+          clean == 'A2' ||
+          clean == 'M1' ||
+          clean == 'M2' ||
+          clean == 'TP9' ||
+          clean == 'TP10';
+      final isDefaultEeg =
+          RegExp(r'^(F3|F4|C3|C4|O1|O2|FZ|CZ|OZ)$').hasMatch(clean);
       _channels[channel] = isDefaultEeg;
       _references[channel] = isReference;
     }
@@ -1686,8 +1689,8 @@ class _AnalyseNidraDialogState extends State<AnalyseNidraDialog> {
             : 'Batch analyse ${widget.batchCount} recordings',
       ),
       content: SizedBox(
-        width: 640,
-        height: 620,
+        width: 680,
+        height: 640,
         child: Column(
           children: [
             AnalyseNidraOptionsPanel(
@@ -1698,9 +1701,9 @@ class _AnalyseNidraDialogState extends State<AnalyseNidraDialog> {
             Expanded(
               child: Row(
                 children: [
-                  Expanded(child: _selector('EEG channels', _channels)),
+                  Expanded(child: _selector('EEG channels', _channels, isEeg: true)),
                   const SizedBox(width: 12),
-                  Expanded(child: _selector('Reference channels', _references)),
+                  Expanded(child: _selector('Reference channels', _references, isEeg: false)),
                 ],
               ),
             ),
@@ -1788,16 +1791,76 @@ class _AnalyseNidraDialogState extends State<AnalyseNidraDialog> {
     );
   }
 
-  Widget _selector(String title, Map<String, bool> values) {
+  Widget _selector(String title, Map<String, bool> values, {required bool isEeg}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold))),
+            if (isEeg) ...[
+              InkWell(
+                onTap: () {
+                  setState(() {
+                    for (final ch in values.keys) {
+                      final clean = cleanChannelLabel(ch).toUpperCase();
+                      values[ch] = RegExp(r'^(F3|F4|C3|C4|O1|O2|FZ|CZ|OZ)$').hasMatch(clean);
+                    }
+                  });
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  child: Text('Select EEG', style: TextStyle(fontSize: 11, color: Colors.indigo.shade700, fontWeight: FontWeight.bold)),
+                ),
+              ),
+              const SizedBox(width: 4),
+              InkWell(
+                onTap: () => setState(() => values.updateAll((key, val) => true)),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  child: Text('All', style: TextStyle(fontSize: 11, color: Colors.blue.shade700)),
+                ),
+              ),
+              const SizedBox(width: 4),
+              InkWell(
+                onTap: () => setState(() => values.updateAll((key, val) => false)),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  child: Text('Clear', style: TextStyle(fontSize: 11, color: Colors.red.shade700)),
+                ),
+              ),
+            ] else ...[
+              InkWell(
+                onTap: () {
+                  setState(() {
+                    for (final ch in values.keys) {
+                      final clean = cleanChannelLabel(ch).toUpperCase();
+                      values[ch] = clean == 'M1' || clean == 'M2' || clean == 'A1' || clean == 'A2';
+                    }
+                  });
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  child: Text('Mastoids (M1/M2)', style: TextStyle(fontSize: 11, color: Colors.indigo.shade700, fontWeight: FontWeight.bold)),
+                ),
+              ),
+              const SizedBox(width: 4),
+              InkWell(
+                onTap: () => setState(() => values.updateAll((key, val) => false)),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  child: Text('Clear', style: TextStyle(fontSize: 11, color: Colors.red.shade700)),
+                ),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 6),
         Expanded(
           child: DecoratedBox(
             decoration: BoxDecoration(
               border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(4),
             ),
             child: ListView(
               children: [
@@ -2380,6 +2443,342 @@ class _BatchAutoScoringDialogState extends State<BatchAutoScoringDialog> {
               },
             ),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+class RemDetectionDialog extends StatefulWidget {
+  const RemDetectionDialog({
+    super.key,
+    required this.channelLabels,
+    required this.hasStages,
+    required this.onRun,
+  });
+
+  final List<String> channelLabels;
+  final bool hasStages;
+  final void Function(RemDetectionOptions options) onRun;
+
+  @override
+  State<RemDetectionDialog> createState() => _RemDetectionDialogState();
+}
+
+class _RemDetectionDialogState extends State<RemDetectionDialog> {
+  late String _selectedLoc;
+  late String _selectedRoc;
+  double _minDuration = 0.1;
+  double _maxDuration = 1.2;
+  double _minAmplitude = 25.0;
+  double _minVelocity = 150.0;
+  bool _restrictToRem = true;
+  double _filterLow = 0.5;
+  double _filterHigh = 5.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _restrictToRem = widget.hasStages;
+
+    final labels = widget.channelLabels;
+    // Auto-select LOC / Left EOG
+    _selectedLoc = labels.firstWhere(
+      (c) {
+        final upper = c.toUpperCase();
+        return upper.contains('E1') ||
+            upper.contains('LOC') ||
+            upper.contains('EOG-L') ||
+            upper.contains('LEOG') ||
+            upper.contains('EOG1');
+      },
+      orElse: () => labels.isNotEmpty ? labels.first : '',
+    );
+
+    // Auto-select ROC / Right EOG
+    _selectedRoc = labels.firstWhere(
+      (c) {
+        final upper = c.toUpperCase();
+        return upper.contains('E2') ||
+            upper.contains('ROC') ||
+            upper.contains('EOG-R') ||
+            upper.contains('REOG') ||
+            upper.contains('EOG2');
+      },
+      orElse: () => labels.length > 1 ? labels[1] : (labels.isNotEmpty ? labels.first : ''),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.remove_red_eye_outlined, color: Colors.teal),
+          SizedBox(width: 8),
+          Text('Rapid Eye Movement (REM) Detection'),
+        ],
+      ),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.teal.shade50,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.teal.shade200),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.info_outline, size: 20, color: Colors.teal),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Detects conjugate, out-of-phase saccadic eye movements during REM sleep. '
+                        'Computes ocular velocity, deflection amplitude, and REM density.',
+                        style: TextStyle(fontSize: 12, color: Colors.black87),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'EOG Channels',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Left EOG (LOC / E1-M2)', style: TextStyle(fontSize: 12)),
+                        const SizedBox(height: 4),
+                        DropdownButtonFormField<String>(
+                          value: widget.channelLabels.contains(_selectedLoc) ? _selectedLoc : null,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
+                          items: widget.channelLabels.map((ch) {
+                            return DropdownMenuItem(
+                              value: ch,
+                              child: Text(ch, style: const TextStyle(fontSize: 12)),
+                            );
+                          }).toList(),
+                          onChanged: (v) {
+                            if (v != null) setState(() => _selectedLoc = v);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Right EOG (ROC / E2-M1)', style: TextStyle(fontSize: 12)),
+                        const SizedBox(height: 4),
+                        DropdownButtonFormField<String>(
+                          value: widget.channelLabels.contains(_selectedRoc) ? _selectedRoc : null,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
+                          items: widget.channelLabels.map((ch) {
+                            return DropdownMenuItem(
+                              value: ch,
+                              child: Text(ch, style: const TextStyle(fontSize: 12)),
+                            );
+                          }).toList(),
+                          onChanged: (v) {
+                            if (v != null) setState(() => _selectedRoc = v);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Detection Thresholds',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _minAmplitude.toStringAsFixed(0),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'Min Amplitude (µV)',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      ),
+                      onChanged: (v) {
+                        final val = double.tryParse(v);
+                        if (val != null && val > 0) _minAmplitude = val;
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _minVelocity.toStringAsFixed(0),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'Min Velocity (µV/s)',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      ),
+                      onChanged: (v) {
+                        final val = double.tryParse(v);
+                        if (val != null && val > 0) _minVelocity = val;
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _minDuration.toStringAsFixed(2),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'Min Duration (s)',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      ),
+                      onChanged: (v) {
+                        final val = double.tryParse(v);
+                        if (val != null && val > 0) _minDuration = val;
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _maxDuration.toStringAsFixed(2),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'Max Duration (s)',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      ),
+                      onChanged: (v) {
+                        final val = double.tryParse(v);
+                        if (val != null && val > 0) _maxDuration = val;
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _filterLow.toStringAsFixed(1),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'Bandpass Low (Hz)',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      ),
+                      onChanged: (v) {
+                        final val = double.tryParse(v);
+                        if (val != null && val > 0) _filterLow = val;
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _filterHigh.toStringAsFixed(1),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'Bandpass High (Hz)',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      ),
+                      onChanged: (v) {
+                        final val = double.tryParse(v);
+                        if (val != null && val > 0) _filterHigh = val;
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              CheckboxListTile(
+                title: const Text('Restrict detection to REM sleep stages', style: TextStyle(fontSize: 13)),
+                subtitle: Text(
+                  widget.hasStages
+                      ? 'Ignores awake and NREM blinks/saccades'
+                      : 'Hypnogram not yet scored; will detect across entire recording',
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                value: _restrictToRem,
+                onChanged: (v) => setState(() => _restrictToRem = v ?? false),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.play_arrow, size: 18),
+          label: const Text('Run REM Detection'),
+          onPressed: () {
+            if (_selectedLoc.isEmpty || _selectedRoc.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Please select both Left and Right EOG channels.')),
+              );
+              return;
+            }
+            Navigator.of(context).pop();
+            widget.onRun(
+              RemDetectionOptions(
+                locChannel: _selectedLoc,
+                rocChannel: _selectedRoc,
+                minDurationSeconds: _minDuration,
+                maxDurationSeconds: _maxDuration,
+                minAmplitudeUv: _minAmplitude,
+                minVelocityUvPerSec: _minVelocity,
+                restrictToRemStage: _restrictToRem,
+                frequencyLowHz: _filterLow,
+                frequencyHighHz: _filterHigh,
+              ),
+            );
+          },
         ),
       ],
     );

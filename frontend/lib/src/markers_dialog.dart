@@ -50,6 +50,7 @@ class MarkersDialog extends StatefulWidget {
     required this.onJumpToEvent,
     this.onDeleteEvent,
     this.onClearAllEvents,
+    this.onManagePsgMarkers,
   });
 
   final List<ScoredEvent> events;
@@ -64,6 +65,7 @@ class MarkersDialog extends StatefulWidget {
   final void Function(ScoredEvent event) onJumpToEvent;
   final void Function(ScoredEvent event)? onDeleteEvent;
   final VoidCallback? onClearAllEvents;
+  final VoidCallback? onManagePsgMarkers;
 
   @override
   State<MarkersDialog> createState() => _MarkersDialogState();
@@ -261,6 +263,17 @@ class _MarkersDialogState extends State<MarkersDialog> {
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
                 const Spacer(),
+                if (widget.onManagePsgMarkers != null) ...[
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.checklist_rtl, size: 16),
+                    label: const Text('Show / Remove Groups…', style: TextStyle(fontSize: 12)),
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      widget.onManagePsgMarkers!();
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 if (widget.onUpdateEventNames != null) ...[
                   OutlinedButton.icon(
                     icon: const Icon(Icons.edit_note, size: 16),

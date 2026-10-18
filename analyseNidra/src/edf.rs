@@ -71,8 +71,16 @@ fn canonical_channel(label: &str) -> String {
     let mut name = label.trim();
     name = strip_case_insensitive_prefix(name, "EEG ");
     name = strip_case_insensitive_prefix(name, "POL ");
+    name = strip_case_insensitive_prefix(name, "EEG-");
+    name = strip_case_insensitive_prefix(name, "POL-");
+    name = strip_case_insensitive_prefix(name, "EEG_");
+    name = strip_case_insensitive_prefix(name, "POL_");
     name = strip_case_insensitive_suffix(name, "-Ref");
     name = strip_case_insensitive_suffix(name, "-REF");
+    name = strip_case_insensitive_suffix(name, "_Ref");
+    name = strip_case_insensitive_suffix(name, "_REF");
+    name = strip_case_insensitive_suffix(name, " Ref");
+    name = strip_case_insensitive_suffix(name, " REF");
     name = name.trim();
     if name.eq_ignore_ascii_case("A1") {
         "M1".into()
@@ -85,25 +93,28 @@ fn canonical_channel(label: &str) -> String {
 
 fn load_custom_channel_map(path: &Path) -> HashMap<usize, String> {
     let mut map = HashMap::new();
-    let config_path = path.with_extension("config.json");
-    if let Ok(content) = std::fs::read_to_string(&config_path) {
-        if let Ok(serde_json::Value::Array(arr)) =
-            serde_json::from_str::<serde_json::Value>(&content)
-        {
-            if arr.len() >= 2 {
-                if let Some(channels_list) = arr[1].as_array() {
-                    for c in channels_list {
-                        let is_derived =
-                            c.get("derived").and_then(|v| v.as_bool()).unwrap_or(false);
-                        if is_derived {
-                            continue;
-                        }
-                        if let (Some(name), Some(idx)) = (
-                            c.get("Channel_name").and_then(|v| v.as_str()),
-                            c.get("sourceIndex").and_then(|v| v.as_u64()),
-                        ) {
-                            map.insert(idx as usize, name.to_string());
-                        }
+    let config_path = path.with_extension("ccsconfig");
+    let content = std::fs::read_to_string(&config_path)
+        .or_else(|_| std::fs::read_to_string(path.with_extension("config.json")));
+    if let Ok(content) = content {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+            let channels_list = match &val {
+                serde_json::Value::Array(arr) if arr.len() >= 2 => arr[1].as_array(),
+                serde_json::Value::Object(m) => m.get("channels").and_then(|v| v.as_array()),
+                _ => None,
+            };
+            if let Some(channels_list) = channels_list {
+                for c in channels_list {
+                    let is_derived = c.get("derived").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if is_derived {
+                        continue;
+                    }
+                    let name = c.get("Channel_name")
+                        .or_else(|| c.get("name"))
+                        .and_then(|v| v.as_str());
+                    let idx = c.get("sourceIndex").and_then(|v| v.as_u64());
+                    if let (Some(name), Some(idx)) = (name, idx) {
+                        map.insert(idx as usize, name.to_string());
                     }
                 }
             }
@@ -502,7 +513,40 @@ fn find_header_index(headers: &[SignalHeader], name: &str) -> Option<usize> {
             }
         }
     }
+    // Check AASM midline electrode fallback (C3/C4 -> Cz, F3/F4 -> Fz, O1/O2 -> Oz)
+    if let Some(fallback) = channel_midline_fallback(name) {
+        if let Some(i) = find_header_index_direct(headers, fallback) {
+            return Some(i);
+        }
+    }
+    if !wanted_root.is_empty() {
+        if let Some(fallback_root) = channel_midline_fallback(wanted_root) {
+            if let Some(i) = headers.iter().position(|h| {
+                let h_key = channel_match_key(&h.label);
+                let h_root = h_key.split(['-', '_']).next().unwrap_or("");
+                h_root.eq_ignore_ascii_case(fallback_root)
+            }).or_else(|| {
+                headers.iter().position(|h| {
+                    let h_key = channel_match_key(&h.raw_label);
+                    let h_root = h_key.split(['-', '_']).next().unwrap_or("");
+                    h_root.eq_ignore_ascii_case(fallback_root)
+                })
+            }) {
+                return Some(i);
+            }
+        }
+    }
     None
+}
+
+/// Fallback to midline electrode if lateral electrode is missing (AASM clinical standard: C3/C4 -> Cz, F3/F4 -> Fz, O1/O2 -> Oz).
+pub fn channel_midline_fallback(name: &str) -> Option<&'static str> {
+    match name.to_ascii_uppercase().as_str() {
+        "C3" | "C4" => Some("CZ"),
+        "F3" | "F4" => Some("FZ"),
+        "O1" | "O2" => Some("OZ"),
+        _ => None,
+    }
 }
 
 /// Per-signal header summary (label, sampling rate, physical unit).

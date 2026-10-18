@@ -41,6 +41,8 @@ import 'batch_metadata.dart';
 import 'timeline_painter.dart';
 import 'group_statistics.dart';
 import 'montage_dialog.dart';
+import 'legacy_file_migration.dart';
+import 'rem_detection.dart';
 
 const double _plotLeftPadding = 90.0;
 const bool buildLite = bool.fromEnvironment('LITE_BUILD', defaultValue: false);
@@ -482,6 +484,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       if (_videoSync != null) setState(_detachVideo);
       // Check for companion video file(s) in the same directory
       unawaited(_tryAutoDetectCompanionVideo(path));
+      // Prompt user if legacy .json sidecars exist in the recording directory
+      unawaited(_checkAndPromptLegacyMigration(File(path).parent.path));
     } on UnsupportedError catch (e) {
       _setStatus(e.message ?? e.toString());
     } on Object catch (e) {
@@ -762,6 +766,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         recordingStartTime: vp.recordingStartTime,
         customEventNames: _config.customEventNames,
         onUpdateEventNames: _updateCustomEventNames,
+        onManagePsgMarkers: _managePsgMarkers,
         onToggleLabel: (label, visible) {
           setState(() {
             final newSet = Set<String>.from(_viewport!.disabledMarkerLabels);
@@ -4348,6 +4353,225 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
+  List<double>? _getChannelSignal(LoadedEeg eeg, String channelName) {
+    final target = channelName.trim().toLowerCase();
+    final directIdx = eeg.channelLabels.indexWhere((l) => l.trim().toLowerCase() == target);
+    if (directIdx >= 0 && directIdx < eeg.channelSamples.length) return eeg.channelSamples[directIdx];
+
+    // Try derivation e.g. "E1-M2" or "LOC-A2"
+    if (channelName.contains('-')) {
+      final parts = channelName.split('-');
+      if (parts.length == 2) {
+        final actName = cleanChannelLabel(parts[0]).toLowerCase();
+        final refName = cleanChannelLabel(parts[1]).toLowerCase();
+        final actIdx = eeg.channelLabels.indexWhere((l) => cleanChannelLabel(l).toLowerCase() == actName);
+        final refIdx = eeg.channelLabels.indexWhere((l) => cleanChannelLabel(l).toLowerCase() == refName);
+        if (actIdx >= 0 && refIdx >= 0 &&
+            actIdx < eeg.channelSamples.length && refIdx < eeg.channelSamples.length) {
+          final act = eeg.channelSamples[actIdx];
+          final ref = eeg.channelSamples[refIdx];
+          final len = math.min(act.length, ref.length);
+          final diff = List<double>.filled(len, 0.0);
+          for (var i = 0; i < len; i++) {
+            diff[i] = act[i] - ref[i];
+          }
+          return diff;
+        }
+      }
+    }
+    return null;
+  }
+
+  Widget _remMetricRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 12, color: Colors.black87)),
+          Text(value, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _runRemDetection() async {
+    final eeg = _loadedEeg;
+    final v = _viewport;
+    final path = _activePath;
+    if (eeg == null || v == null || path == null) {
+      _setStatus('Load an EEG recording first');
+      return;
+    }
+
+    final hasStages = v.stages.any((s) => s.isScored);
+
+    final allLabels = _config.channels.isNotEmpty
+        ? _config.channels.map((c) => c.name).toList()
+        : eeg.channelLabels;
+
+    showDialog(
+      context: context,
+      builder: (_) => RemDetectionDialog(
+        channelLabels: allLabels.isNotEmpty ? allLabels : eeg.channelLabels,
+        hasStages: hasStages,
+        onRun: (options) async {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) => const AlertDialog(
+              content: Row(
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(width: 20),
+                  Text('Running Rapid Eye Movement (REM) detection…'),
+                ],
+              ),
+            ),
+          );
+
+          try {
+            final locSig = _getChannelSignal(eeg, options.locChannel);
+            final rocSig = _getChannelSignal(eeg, options.rocChannel);
+
+            if (locSig == null || rocSig == null) {
+              throw Exception(
+                'Could not extract EOG signals for "${options.locChannel}" or "${options.rocChannel}". '
+                'Please ensure both channels are present in the recording or montage.',
+              );
+            }
+
+            final report = RemDetector.detect(
+              locSignal: locSig,
+              rocSignal: rocSig,
+              sampleRateHz: eeg.sampleRateHz,
+              stages: v.stages,
+              epochSeconds: v.epochSeconds,
+              options: options,
+            );
+
+            await saveRemReport(path, report);
+
+            if (mounted) Navigator.of(context).pop(); // dismiss progress
+
+            final newEvents = report.events.map((e) {
+              return ScoredEvent(
+                digit: 6,
+                key: 'F6',
+                label: 'REM (${e.peakAmplitudeUv.toStringAsFixed(0)}µV)',
+                type: 'REM',
+                channel: '${options.locChannel}/${options.rocChannel}',
+                startSec: e.startSeconds,
+                endSec: e.endSeconds,
+              );
+            }).toList();
+
+            final merged = _mergeScoredEvents([...v.scoredEvents, ...newEvents]);
+
+            if (mounted) {
+              setState(() {
+                _viewport = v.copyWith(
+                  scoredEvents: merged,
+                  clearEventSelections: true,
+                );
+                _status = 'REM detection completed: found ${report.totalEvents} saccade(s)';
+              });
+
+              autoSaveScoring(
+                path,
+                _viewport!.stages,
+                _viewport!.epochSeconds,
+                events: _viewport!.scoredEvents,
+                stagesUncertain: _viewport!.stagesUncertain,
+                stagesConfidence: _viewport!.stagesConfidence,
+                stageProbabilities: _viewport!.stageProbabilities,
+              );
+
+              showDialog(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Row(
+                    children: [
+                      Icon(Icons.remove_red_eye, color: Colors.teal),
+                      SizedBox(width: 8),
+                      Text('REM Detection Results'),
+                    ],
+                  ),
+                  content: SizedBox(
+                    width: 480,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.teal.shade50,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.teal.shade200),
+                          ),
+                          child: Column(
+                            children: [
+                              _remMetricRow('Total REM Ocular Saccades', '${report.totalEvents}'),
+                              _remMetricRow('REM Sleep Duration', '${report.totalRemDurationMinutes.toStringAsFixed(1)} min'),
+                              _remMetricRow('REM Density', '${report.remDensityPerMinute.toStringAsFixed(2)} / min REM'),
+                              _remMetricRow('Mean Saccade Duration', '${report.meanDurationSeconds.toStringAsFixed(2)} s'),
+                              _remMetricRow('Mean Peak Amplitude', '${report.meanPeakAmplitudeUv.toStringAsFixed(1)} µV'),
+                              _remMetricRow('Peak Deflection Velocity', '${report.meanPeakVelocityUvPerSec.toStringAsFixed(1)} µV/s'),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          '${report.totalEvents} markers added to the recording hypnogram and waveform. '
+                          'Detailed report saved to ${_basename(path)}.ccsrem',
+                          style: const TextStyle(fontSize: 12, color: Colors.black87),
+                        ),
+                      ],
+                    ),
+                  ),
+                  actions: [
+                    if (report.events.isNotEmpty)
+                      OutlinedButton(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          final first = report.events.first;
+                          final ep = (first.startSeconds / v.epochSeconds).floor() + 1;
+                          _jumpToEpoch(ep);
+                        },
+                        child: const Text('Jump to First REM Event'),
+                      ),
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      child: const Text('OK'),
+                    ),
+                  ],
+                ),
+              );
+            }
+          } catch (e) {
+            if (mounted) {
+              Navigator.of(context).pop(); // dismiss progress
+              showDialog(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('REM Detection Error'),
+                  content: Text('Failed to complete REM detection:\n\n$e'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      child: const Text('OK'),
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+        },
+      ),
+    );
+  }
+
   void _runAnalyseNidraDetection() {
     final eeg = _loadedEeg;
     final v = _viewport;
@@ -4933,6 +5157,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final cap = await loadPsgReport(capReportPath(path));
     final spindles = await loadAnalyseNidraSpindles(path);
     final slowWaves = await loadAnalyseNidraSlowWaves(path);
+    final remEvents = await loadRemEvents(path);
 
     final counts = <PsgMarkerGroup, int>{};
     for (final g in PsgMarkerGroup.values) {
@@ -4948,6 +5173,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final available = {
       if (spindles.isNotEmpty) PsgMarkerGroup.spindles,
       if (slowWaves.isNotEmpty) PsgMarkerGroup.slowWaves,
+      if (remEvents.isNotEmpty) PsgMarkerGroup.remMovements,
       if (resp != null) ...[PsgMarkerGroup.respiratory, PsgMarkerGroup.desaturations],
       if (resp != null &&
           ((resp['arousals'] as List?)?.any((a) => a is Map && a['source'] != 'manual') ?? false))
@@ -4977,6 +5203,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         PsgMarkerGroup.spindles => spindles,
         PsgMarkerGroup.slowWaves => slowWaves,
         PsgMarkerGroup.kComplexes => const <ScoredEvent>[],
+        PsgMarkerGroup.remMovements => remEvents,
         PsgMarkerGroup.respiratory || PsgMarkerGroup.desaturations || PsgMarkerGroup.arousals =>
           resp == null ? const <ScoredEvent>[] : respiratoryEventsFromReport(resp),
         PsgMarkerGroup.limbMovements =>
@@ -5119,6 +5346,478 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         );
       },
     );
+  }
+
+  Widget _buildGuidedClinicalWorkflowBar() {
+    final hasFile = _loadedEeg != null;
+    final hasMontage = _config.channels.any((c) => c.derived);
+    final hasScoring = _viewport?.stages.any((s) => s.isScored) ?? false;
+    final hasAnalysis = (_viewport?.scoredEvents.isNotEmpty ?? false) || _nlgOverlay != null;
+
+    // Determine current recommended step index (1-based, 1 to 6)
+    int activeStep = 1;
+    if (!hasFile) {
+      activeStep = 1;
+    } else if (!hasMontage) {
+      activeStep = 2;
+    } else if (!hasScoring) {
+      activeStep = 3;
+    } else if (!hasAnalysis) {
+      activeStep = 5;
+    } else {
+      activeStep = 6;
+    }
+
+    return Container(
+      height: 42,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F4F8),
+        border: Border(
+          bottom: BorderSide(color: Colors.blueGrey.shade100, width: 1),
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      child: Row(
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.route, size: 16, color: Color(0xFF1E88E5)),
+              const SizedBox(width: 6),
+              Text(
+                'WORKFLOW',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.8,
+                  color: Colors.blueGrey.shade700,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(width: 1, height: 20, color: Colors.blueGrey.shade200),
+              const SizedBox(width: 8),
+            ],
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _buildWorkflowStepItem(
+                    stepNumber: 1,
+                    title: '1. Open File',
+                    subtitle: hasFile ? _basename(_activePath ?? 'Loaded') : 'Load EDF/PSG',
+                    isDone: hasFile,
+                    isActive: activeStep == 1,
+                    onTap: () => _openRecording(kind: 'edf'),
+                  ),
+                  _buildWorkflowStepDivider(),
+                  _buildWorkflowStepItem(
+                    stepNumber: 2,
+                    title: '2. AASM Montage',
+                    subtitle: hasMontage ? 'Applied' : 'PSG Derivations',
+                    isDone: hasMontage,
+                    isActive: activeStep == 2,
+                    onTap: _openMontageDialog,
+                  ),
+                  _buildWorkflowStepDivider(),
+                  _buildWorkflowStepItem(
+                    stepNumber: 3,
+                    title: '3. Autoscore',
+                    subtitle: hasScoring ? 'Scored' : 'AutoscoreNidra',
+                    isDone: hasScoring,
+                    isActive: activeStep == 3,
+                    onTap: _runAutoScoring,
+                  ),
+                  _buildWorkflowStepDivider(),
+                  _buildWorkflowStepItem(
+                    stepNumber: 4,
+                    title: '4. Review',
+                    subtitle: 'Manual Review',
+                    isDone: hasScoring,
+                    isActive: activeStep == 4,
+                    onTap: () {
+                      _jumpToEpoch(1);
+                      _viewerFocusNode.requestFocus();
+                    },
+                  ),
+                  _buildWorkflowStepDivider(),
+                  _buildWorkflowStepItem(
+                    stepNumber: 5,
+                    title: '5. Run Analyses',
+                    subtitle: hasAnalysis ? 'Completed' : 'All-in-One Pipeline',
+                    isDone: hasAnalysis,
+                    isActive: activeStep == 5,
+                    onTap: _runComprehensiveAnalysisDialog,
+                  ),
+                  _buildWorkflowStepDivider(),
+                  _buildWorkflowStepItem(
+                    stepNumber: 6,
+                    title: '6. Generate Report',
+                    subtitle: 'Clinical PDF',
+                    isDone: false,
+                    isActive: activeStep == 6,
+                    onTap: _openClinicalReportDialog,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWorkflowStepDivider() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Icon(Icons.arrow_forward_ios, size: 10, color: Colors.blueGrey.shade300),
+    );
+  }
+
+  Widget _buildWorkflowStepItem({
+    required int stepNumber,
+    required String title,
+    required String subtitle,
+    required bool isDone,
+    required bool isActive,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: isActive ? Colors.white : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isActive ? const Color(0xFF1E88E5) : (isDone ? Colors.green.shade300 : Colors.transparent),
+            width: isActive ? 1.5 : 1.0,
+          ),
+          boxShadow: isActive
+              ? [
+                  BoxShadow(
+                    color: Colors.blue.withOpacity(0.08),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1),
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircleAvatar(
+              radius: 9,
+              backgroundColor: isDone
+                  ? Colors.green.shade600
+                  : (isActive ? const Color(0xFF1E88E5) : Colors.blueGrey.shade300),
+              child: isDone
+                  ? const Icon(Icons.check, size: 11, color: Colors.white)
+                  : Text(
+                      '$stepNumber',
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+            ),
+            const SizedBox(width: 6),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: isActive || isDone ? FontWeight.bold : FontWeight.w600,
+                    color: isActive
+                        ? const Color(0xFF1565C0)
+                        : (isDone ? Colors.green.shade900 : Colors.blueGrey.shade800),
+                  ),
+                ),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: 9,
+                    color: isDone ? Colors.green.shade700 : Colors.blueGrey.shade500,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _runComprehensiveAnalysisDialog() async {
+    final v = _viewport;
+    final eeg = _loadedEeg;
+    final path = _activePath;
+    if (v == null || eeg == null || path == null) {
+      _setStatus('Load a recording first');
+      return;
+    }
+
+    bool runAnalyseNidra = true;
+    bool runNlg = true;
+    bool runRem = true;
+    bool runCap = true;
+    bool runRespiratory = true;
+    bool runPlm = true;
+
+    final selected = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDlgState) {
+          return AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.biotech, color: Color(0xFF1E88E5)),
+                SizedBox(width: 8),
+                Text('Comprehensive Sleep & EEG Analysis Pipeline'),
+              ],
+            ),
+            content: SizedBox(
+              width: 540,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.blue.shade200),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.info_outline, size: 20, color: Color(0xFF1976D2)),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Select the analyses to execute. You can run all modules in a single automated pass '
+                              'or launch individual specialized detectors.',
+                              style: TextStyle(fontSize: 12, color: Colors.black87),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: runAnalyseNidra,
+                      title: const Text('AnalyseNidra Sleep EEG Pipeline', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      subtitle: const Text('Spectral powers, slow waves, spindles, and phase-amplitude coupling (PAC)', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                      onChanged: (val) => setDlgState(() => runAnalyseNidra = val ?? false),
+                    ),
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: runNlg,
+                      title: const Text('NeuroLoopGain (NLG)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      subtitle: const Text('Cortical closed-loop feedback stability & resonance during sleep', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                      onChanged: (val) => setDlgState(() => runNlg = val ?? false),
+                    ),
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: runRem,
+                      title: const Text('Rapid Eye Movement (REM) Detection', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      subtitle: const Text('Conjugate ocular saccade detection, deflection velocity, and REM density', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                      onChanged: (val) => setDlgState(() => runRem = val ?? false),
+                    ),
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: runCap,
+                      title: const Text('Cyclic Alternating Pattern (CAP)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      subtitle: const Text('NREM instability metrics, A-phases (A1, A2, A3) and sequences', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                      onChanged: (val) => setDlgState(() => runCap = val ?? false),
+                    ),
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: runRespiratory,
+                      title: const Text('Respiratory & Sleep Apnea (OSA)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      subtitle: const Text('Apneas, hypopneas, RERAs, oxygen desaturations (ODI) and AHI', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                      onChanged: (val) => setDlgState(() => runRespiratory = val ?? false),
+                    ),
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: runPlm,
+                      title: const Text('Periodic Limb Movements (PLMS)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      subtitle: const Text('Leg EMG movement bursts, periodicity index (PLMI) and micro-arousals', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                      onChanged: (val) => setDlgState(() => runPlm = val ?? false),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.play_arrow, size: 18),
+                label: const Text('Run Selected Analyses (1-Click)'),
+                onPressed: () => Navigator.of(ctx).pop(true),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (selected != true) return;
+
+    // Sequence through selected analyses
+    if (runAnalyseNidra) {
+      await _runAnalyseNidraCurrent();
+    }
+    if (runRem) {
+      await _runRemDetection();
+    }
+    if (runCap) {
+      await _runCapAnalysis();
+    }
+    if (runRespiratory) {
+      await _runRespiratoryAnalysis();
+    }
+    if (runPlm) {
+      await _runPlmAnalysis();
+    }
+  }
+
+  Future<void> _openClinicalReportDialog() async {
+    final v = _viewport;
+    if (v == null || _activePath == null) {
+      _setStatus('Load a recording first');
+      return;
+    }
+
+    final idCtrl = TextEditingController(text: _config.subjectId);
+    final detailsCtrl = TextEditingController(text: _config.subjectDetails);
+    final siteCtrl = TextEditingController(text: _config.studySite);
+    final investigatorCtrl = TextEditingController(text: _config.investigatorName);
+    final titleCtrl = TextEditingController(text: _config.reportTitle);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.picture_as_pdf, color: Colors.red),
+            SizedBox(width: 8),
+            Text('Clinical Sleep Report Generator'),
+          ],
+        ),
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Patient & Study Information',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: idCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Subject / Patient ID',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: detailsCtrl,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: 'Clinical Notes / History / Impression',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: siteCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Study Site / Clinic',
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextFormField(
+                        controller: investigatorCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Reporting Physician',
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: titleCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Report Title',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.picture_as_pdf, size: 18),
+            label: const Text('Generate PDF Report'),
+            onPressed: () {
+              setState(() {
+                _config.subjectId = idCtrl.text.trim();
+                _config.subjectDetails = detailsCtrl.text.trim();
+                _config.studySite = siteCtrl.text.trim();
+                _config.investigatorName = investigatorCtrl.text.trim();
+                _config.reportTitle = titleCtrl.text.trim();
+              });
+              Navigator.of(ctx).pop(true);
+            },
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _exportSleepReport();
+    }
   }
 
   Future<void> _exportSleepReport() async {
@@ -6082,7 +6781,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   Future<void> _loadConfig() async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['json'],
+      allowedExtensions: ['ccsconfig', 'json'],
     );
     if (result != null && result.files.single.path != null) {
       final file = File(result.files.single.path!);
@@ -6148,9 +6847,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   Future<void> _saveConfig() async {
     final String? outputFile = await FilePicker.saveFile(
       dialogTitle: 'Save Configuration',
-      fileName: 'config.json',
+      fileName: 'config.ccsconfig',
       type: FileType.custom,
-      allowedExtensions: ['json'],
+      allowedExtensions: ['ccsconfig', 'json'],
     );
 
     if (outputFile != null) {
@@ -6160,6 +6859,181 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         _setStatus('Configuration saved to $outputFile');
       } catch (e) {
         _setStatus('Error saving configuration: $e');
+      }
+    }
+  }
+
+  Future<void> _checkAndPromptLegacyMigration(String folder) async {
+    try {
+      final plan = await LegacyFileMigration.plan(folder);
+      if (plan.isEmpty || !mounted) return;
+      final doMigrate = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.drive_file_rename_outline, color: Colors.indigo),
+              SizedBox(width: 8),
+              Text('Legacy Analysis Files Detected'),
+            ],
+          ),
+          content: SizedBox(
+            width: 520,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Found ${plan.length} legacy .json file(s) in this directory. '
+                  'CCS Sleep Studio has streamlined all file extensions to standard .ccs* formats '
+                  '(e.g., .ccsconfig, .ccsscoring, .ccsspindles, .ccsslowwaves).\n\n'
+                  'Would you like to automatically rename and migrate them now? '
+                  'Original contents are 100% preserved and backward-compatible.',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  height: 130,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: ListView(
+                    padding: const EdgeInsets.all(8),
+                    children: plan.entries.map((e) {
+                      final from = e.key.split(RegExp(r'[\\/]')).last;
+                      final to = e.value.split(RegExp(r'[\\/]')).last;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Text(
+                          '$from  ➔  $to',
+                          style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Later'),
+            ),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.check, size: 16),
+              label: const Text('Migrate Now'),
+              onPressed: () => Navigator.of(ctx).pop(true),
+            ),
+          ],
+        ),
+      );
+      if (doMigrate == true) {
+        await LegacyFileMigration.apply(folder, plan);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Successfully migrated ${plan.length} legacy file(s) to .ccs* format.'),
+            ),
+          );
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _openLegacyMigrationDialog() async {
+    final folder = await FilePicker.getDirectoryPath(
+      dialogTitle: 'Select Folder Containing Legacy .json Files to Migrate',
+    );
+    if (folder == null || folder.isEmpty) return;
+    try {
+      final plan = await LegacyFileMigration.plan(folder);
+      if (plan.isEmpty) {
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('No Legacy Files Found'),
+              content: Text('No legacy analysis/config files were found in:\n$folder'),
+              actions: [
+                TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('OK')),
+              ],
+            ),
+          );
+        }
+        return;
+      }
+      if (!mounted) return;
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Migrate ${plan.length} Legacy File(s)'),
+          content: SizedBox(
+            width: 520,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'The following files in "$folder" will be renamed to standardized .ccs* formats:',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  height: 180,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: ListView(
+                    padding: const EdgeInsets.all(8),
+                    children: plan.entries.map((e) {
+                      final from = e.key.split(RegExp(r'[\\/]')).last;
+                      final to = e.value.split(RegExp(r'[\\/]')).last;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Text(
+                          '$from  ➔  $to',
+                          style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.check, size: 16),
+              label: const Text('Migrate All'),
+              onPressed: () => Navigator.of(ctx).pop(true),
+            ),
+          ],
+        ),
+      );
+      if (confirm == true) {
+        await LegacyFileMigration.apply(folder, plan);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Successfully migrated ${plan.length} file(s) in $folder.')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Migration Notice'),
+            content: Text('$e'),
+            actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('OK'))],
+          ),
+        );
       }
     }
   }
@@ -7118,6 +7992,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             onSelected: _openMontageDialog,
           ),
           PlatformMenuItem(
+            label: 'Migrate Legacy Sidecars & Files in Folder…',
+            onSelected: _openLegacyMigrationDialog,
+          ),
+          PlatformMenuItem(
             label: 'Close Current File',
             onSelected: _closeCurrentFile,
           ),
@@ -7271,6 +8149,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 label: 'Cyclic Alternating Pattern (CAP) Analysis…',
                 onSelected: _runCapAnalysis,
               ),
+              PlatformMenuItem(
+                label: 'Rapid Eye Movement (REM) Detection…',
+                onSelected: _runRemDetection,
+              ),
+              PlatformMenuItem(
+                label: 'Run Comprehensive Analysis Pipeline (All-in-One)…',
+                onSelected: _runComprehensiveAnalysisDialog,
+              ),
             ],
           ),
           PlatformMenuItemGroup(
@@ -7317,7 +8203,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           PlatformMenuItemGroup(
             members: [
               PlatformMenuItem(
-                label: 'Export Sleep Report (PDF)',
+                label: 'Generate Clinical Sleep Report (PDF)…',
+                onSelected: _openClinicalReportDialog,
+              ),
+              PlatformMenuItem(
+                label: 'Export Sleep Report (PDF) [Direct]',
                 onSelected: _exportSleepReport,
               ),
             ],
@@ -7363,12 +8253,16 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             onSelected: _openFeatureSelectionAndConfigDialog,
           ),
           PlatformMenuItem(
-            label: 'Save configuration as .json',
+            label: 'Save configuration (.ccsconfig / .json)',
             onSelected: _saveConfig,
           ),
           PlatformMenuItem(
-            label: 'Load configuration from .json',
+            label: 'Load configuration (.ccsconfig / .json)',
             onSelected: _loadConfig,
+          ),
+          PlatformMenuItem(
+            label: 'Migrate Legacy Sidecars & Files in Folder…',
+            onSelected: _openLegacyMigrationDialog,
           ),
           PlatformMenuItem(
             label: 'Restore default configuration',
@@ -10737,6 +11631,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   Column(
                     children: [
                       if (!Platform.isMacOS) _buildInAppMenuBar(),
+                      _buildGuidedClinicalWorkflowBar(),
                       _Toolbar(
                         viewport: viewport,
                         onJump: _jumpToEpoch,
@@ -14134,6 +15029,31 @@ class _CommandBatchProgressDialogState
     if (mounted) setState(() => _finished = true);
   }
 
+  bool _showTerminalLogs = false;
+
+  static const _steps = [
+    'Channels',
+    'Core Spectral',
+    'PAC',
+    'Slow Waves',
+    'Spindles',
+    'NeuroLoopGain',
+    'Regional Output',
+  ];
+
+  int get _stepIndex {
+    if (_finished) return _steps.length;
+    final lower = _currentStepName.toLowerCase();
+    if (lower.contains('loaded') || lower.contains('channel')) return 1;
+    if (lower.contains('spectral') || lower.contains('core')) return 2;
+    if (lower.contains('pac') || lower.contains('phase')) return 3;
+    if (lower.contains('slow')) return 4;
+    if (lower.contains('spindle')) return 5;
+    if (lower.contains('neuroloopgain') || lower.contains('nlg')) return 6;
+    if (lower.contains('final') || lower.contains('wrote')) return 7;
+    return 0;
+  }
+
   @override
   Widget build(BuildContext context) {
     final totalJobs = widget.jobs.length;
@@ -14141,38 +15061,204 @@ class _CommandBatchProgressDialogState
         ? 0.0
         : ((_completed + _intraJobProgress).clamp(0.0, totalJobs.toDouble()) / totalJobs);
     return AlertDialog(
-      title: Text(widget.title),
+      title: Row(
+        children: [
+          Icon(
+            _finished ? Icons.task_alt : Icons.analytics_outlined,
+            color: _finished ? Colors.green : Colors.indigo,
+          ),
+          const SizedBox(width: 8),
+          Text(widget.title),
+        ],
+      ),
       content: SizedBox(
         width: 760,
-        height: 500,
+        height: 520,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              _finished
-                  ? 'Finished ${widget.jobs.length} job(s)'
-                  : 'Processing $_current (${_completed + 1}/${widget.jobs.length})${_currentStepName.isNotEmpty ? '  •  $_currentStepName' : ''}',
-            ),
-            const SizedBox(height: 8),
-            LinearProgressIndicator(value: _finished ? 1 : progress),
-            const SizedBox(height: 12),
-            Expanded(
-              child: Container(
-                color: Colors.black87,
-                padding: const EdgeInsets.all(8),
-                child: ListView.builder(
-                  controller: _scrollController,
-                  itemCount: _logs.length,
-                  itemBuilder: (_, index) => Text(
-                    _logs[index],
-                    style: const TextStyle(
-                      color: Colors.lightGreenAccent,
-                      fontFamily: 'Courier',
-                      fontSize: 11,
+            // Pipeline Step Tracker
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: List.generate(_steps.length, (idx) {
+                  final isDone = _finished || (_stepIndex > idx + 1);
+                  final isCurrent = !_finished && (_stepIndex == idx + 1);
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: Chip(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      backgroundColor: isDone
+                          ? Colors.green.shade50
+                          : (isCurrent ? Colors.blue.shade50 : Colors.grey.shade100),
+                      side: BorderSide(
+                        color: isDone
+                            ? Colors.green.shade300
+                            : (isCurrent ? Colors.blue.shade400 : Colors.grey.shade300),
+                      ),
+                      avatar: isDone
+                          ? const Icon(Icons.check_circle, size: 16, color: Colors.green)
+                          : (isCurrent
+                              ? const SizedBox(
+                                  width: 12,
+                                  height: 12,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : Icon(Icons.circle_outlined, size: 14, color: Colors.grey.shade400)),
+                      label: Text(
+                        _steps[idx],
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                          color: isDone
+                              ? Colors.green.shade900
+                              : (isCurrent ? Colors.blue.shade900 : Colors.grey.shade700),
+                        ),
+                      ),
                     ),
-                  ),
+                  );
+                }),
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Active Status Card
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: _finished ? Colors.green.shade50 : Colors.blue.shade50.withOpacity(0.5),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: _finished ? Colors.green.shade200 : Colors.blue.shade200,
                 ),
               ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        _finished ? Icons.check_circle_outline : Icons.sync,
+                        size: 20,
+                        color: _finished ? Colors.green.shade700 : Colors.blue.shade700,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _finished
+                              ? 'All $_completed job(s) completed successfully!'
+                              : 'Current: ${_currentStepName.isNotEmpty ? _currentStepName : "Initializing..."}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                            color: _finished ? Colors.green.shade900 : Colors.blue.shade900,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '${(progress * 100).toStringAsFixed(0)}%',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: _finished ? 1.0 : progress,
+                      minHeight: 6,
+                      backgroundColor: Colors.grey.shade200,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        _finished ? Colors.green : Colors.blue,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Recording: $_current (${_completed + (_finished ? 0 : 1)}/${widget.jobs.length})',
+                    style: const TextStyle(fontSize: 11, color: Colors.black54),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            // Log Toggle Bar
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '${_logs.length} events logged',
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+                TextButton.icon(
+                  icon: Icon(
+                    _showTerminalLogs ? Icons.terminal : Icons.terminal_outlined,
+                    size: 16,
+                  ),
+                  label: Text(
+                    _showTerminalLogs ? 'Hide Raw Logs' : 'Show Terminal Log Console',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  onPressed: () => setState(() => _showTerminalLogs = !_showTerminalLogs),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Expanded(
+              child: _showTerminalLogs
+                  ? Container(
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      padding: const EdgeInsets.all(8),
+                      child: ListView.builder(
+                        controller: _scrollController,
+                        itemCount: _logs.length,
+                        itemBuilder: (_, index) => Text(
+                          _logs[index],
+                          style: const TextStyle(
+                            color: Colors.lightGreenAccent,
+                            fontFamily: 'Courier',
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    )
+                  : Container(
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.grey.shade200),
+                      ),
+                      padding: const EdgeInsets.all(8),
+                      child: ListView.builder(
+                        itemCount: _logs.length,
+                        itemBuilder: (_, index) {
+                          final line = _logs[index];
+                          final isHeader = line.startsWith('---');
+                          final isHighlight = line.contains('Wrote') ||
+                              line.contains('Completed') ||
+                              line.contains('detected') ||
+                              line.contains('Computed');
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Text(
+                              line,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: isHeader || isHighlight
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                                color: isHeader
+                                    ? Colors.indigo
+                                    : (isHighlight ? Colors.black87 : Colors.black54),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
             ),
           ],
         ),

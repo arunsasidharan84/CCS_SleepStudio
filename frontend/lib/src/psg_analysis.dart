@@ -984,7 +984,8 @@ enum PsgMarkerGroup {
   arousals('Arousals (respiratory analysis)'),
   limbMovements('Leg movements / PLMs'),
   capAPhases('CAP A-phases (A1 / A2 / A3)'),
-  capSequences('CAP sequences');
+  capSequences('CAP sequences'),
+  remMovements('Rapid Eye Movements (REM)');
 
   const PsgMarkerGroup(this.label);
   final String label;
@@ -1021,6 +1022,8 @@ enum PsgMarkerGroup {
         isCapAPhaseDigit(digit) || lowerLabel.startsWith('cap a'),
       PsgMarkerGroup.capSequences =>
         isCapSequenceDigit(digit) || lowerLabel.contains('cap seq'),
+      PsgMarkerGroup.remMovements =>
+        lowerLabel.contains('rem') || lowerType.contains('rem'),
     };
   }
 }

@@ -1131,27 +1131,36 @@ class AppConfig {
       }
     }
 
+    final hasConfiguredDisplayChannels =
+        channels.any((channel) => channel.displayOnScreen);
     final configuredRawIndices = channels
-        .where((channel) => !channel.derived)
         .map((channel) => channel.sourceIndex)
         .whereType<int>()
         .toSet();
     for (var rawIndex = 0; rawIndex < loadedLabels.length; rawIndex++) {
       if (!configuredRawIndices.contains(rawIndex)) {
-        channels.add(
-          _defaultChannelConfig(
-            loadedLabels[rawIndex],
-            rawIndex,
-            loadedLabels.length,
-          ),
+        final cfg = _defaultChannelConfig(
+          loadedLabels[rawIndex],
+          rawIndex,
+          loadedLabels.length,
         );
+        if (hasConfiguredDisplayChannels) {
+          cfg.displayOnScreen = false;
+        }
+        channels.add(cfg);
       }
     }
 
-    final availableNames = channels.map((channel) => channel.name).toSet();
+    final availableNames = <String>{
+      for (final channel in channels) ...[
+        channel.name,
+        if (channel.sourceChannel != null) channel.sourceChannel!,
+      ],
+      ...loadedLabels,
+    };
     for (final channel in channels) {
       if (channel.reReference != 'None' &&
-          !availableNames.contains(channel.reReference)) {
+          !availableNames.any((n) => n.equalsIgnoreCase(channel.reReference))) {
         channel.reReference = 'None';
       }
       // Pick the display mode once (older configs have none): polygraphic

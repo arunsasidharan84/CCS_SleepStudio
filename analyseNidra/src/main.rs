@@ -897,7 +897,10 @@ fn handle_nlg_cli(args: Vec<OsString>) -> Result<()> {
         cli.keep_series = false;
     }
     let opts = cli.options()?;
-    let channels = s("eeg").map(|v| split_channel_arg(&v)).unwrap_or_else(|| vec!["C4".into(), "C3".into()]);
+    let channels = s("channels")
+        .or_else(|| s("eeg"))
+        .map(|v| split_channel_arg(&v))
+        .unwrap_or_else(|| vec!["C4".into(), "C3".into()]);
     let references = s("references")
         .filter(|v| !(v == "-" || v.eq_ignore_ascii_case("none")))
         .map(|v| split_channel_arg(&v))

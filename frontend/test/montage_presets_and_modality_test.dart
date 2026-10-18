@@ -342,6 +342,51 @@ void main() {
       expect(e2.reReference, anyOf(isEmpty, equals('None')));
       expect(e2.color, equals('Blue'));
     });
+
+    test('cleanChannelLabel strips acquisition prefixes and reference suffixes', () {
+      expect(cleanChannelLabel('EEG F4-Ref'), equals('F4'));
+      expect(cleanChannelLabel('POL EOG1'), equals('EOG1'));
+      expect(cleanChannelLabel('EEG CZ-REF'), equals('CZ'));
+      expect(cleanChannelLabel('POL EMG1_Ref'), equals('EMG1'));
+      expect(cleanChannelLabel('C3'), equals('C3'));
+    });
+
+    test('findMatchingElectrode falls back to midline electrodes (Cz, Fz, Oz) when lateral electrodes missing', () {
+      final available = ['EEG FZ-Ref', 'EEG CZ-Ref', 'EEG OZ-Ref', 'M1', 'M2'];
+      // C3 and C4 should fall back to CZ
+      expect(findMatchingElectrode('C3', available), equals('EEG CZ-Ref'));
+      expect(findMatchingElectrode('C4', available), equals('EEG CZ-Ref'));
+      // F3 and F4 should fall back to FZ
+      expect(findMatchingElectrode('F3', available), equals('EEG FZ-Ref'));
+      expect(findMatchingElectrode('F4', available), equals('EEG FZ-Ref'));
+      // O1 and O2 should fall back to OZ
+      expect(findMatchingElectrode('O1', available), equals('EEG OZ-Ref'));
+      expect(findMatchingElectrode('O2', available), equals('EEG OZ-Ref'));
+    });
+
+    test('extended AASM presets include respiratory (OSA) and limb movement (PLM) channels', () {
+      final osaPreset = builtInMontagePresets.firstWhere((p) => p.name.contains('OSA'));
+      final plmPreset = builtInMontagePresets.firstWhere((p) => p.name.contains('PLM'));
+
+      final available = [
+        'E1', 'E2', 'F4', 'F3', 'C4', 'C3', 'O2', 'O1', 'M1', 'M2', 'CHIN1', 'CHIN2', 'ECG',
+        'Flow', 'Thorax', 'Abdomen', 'SpO2', 'Snore',
+        'LAT', 'RAT', 'Position',
+      ];
+
+      final osaChannels = generateMontagePresetChannels(preset: osaPreset, availableChannels: available);
+      final osaVisible = osaChannels.where((c) => c.displayOnScreen).map((c) => c.name).toList();
+      expect(osaVisible, contains('Flow'));
+      expect(osaVisible, contains('Thorax'));
+      expect(osaVisible, contains('Abdomen'));
+      expect(osaVisible, contains('SpO2'));
+
+      final plmChannels = generateMontagePresetChannels(preset: plmPreset, availableChannels: available);
+      final plmVisible = plmChannels.where((c) => c.displayOnScreen).map((c) => c.name).toList();
+      expect(plmVisible, contains('LAT'));
+      expect(plmVisible, contains('RAT'));
+      expect(plmVisible, contains('Position'));
+    });
   });
 }
 

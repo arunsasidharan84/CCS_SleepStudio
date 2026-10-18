@@ -25,15 +25,45 @@ class MontagePreset {
 const List<MontagePreset> builtInMontagePresets = [
   MontagePreset(
     name: 'AASM Sleep Standard',
-    description: 'Standard AASM clinical PSG derivation: EOGs (E1-M2, E2-M1/M2), F4-M1, C4-M1, O2-M1, F3-M2, C3-M2, O1-M2, EMG',
+    description: 'Standard AASM clinical PSG sequence: EOG (E1-M2, E2-M1), Frontal (F4-M1, F3-M2), Central (C4-M1, C3-M2), Occipital (O2-M1, O1-M2), Chin EMG',
     derivations: [
       ('E1', 'M2'),
       ('E2', 'M1'),
       ('F4', 'M1'),
-      ('C4', 'M1'),
-      ('O2', 'M1'),
       ('F3', 'M2'),
+      ('C4', 'M1'),
       ('C3', 'M2'),
+      ('O2', 'M1'),
+      ('O1', 'M2'),
+      ('CHIN1', 'CHIN2'),
+    ],
+  ),
+  MontagePreset(
+    name: 'AASM Sleep + OSA (Respiratory)',
+    description: 'Standard AASM derivations with complete respiratory channels (Flow, Thorax, Abdomen, SpO2, Snore)',
+    derivations: [
+      ('E1', 'M2'),
+      ('E2', 'M1'),
+      ('F4', 'M1'),
+      ('F3', 'M2'),
+      ('C4', 'M1'),
+      ('C3', 'M2'),
+      ('O2', 'M1'),
+      ('O1', 'M2'),
+      ('CHIN1', 'CHIN2'),
+    ],
+  ),
+  MontagePreset(
+    name: 'AASM Sleep + PLM (Limb Movements)',
+    description: 'Standard AASM derivations with bilateral leg EMG (LAT, RAT) and body position',
+    derivations: [
+      ('E1', 'M2'),
+      ('E2', 'M1'),
+      ('F4', 'M1'),
+      ('F3', 'M2'),
+      ('C4', 'M1'),
+      ('C3', 'M2'),
+      ('O2', 'M1'),
       ('O1', 'M2'),
       ('CHIN1', 'CHIN2'),
     ],
@@ -224,12 +254,165 @@ class _MontageDialogState extends State<MontageDialog> {
     });
   }
 
+  bool _cleanLabelsOnApply = true;
+
+  void _cleanAllChannelLabels() {
+    setState(() {
+      for (final ch in _channels) {
+        ch.name = cleanChannelLabel(ch.name);
+      }
+      _statusMsg = 'Cleaned acquisition prefixes (EEG/POL) and suffixes (-Ref) from all channel labels.';
+    });
+  }
+
+  void _applyAllAasmFilters() {
+    setState(() {
+      applyAasmFiltersToAll(_channels);
+      _statusMsg = 'Applied recommended AASM clinical filters (EEG/EOG: 0.3-35 Hz, EMG: 10-100 Hz).';
+    });
+  }
+
+  String _filterSummary(ChannelConfig ch) {
+    if (!ch.filterHpEnabled && !ch.filterLpEnabled && !ch.filterNotchEnabled) {
+      return 'Off';
+    }
+    final hp = ch.filterHpEnabled ? ch.filterHpCutoff.toStringAsFixed(ch.filterHpCutoff < 1 ? 1 : 0) : '0';
+    final lp = ch.filterLpEnabled ? ch.filterLpCutoff.toStringAsFixed(0) : '∞';
+    final notch = ch.filterNotchEnabled ? ' N${ch.filterNotchCutoff.toStringAsFixed(0)}' : '';
+    return '$hp–$lp Hz$notch';
+  }
+
+  void _showChannelFilterDialog(ChannelConfig ch) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        var hpOn = ch.filterHpEnabled;
+        var hpVal = ch.filterHpCutoff;
+        var lpOn = ch.filterLpEnabled;
+        var lpVal = ch.filterLpCutoff;
+        var notchOn = ch.filterNotchEnabled;
+        var notchVal = ch.filterNotchCutoff;
+
+        return StatefulBuilder(
+          builder: (ctx, setDlgState) {
+            return AlertDialog(
+              title: Text('Filter Settings — ${ch.name}'),
+              content: SizedBox(
+                width: 380,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SwitchListTile(
+                      title: const Text('High-Pass Filter', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                      subtitle: Text(hpOn ? '${hpVal.toStringAsFixed(1)} Hz' : 'Off (DC)', style: const TextStyle(fontSize: 12)),
+                      value: hpOn,
+                      onChanged: (v) => setDlgState(() => hpOn = v),
+                    ),
+                    if (hpOn)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          children: [
+                            for (final f in [0.3, 0.5, 1.0, 10.0])
+                              Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: ChoiceChip(
+                                  label: Text('${f.toStringAsFixed(f == 10.0 ? 0 : 1)} Hz', style: const TextStyle(fontSize: 11)),
+                                  selected: (hpVal - f).abs() < 0.05,
+                                  onSelected: (sel) {
+                                    if (sel) setDlgState(() => hpVal = f);
+                                  },
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    const Divider(),
+                    SwitchListTile(
+                      title: const Text('Low-Pass Filter', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                      subtitle: Text(lpOn ? '${lpVal.toStringAsFixed(0)} Hz' : 'Off', style: const TextStyle(fontSize: 12)),
+                      value: lpOn,
+                      onChanged: (v) => setDlgState(() => lpOn = v),
+                    ),
+                    if (lpOn)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Wrap(
+                          spacing: 6,
+                          children: [
+                            for (final f in [15.0, 30.0, 35.0, 70.0, 100.0])
+                              ChoiceChip(
+                                label: Text('${f.toStringAsFixed(0)} Hz', style: const TextStyle(fontSize: 11)),
+                                selected: (lpVal - f).abs() < 0.5,
+                                onSelected: (sel) {
+                                  if (sel) setDlgState(() => lpVal = f);
+                                },
+                              ),
+                          ],
+                        ),
+                      ),
+                    const Divider(),
+                    SwitchListTile(
+                      title: const Text('Notch Filter', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                      subtitle: Text(notchOn ? '${notchVal.toStringAsFixed(0)} Hz' : 'Off', style: const TextStyle(fontSize: 12)),
+                      value: notchOn,
+                      onChanged: (v) => setDlgState(() => notchOn = v),
+                    ),
+                    if (notchOn)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          children: [
+                            for (final f in [50.0, 60.0])
+                              Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: ChoiceChip(
+                                  label: Text('${f.toStringAsFixed(0)} Hz', style: const TextStyle(fontSize: 11)),
+                                  selected: (notchVal - f).abs() < 0.5,
+                                  onSelected: (sel) {
+                                    if (sel) setDlgState(() => notchVal = f);
+                                  },
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    setState(() {
+                      ch.filterHpEnabled = hpOn;
+                      ch.filterHpCutoff = hpVal;
+                      ch.filterLpEnabled = lpOn;
+                      ch.filterLpCutoff = lpVal;
+                      ch.filterNotchEnabled = notchOn;
+                      ch.filterNotchCutoff = notchVal;
+                    });
+                    Navigator.of(ctx).pop();
+                  },
+                  child: const Text('Apply'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Future<void> _exportMontageJson() async {
     final savePath = await FilePicker.saveFile(
-      dialogTitle: 'Save Montage Preset (.json)',
-      fileName: 'Montage_Preset.json',
+      dialogTitle: 'Save Montage Preset (.ccsmontage / .json)',
+      fileName: 'Montage_Preset.ccsmontage',
       type: FileType.custom,
-      allowedExtensions: ['json'],
+      allowedExtensions: ['ccsmontage', 'json'],
     );
     if (savePath == null) return;
 
@@ -244,9 +427,9 @@ class _MontageDialogState extends State<MontageDialog> {
 
   Future<void> _importMontageJson() async {
     final pick = await FilePicker.pickFiles(
-      dialogTitle: 'Load Montage Preset (.json)',
+      dialogTitle: 'Load Montage Preset (.ccsmontage / .json)',
       type: FileType.custom,
-      allowedExtensions: ['json'],
+      allowedExtensions: ['ccsmontage', 'json'],
     );
     if (pick == null || pick.files.single.path == null) return;
 
@@ -283,6 +466,11 @@ class _MontageDialogState extends State<MontageDialog> {
   }
 
   void _onApply() {
+    if (_cleanLabelsOnApply) {
+      for (final ch in _channels) {
+        ch.name = cleanChannelLabel(ch.name);
+      }
+    }
     final newConfig = widget.config.copy();
     newConfig.channels = _channels;
     widget.onApply(newConfig);
@@ -297,8 +485,8 @@ class _MontageDialogState extends State<MontageDialog> {
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Container(
-        width: 880,
-        height: 640,
+        width: 960,
+        height: 660,
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -365,6 +553,18 @@ class _MontageDialogState extends State<MontageDialog> {
                   label: const Text('Reset to Native / Monopolar', style: TextStyle(fontSize: 11.5)),
                   tooltip: 'Set all re-references to None',
                   onPressed: _resetToMonopolar,
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.cleaning_services_outlined, size: 14, color: Colors.teal),
+                  label: const Text('Clean Channel Labels', style: TextStyle(fontSize: 11.5)),
+                  tooltip: 'Strip prefixes (EEG, POL) and suffixes (-Ref) for optimal autodetect',
+                  onPressed: _cleanAllChannelLabels,
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.tune, size: 14, color: Colors.purple),
+                  label: const Text('Apply AASM Filters', style: TextStyle(fontSize: 11.5)),
+                  tooltip: 'Set recommended AASM clinical filters (EEG/EOG: 0.3-35 Hz, EMG: 10-100 Hz)',
+                  onPressed: _applyAllAasmFilters,
                 ),
               ],
             ),
@@ -479,15 +679,16 @@ class _MontageDialogState extends State<MontageDialog> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       color: Colors.grey.shade100,
-                      child: Row(
+                      child: const Row(
                         children: [
-                          const SizedBox(width: 24, child: Text('#', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-                          const SizedBox(width: 32, child: Text('Vis', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-                          const Expanded(flex: 3, child: Text('Channel / Derivation', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-                          const Expanded(flex: 3, child: Text('Re-Reference (-)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-                          const SizedBox(width: 60, child: Text('Polarity', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-                          const SizedBox(width: 80, child: Text('Scale (µV)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-                          const SizedBox(width: 48),
+                          SizedBox(width: 24, child: Text('#', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                          SizedBox(width: 32, child: Text('Vis', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                          Expanded(flex: 3, child: Text('Channel / Derivation', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                          Expanded(flex: 3, child: Text('Re-Reference (-)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                          SizedBox(width: 54, child: Text('Invert', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                          SizedBox(width: 90, child: Text('Scale (µV)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                          SizedBox(width: 100, child: Text('Filters', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                          SizedBox(width: 40),
                         ],
                       ),
                     ),
@@ -572,7 +773,7 @@ class _MontageDialogState extends State<MontageDialog> {
                                   ),
                                 ),
                                 SizedBox(
-                                  width: 60,
+                                  width: 54,
                                   child: Tooltip(
                                     message: 'Invert polarity',
                                     child: Checkbox(
@@ -583,14 +784,56 @@ class _MontageDialogState extends State<MontageDialog> {
                                   ),
                                 ),
                                 SizedBox(
-                                  width: 80,
-                                  child: Text(
-                                    '${ch.scalingFactor.toStringAsFixed(0)} µV',
-                                    style: const TextStyle(fontSize: 11),
+                                  width: 90,
+                                  child: DropdownButtonHideUnderline(
+                                    child: DropdownButton<double>(
+                                      value: const [20.0, 50.0, 70.0, 100.0, 150.0, 200.0, 500.0, 1000.0].contains(ch.scalingFactor)
+                                          ? ch.scalingFactor
+                                          : 100.0,
+                                      isDense: true,
+                                      style: const TextStyle(fontSize: 11, color: Colors.black87),
+                                      items: const [20.0, 50.0, 70.0, 100.0, 150.0, 200.0, 500.0, 1000.0]
+                                          .map((s) => DropdownMenuItem(
+                                                value: s,
+                                                child: Text('${s.toStringAsFixed(0)} µV', style: const TextStyle(fontSize: 11)),
+                                              ))
+                                          .toList(),
+                                      onChanged: (v) {
+                                        if (v != null) setState(() => ch.scalingFactor = v);
+                                      },
+                                    ),
                                   ),
                                 ),
                                 SizedBox(
-                                  width: 48,
+                                  width: 100,
+                                  child: OutlinedButton(
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                                      visualDensity: VisualDensity.compact,
+                                      side: BorderSide(
+                                        color: (ch.filterHpEnabled || ch.filterLpEnabled || ch.filterNotchEnabled)
+                                            ? Colors.indigo
+                                            : Colors.grey.shade300,
+                                      ),
+                                    ),
+                                    onPressed: () => _showChannelFilterDialog(ch),
+                                    child: Text(
+                                      _filterSummary(ch),
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: (ch.filterHpEnabled || ch.filterLpEnabled || ch.filterNotchEnabled)
+                                            ? FontWeight.bold
+                                            : FontWeight.normal,
+                                        color: (ch.filterHpEnabled || ch.filterLpEnabled || ch.filterNotchEnabled)
+                                            ? Colors.indigo.shade800
+                                            : Colors.grey.shade700,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 40,
                                   child: IconButton(
                                     icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red),
                                     onPressed: () {
@@ -614,11 +857,23 @@ class _MontageDialogState extends State<MontageDialog> {
             // Footer
             Row(
               children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Checkbox(
+                      value: _cleanLabelsOnApply,
+                      visualDensity: VisualDensity.compact,
+                      onChanged: (v) => setState(() => _cleanLabelsOnApply = v ?? true),
+                    ),
+                    const Text('Clean channel prefixes/suffixes on apply', style: TextStyle(fontSize: 11.5)),
+                  ],
+                ),
+                const SizedBox(width: 12),
                 if (_statusMsg.isNotEmpty)
                   Expanded(
                     child: Text(
                       _statusMsg,
-                      style: TextStyle(fontSize: 12, color: Colors.indigo.shade800, fontWeight: FontWeight.w500),
+                      style: TextStyle(fontSize: 11.5, color: Colors.indigo.shade800, fontWeight: FontWeight.w500),
                       overflow: TextOverflow.ellipsis,
                     ),
                   )
@@ -675,9 +930,10 @@ List<ChannelConfig> generateMontagePresetChannels({
               : modality == ChannelModality.ecg
                   ? 'Magenta'
                   : existing.color;
+      final displayName = isAasm ? cleanChannelLabel(preRef) : preRef;
       newChannels.add(
         ChannelConfig(
-          name: preRef,
+          name: displayName,
           sourceChannel: preRef,
           sourceIndex: preIndex >= 0 ? preIndex : null,
           reReference: 'None',
@@ -705,7 +961,9 @@ List<ChannelConfig> generateMontagePresetChannels({
         orElse: () => ChannelConfig(name: active, sourceChannel: active),
       );
 
-      final label = '$active-$ref';
+      final cleanAct = isAasm ? cleanChannelLabel(active) : active;
+      final cleanR = isAasm ? cleanChannelLabel(ref) : ref;
+      final label = isAasm ? '$cleanAct-$cleanR' : '$active-$ref';
       final activeIndex = availableChannels.indexOf(active);
       final modality = detectChannelModality(label);
       final color = modality == ChannelModality.eog
@@ -732,7 +990,7 @@ List<ChannelConfig> generateMontagePresetChannels({
     }
   }
 
-  // Comprehensive AASM standard: ensure EOG and Chin EMG are included
+  // Comprehensive AASM standard: ensure EOG, Chin EMG, ECG, OSA, PLM are properly handled
   if (isAasm) {
     // 1. EOG channels (if not already added by derivations above)
     final hasEog = newChannels.any(
@@ -750,7 +1008,7 @@ List<ChannelConfig> generateMontagePresetChannels({
           orElse: () => ChannelConfig(name: e1),
         );
         final label =
-            ref != null && !ref.equalsIgnoreCase(e1) ? '$e1-$ref' : e1;
+            ref != null && !ref.equalsIgnoreCase(e1) ? 'E1-M2' : cleanChannelLabel(e1);
         final e1Index = availableChannels.indexOf(e1);
         newChannels.add(
           ChannelConfig(
@@ -761,7 +1019,7 @@ List<ChannelConfig> generateMontagePresetChannels({
                 ref != null && !ref.equalsIgnoreCase(e1) ? ref : 'None',
             derived: ref != null && !ref.equalsIgnoreCase(e1),
             displayOnScreen: true,
-            color: existing.color,
+            color: 'Blue',
             scalingFactor: existing.scalingFactor,
           ),
         );
@@ -773,7 +1031,7 @@ List<ChannelConfig> generateMontagePresetChannels({
           orElse: () => ChannelConfig(name: e2),
         );
         final label =
-            ref != null && !ref.equalsIgnoreCase(e2) ? '$e2-$ref' : e2;
+            ref != null && !ref.equalsIgnoreCase(e2) ? 'E2-M1' : cleanChannelLabel(e2);
         final e2Index = availableChannels.indexOf(e2);
         newChannels.add(
           ChannelConfig(
@@ -784,7 +1042,7 @@ List<ChannelConfig> generateMontagePresetChannels({
                 ref != null && !ref.equalsIgnoreCase(e2) ? ref : 'None',
             derived: ref != null && !ref.equalsIgnoreCase(e2),
             displayOnScreen: true,
-            color: existing.color,
+            color: 'Blue',
             scalingFactor: existing.scalingFactor,
           ),
         );
@@ -806,13 +1064,13 @@ List<ChannelConfig> generateMontagePresetChannels({
         final chin1Index = availableChannels.indexOf(chin1);
         newChannels.add(
           ChannelConfig(
-            name: '$chin1-$chin2',
+            name: 'CHIN1-CHIN2',
             sourceChannel: chin1,
             sourceIndex: chin1Index >= 0 ? chin1Index : null,
             reReference: chin2,
             derived: true,
             displayOnScreen: true,
-            color: existing.color,
+            color: 'Orange',
             scalingFactor: existing.scalingFactor,
           ),
         );
@@ -824,13 +1082,13 @@ List<ChannelConfig> generateMontagePresetChannels({
         final chin1Index = availableChannels.indexOf(chin1);
         newChannels.add(
           ChannelConfig(
-            name: chin1,
+            name: cleanChannelLabel(chin1),
             sourceChannel: chin1,
             sourceIndex: chin1Index >= 0 ? chin1Index : null,
             reReference: 'None',
             derived: false,
             displayOnScreen: true,
-            color: existing.color,
+            color: 'Orange',
             scalingFactor: existing.scalingFactor,
           ),
         );
@@ -839,7 +1097,7 @@ List<ChannelConfig> generateMontagePresetChannels({
 
     // 3. ECG channel if present
     final ecg = findMatchingElectrode('ECG', availableChannels);
-    if (ecg != null && !newChannels.any((c) => c.name.equalsIgnoreCase(ecg))) {
+    if (ecg != null && !newChannels.any((c) => c.name.equalsIgnoreCase(ecg) || c.name.equalsIgnoreCase('ECG'))) {
       final existing = baseList.firstWhere(
         (c) => c.name.equalsIgnoreCase(ecg),
         orElse: () => ChannelConfig(name: ecg),
@@ -847,17 +1105,104 @@ List<ChannelConfig> generateMontagePresetChannels({
       final ecgIndex = availableChannels.indexOf(ecg);
       newChannels.add(
         ChannelConfig(
-          name: ecg,
+          name: 'ECG',
           sourceChannel: ecg,
           sourceIndex: ecgIndex >= 0 ? ecgIndex : null,
           reReference: 'None',
           derived: false,
           displayOnScreen: true,
-          color: existing.color,
+          color: 'Magenta',
           scalingFactor: existing.scalingFactor,
         ),
       );
     }
+
+    // 4. Extended Respiratory channels for OSA Preset
+    if (preset.name.contains('OSA')) {
+      final respSignals = [
+        ('Flow', ['FLOW', 'CANNULA', 'THERMAL', 'THERMISTOR', 'AIRFLOW', 'NASAL', 'PNOSE']),
+        ('Thorax', ['THORAX', 'CHEST', 'THOR', 'THO', 'EFFORT_THOR']),
+        ('Abdomen', ['ABDOMEN', 'ABDO', 'ABD', 'EFFORT_ABDO']),
+        ('SpO2', ['SPO2', 'SAO2', 'OXIMETRY', 'PULSEOX', 'SAT']),
+        ('Snore', ['SNORE', 'MIC', 'TRACHEA']),
+      ];
+      for (final item in respSignals) {
+        final match = findMatchingElectrode(item.$1, availableChannels) ??
+            availableChannels.firstWhere(
+              (c) {
+                final cleanC = cleanChannelLabel(c).toUpperCase();
+                return item.$2.any((t) => cleanC.contains(t));
+              },
+              orElse: () => '',
+            );
+        if (match.isNotEmpty &&
+            !newChannels.any((c) =>
+                c.sourceChannel?.equalsIgnoreCase(match) == true ||
+                c.name.equalsIgnoreCase(item.$1))) {
+          final idx = availableChannels.indexOf(match);
+          final existing = baseList.firstWhere(
+            (c) => c.name.equalsIgnoreCase(match),
+            orElse: () => ChannelConfig(name: match),
+          );
+          newChannels.add(
+            ChannelConfig(
+              name: item.$1,
+              sourceChannel: match,
+              sourceIndex: idx >= 0 ? idx : null,
+              reReference: 'None',
+              derived: false,
+              displayOnScreen: true,
+              color: 'Green',
+              scalingFactor: existing.scalingFactor,
+            ),
+          );
+        }
+      }
+    }
+
+    // 5. Extended Limb Movement channels for PLM Preset
+    if (preset.name.contains('PLM')) {
+      final legSignals = [
+        ('LAT', ['LAT', 'L-LEG', 'LEG_L', 'LEGL', 'EMG_LEG_L', 'TIB_L', 'TIB_LEFT']),
+        ('RAT', ['RAT', 'R-LEG', 'LEG_R', 'LEGR', 'EMG_LEG_R', 'TIB_R', 'TIB_RIGHT']),
+        ('Position', ['POS', 'POSITION', 'BODYPOS', 'SLEEP_POS']),
+      ];
+      for (final item in legSignals) {
+        final match = findMatchingElectrode(item.$1, availableChannels) ??
+            availableChannels.firstWhere(
+              (c) {
+                final cleanC = cleanChannelLabel(c).toUpperCase();
+                return item.$2.any((t) => cleanC.contains(t));
+              },
+              orElse: () => '',
+            );
+        if (match.isNotEmpty &&
+            !newChannels.any((c) =>
+                c.sourceChannel?.equalsIgnoreCase(match) == true ||
+                c.name.equalsIgnoreCase(item.$1))) {
+          final idx = availableChannels.indexOf(match);
+          final existing = baseList.firstWhere(
+            (c) => c.name.equalsIgnoreCase(match),
+            orElse: () => ChannelConfig(name: match),
+          );
+          newChannels.add(
+            ChannelConfig(
+              name: item.$1,
+              sourceChannel: match,
+              sourceIndex: idx >= 0 ? idx : null,
+              reReference: 'None',
+              derived: false,
+              displayOnScreen: true,
+              color: 'Orange',
+              scalingFactor: existing.scalingFactor,
+            ),
+          );
+        }
+      }
+    }
+
+    // Sort strictly according to standard clinical AASM sequence
+    newChannels.sort((a, b) => aasmChannelSortKey(a).compareTo(aasmChannelSortKey(b)));
   }
 
   if (newChannels.isNotEmpty) {
@@ -869,7 +1214,8 @@ List<ChannelConfig> generateMontagePresetChannels({
     for (final orig in baseList) {
       final baseName = orig.sourceChannel ?? orig.name;
       if (!newChannels.any(
-        (n) => n.name.equalsIgnoreCase(orig.name),
+        (n) => n.name.equalsIgnoreCase(orig.name) ||
+            (orig.sourceChannel != null && n.sourceChannel?.equalsIgnoreCase(orig.sourceChannel!) == true),
       )) {
         final copy = orig.copy();
         final rawIdx = availableChannels.indexOf(baseName);
@@ -880,4 +1226,31 @@ List<ChannelConfig> generateMontagePresetChannels({
     }
   }
   return newChannels;
+}
+
+/// Clinical AASM sequence sorting key.
+int aasmChannelSortKey(ChannelConfig ch) {
+  final name = ch.name.toUpperCase();
+  if (name.startsWith('E1') || name.startsWith('EOG1') || name.startsWith('LOC')) return 10;
+  if (name.startsWith('E2') || name.startsWith('EOG2') || name.startsWith('ROC')) return 11;
+  if (name.startsWith('F4')) return 20;
+  if (name.startsWith('F3')) return 21;
+  if (name.startsWith('FZ')) return 22;
+  if (name.startsWith('C4')) return 30;
+  if (name.startsWith('C3')) return 31;
+  if (name.startsWith('CZ')) return 32;
+  if (name.startsWith('O2')) return 40;
+  if (name.startsWith('O1')) return 41;
+  if (name.startsWith('OZ')) return 42;
+  if (name.contains('CHIN') || (name.contains('EMG') && !name.contains('LEG') && !name.contains('TIB'))) return 50;
+  if (name.contains('ECG') || name.contains('EKG')) return 60;
+  if (name.contains('FLOW') || name.contains('CANN') || name.contains('THERM') || name.contains('AIR')) return 70;
+  if (name.contains('THOR') || name.contains('CHEST')) return 71;
+  if (name.contains('ABDO') || name.contains('ABD')) return 72;
+  if (name.contains('SPO2') || name.contains('SAO2') || name.contains('OX')) return 73;
+  if (name.contains('SNORE') || name.contains('MIC')) return 74;
+  if (name.contains('LAT') || name.contains('LEG_L') || name.contains('TIB_L') || name.contains('L-LEG')) return 80;
+  if (name.contains('RAT') || name.contains('LEG_R') || name.contains('TIB_R') || name.contains('R-LEG')) return 81;
+  if (name.contains('POS')) return 82;
+  return 100;
 }

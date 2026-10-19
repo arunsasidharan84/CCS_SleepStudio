@@ -207,58 +207,42 @@ RemAnalysisReport detectRapidEyeMovements({
   final remEpochCount = stages.where((s) => s == 5).length;
   final totalRemDurationMinutes = (remEpochCount * epochDurationSeconds) / 60.0;
 
-  // Simple, fast difference-velocity calculation
-  final dt = 1.0 / sampleRateHz;
-  final locDiff = List<double>.filled(numSamples, 0.0);
-  final rocDiff = List<double>.filled(numSamples, 0.0);
-  for (var i = 1; i < numSamples - 1; i++) {
-    locDiff[i] = (locData[i + 1] - locData[i - 1]) / (2 * dt);
-    rocDiff[i] = (rocData[i + 1] - rocData[i - 1]) / (2 * dt);
-  }
+  final fLow = options.frequencyLowHz > 0 ? options.frequencyLowHz : 0.5;
+  final fHigh = options.frequencyHighHz > fLow ? options.frequencyHighHz : 5.0;
+  final locFilt = _bandpassFilter(locData.sublist(0, numSamples), sampleRateHz, fLow, fHigh);
+  final rocFilt = _bandpassFilter(rocData.sublist(0, numSamples), sampleRateHz, fLow, fHigh);
+
+  final locDiff = _smoothedDerivative(locFilt, sampleRateHz);
+  final rocDiff = _smoothedDerivative(rocFilt, sampleRateHz);
 
   final events = <DetectedRemEvent>[];
   var inEvent = false;
   var eventStartSample = 0;
+  var lastActiveSample = 0;
   var maxAbsVelocity = 0.0;
   var maxAbsAmplitude = 0.0;
 
   final minSamples = (options.minDurationSeconds * sampleRateHz).round();
   final maxSamples = (options.maxDurationSeconds * sampleRateHz).round();
+  final gapSamples = math.max(2, (0.08 * sampleRateHz).round());
+  final velThreshold = options.minVelocityUvPerSec * 0.5;
 
-  for (var i = 1; i < numSamples - 1; i++) {
+  for (var i = 0; i < numSamples; i++) {
     final tSec = i / sampleRateHz;
     final epochIdx = (tSec / epochDurationSeconds).floor();
     final stage = epochIdx >= 0 && epochIdx < stages.length ? stages[epochIdx] : 0;
+    final isRem = !options.restrictToRemStage || stage == 5;
 
-    if (options.restrictToRemStage && stage != 5) {
-      if (inEvent) {
-        final length = i - eventStartSample;
-        if (length >= minSamples && length <= maxSamples &&
-            maxAbsAmplitude >= options.minAmplitudeUv &&
-            maxAbsVelocity >= options.minVelocityUvPerSec) {
-          events.add(DetectedRemEvent(
-            startSeconds: eventStartSample / sampleRateHz,
-            durationSeconds: length / sampleRateHz,
-            peakAmplitudeUv: maxAbsAmplitude,
-            peakVelocityUvPerSec: maxAbsVelocity,
-            stage: 'REM',
-          ));
-        }
-        inEvent = false;
-      }
-      continue;
-    }
-
-    // Conjugate eye movements produce opposing deflections (negative cross product)
     final locV = locDiff[i];
     final rocV = rocDiff[i];
-    final isOpposing = (locV * rocV) < 0;
     final speed = math.max(locV.abs(), rocV.abs());
-    final amp = math.max(locData[i].abs(), rocData[i].abs());
+    final amp = math.max(locFilt[i].abs(), rocFilt[i].abs());
 
-    final meetsCriteria = isOpposing && (speed >= (options.minVelocityUvPerSec * 0.7));
+    // Conjugate eye movements produce opposing deflections
+    final isOpposing = (locV * rocV < 0) || (locFilt[i] * rocFilt[i] < 0);
+    final isActive = isRem && isOpposing && (speed >= velThreshold);
 
-    if (meetsCriteria) {
+    if (isActive) {
       if (!inEvent) {
         inEvent = true;
         eventStartSample = i;
@@ -268,20 +252,28 @@ RemAnalysisReport detectRapidEyeMovements({
         if (speed > maxAbsVelocity) maxAbsVelocity = speed;
         if (amp > maxAbsAmplitude) maxAbsAmplitude = amp;
       }
-    } else {
-      if (inEvent) {
-        final length = i - eventStartSample;
+      lastActiveSample = i;
+    } else if (inEvent) {
+      if (!isRem || (i - lastActiveSample > gapSamples)) {
+        final length = lastActiveSample - eventStartSample;
         if (length >= minSamples && length <= maxSamples &&
             maxAbsAmplitude >= options.minAmplitudeUv &&
             maxAbsVelocity >= options.minVelocityUvPerSec) {
-          final stageStr = stage == 5 ? 'REM' : (stage == 0 ? 'W' : 'NREM');
-          events.add(DetectedRemEvent(
-            startSeconds: eventStartSample / sampleRateHz,
-            durationSeconds: length / sampleRateHz,
-            peakAmplitudeUv: maxAbsAmplitude,
-            peakVelocityUvPerSec: maxAbsVelocity,
-            stage: stageStr,
-          ));
+          // Reject in-phase blinks (ensure net negative product over interval)
+          var dot = 0.0;
+          for (var k = eventStartSample; k <= lastActiveSample; k++) {
+            dot += locFilt[k] * rocFilt[k];
+          }
+          if (dot <= 0.0) {
+            final stageStr = stage == 5 ? 'REM' : (stage == 0 ? 'W' : 'NREM');
+            events.add(DetectedRemEvent(
+              startSeconds: eventStartSample / sampleRateHz,
+              durationSeconds: length / sampleRateHz,
+              peakAmplitudeUv: maxAbsAmplitude,
+              peakVelocityUvPerSec: maxAbsVelocity,
+              stage: stageStr,
+            ));
+          }
         }
         inEvent = false;
       }
@@ -316,6 +308,88 @@ RemAnalysisReport detectRapidEyeMovements({
     totalRecordingMinutes: totalRecordingMinutes,
     options: options,
   );
+}
+
+/// Second-order Butterworth bandpass filter (zero-phase forward-backward).
+List<double> _bandpassFilter(List<double> signal, double fs, double fLow, double fHigh) {
+  if (signal.length < 4 || fs <= 0) return List<double>.from(signal);
+  final hp = _butterworthHighpass(signal, fs, fLow);
+  return _butterworthLowpass(hp, fs, fHigh);
+}
+
+List<double> _butterworthLowpass(List<double> signal, double fs, double fc) {
+  final n = signal.length;
+  if (fc >= fs / 2) return List<double>.from(signal);
+  final w = math.tan(math.pi * fc / fs);
+  final k = 1.0 / (1.0 + math.sqrt(2.0) * w + w * w);
+  final b0 = w * w * k;
+  final b1 = 2.0 * b0;
+  final b2 = b0;
+  final a1 = 2.0 * (w * w - 1.0) * k;
+  final a2 = (1.0 - math.sqrt(2.0) * w + w * w) * k;
+
+  final fwd = List<double>.filled(n, 0.0);
+  double x1 = signal[0], x2 = signal[0], y1 = signal[0], y2 = signal[0];
+  for (var i = 0; i < n; i++) {
+    final x0 = signal[i];
+    final y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+    fwd[i] = y0;
+    x2 = x1; x1 = x0;
+    y2 = y1; y1 = y0;
+  }
+  final bwd = List<double>.filled(n, 0.0);
+  x1 = fwd[n - 1]; x2 = fwd[n - 1]; y1 = fwd[n - 1]; y2 = fwd[n - 1];
+  for (var i = n - 1; i >= 0; i--) {
+    final x0 = fwd[i];
+    final y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+    bwd[i] = y0;
+    x2 = x1; x1 = x0;
+    y2 = y1; y1 = y0;
+  }
+  return bwd;
+}
+
+List<double> _butterworthHighpass(List<double> signal, double fs, double fc) {
+  final n = signal.length;
+  if (fc <= 0) return List<double>.from(signal);
+  final w = math.tan(math.pi * fc / fs);
+  final k = 1.0 / (1.0 + math.sqrt(2.0) * w + w * w);
+  final b0 = k;
+  final b1 = -2.0 * k;
+  final b2 = k;
+  final a1 = 2.0 * (w * w - 1.0) * k;
+  final a2 = (1.0 - math.sqrt(2.0) * w + w * w) * k;
+
+  final fwd = List<double>.filled(n, 0.0);
+  double x1 = signal[0], x2 = signal[0], y1 = signal[0], y2 = signal[0];
+  for (var i = 0; i < n; i++) {
+    final x0 = signal[i];
+    final y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+    fwd[i] = y0;
+    x2 = x1; x1 = x0;
+    y2 = y1; y1 = y0;
+  }
+  final bwd = List<double>.filled(n, 0.0);
+  x1 = fwd[n - 1]; x2 = fwd[n - 1]; y1 = fwd[n - 1]; y2 = fwd[n - 1];
+  for (var i = n - 1; i >= 0; i--) {
+    final x0 = fwd[i];
+    final y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+    bwd[i] = y0;
+    x2 = x1; x1 = x0;
+    y2 = y1; y1 = y0;
+  }
+  return bwd;
+}
+
+List<double> _smoothedDerivative(List<double> data, double fs) {
+  final n = data.length;
+  final diff = List<double>.filled(n, 0.0);
+  final halfWin = math.max(1, (0.025 * fs).round());
+  final dt = 2.0 * halfWin / fs;
+  for (var i = halfWin; i < n - halfWin; i++) {
+    diff[i] = (data[i + halfWin] - data[i - halfWin]) / dt;
+  }
+  return diff;
 }
 
 /// Saves REM detection sidecar as `<stem>.ccsrem` (and `<stem>_rem.json` for legacy compatibility).
@@ -377,5 +451,22 @@ Future<List<ScoredEvent>> loadRemEvents(String recordingPath) async {
     return res;
   } catch (_) {
     return const [];
+  }
+}
+
+/// Loads REM report map from `<stem>.ccsrem` or `<stem>_rem.json`.
+Future<Map<String, dynamic>?> loadRemReport(String recordingPath) async {
+  final name = recordingPath.split(RegExp(r'[\\/]')).last;
+  final stem = name.replaceAll(RegExp(r'\.[^.]+$'), '');
+  final dir = File(recordingPath).parent.path;
+  final primary = File('$dir${Platform.pathSeparator}$stem.ccsrem');
+  final legacy = File('$dir${Platform.pathSeparator}${stem}_rem.json');
+
+  final file = primary.existsSync() ? primary : (legacy.existsSync() ? legacy : null);
+  if (file == null) return null;
+  try {
+    return jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+  } catch (_) {
+    return null;
   }
 }

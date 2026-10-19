@@ -107,7 +107,7 @@ void main() {
     expect(pdf, contains('UNIVERSITY SLEEP STUDY'));
     expect(pdf, contains('(Study site: Clinical Neurophysiology Laboratory'));
     expect(pdf, contains('(UNDERSTANDING YOUR RESULTS)'));
-    expect(pdf, contains('(Important limitations)'));
+    expect(pdf, contains('(Important Limitations & Clinical Disclaimer)'));
     expect(pdf, contains('THALAMOCORTICAL MICROSTRUCTURE'));
     expect(pdf, contains('CORTICAL COMPLEXITY LANDSCAPE'));
     expect(pdf, contains('(Event)'));
@@ -121,10 +121,8 @@ void main() {
     expect(pdf, contains('(18.0 min)'));
     expect(pdf, contains('(Frequency-band relative PSD \\(regional mean\\))'));
     expect(pdf, contains('(0.310)'));
-    expect(pdf, contains('latency 18.0 min'));
-    expect(pdf, contains('PAC MI 0.0120'));
-    expect(pdf, contains('FOOOF exponent was lowest'));
-    expect(pdf, contains('permutation entropy was lowest'));
+    expect(pdf, contains('(Spindles: 2.10/min)'));
+    expect(pdf, contains('(SO-Sigma PAC MI: 0.0120)'));
   });
 
   test('interpretation page only summarizes selected analysis pages', () {
@@ -149,10 +147,8 @@ void main() {
 
     final pdf = latin1.decode(bytes);
     expect(pdf, contains('/Count 2'));
-    expect(pdf, contains('(Sleep amount and continuity)'));
-    expect(pdf, isNot(contains('(Spindles, slow waves, and their timing)')));
-    expect(pdf, isNot(contains('(Background spectrum and oscillatory peaks)')));
-    expect(pdf, isNot(contains('(Complexity and temporal memory)')));
+    expect(pdf, contains('(Sleep Macroarchitecture & Continuity)'));
+    expect(pdf, isNot(contains('(Microstructure & Oscillatory Coupling)')));
   });
 
   test('optionally renders a supplied AnalyseNidra CSV', () {

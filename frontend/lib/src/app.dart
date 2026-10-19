@@ -5349,6 +5349,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   }
 
   Widget _buildGuidedClinicalWorkflowBar() {
+    if (!_config.showWorkflowBar) {
+      return const SizedBox.shrink();
+    }
+
     final hasFile = _loadedEeg != null;
     final hasMontage = _config.channels.any((c) => c.derived);
     final hasScoring = _viewport?.stages.any((s) => s.isScored) ?? false;
@@ -5366,6 +5370,96 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       activeStep = 5;
     } else {
       activeStep = 6;
+    }
+
+    final steps = _config.workflowSteps;
+    final stepWidgets = <Widget>[];
+
+    void addStep({
+      required String key,
+      required int stepNumber,
+      required String title,
+      required String subtitle,
+      required bool isDone,
+      required bool isActive,
+      required VoidCallback onTap,
+    }) {
+      if (steps[key] == false) return;
+      if (stepWidgets.isNotEmpty) {
+        stepWidgets.add(_buildWorkflowStepDivider());
+      }
+      stepWidgets.add(
+        _buildWorkflowStepItem(
+          stepNumber: stepNumber,
+          title: title,
+          subtitle: subtitle,
+          isDone: isDone,
+          isActive: isActive,
+          onTap: onTap,
+        ),
+      );
+    }
+
+    addStep(
+      key: 'open_file',
+      stepNumber: 1,
+      title: '1. Open File',
+      subtitle: hasFile ? _basename(_activePath ?? 'Loaded') : 'Load EDF/PSG',
+      isDone: hasFile,
+      isActive: activeStep == 1,
+      onTap: () => _openRecording(kind: 'edf'),
+    );
+    addStep(
+      key: 'montage',
+      stepNumber: 2,
+      title: '2. AASM Montage',
+      subtitle: hasMontage ? 'Applied' : 'PSG Derivations',
+      isDone: hasMontage,
+      isActive: activeStep == 2,
+      onTap: _openMontageDialog,
+    );
+    addStep(
+      key: 'autoscore',
+      stepNumber: 3,
+      title: '3. Autoscore',
+      subtitle: hasScoring ? 'Scored' : 'AutoscoreNidra',
+      isDone: hasScoring,
+      isActive: activeStep == 3,
+      onTap: _runAutoScoring,
+    );
+    addStep(
+      key: 'review',
+      stepNumber: 4,
+      title: '4. Review',
+      subtitle: 'Manual Review',
+      isDone: hasScoring,
+      isActive: activeStep == 4,
+      onTap: () {
+        _jumpToEpoch(1);
+        _viewerFocusNode.requestFocus();
+      },
+    );
+    addStep(
+      key: 'analyses',
+      stepNumber: 5,
+      title: '5. Run Analyses',
+      subtitle: hasAnalysis ? 'Completed' : 'All-in-One Pipeline',
+      isDone: hasAnalysis,
+      isActive: activeStep == 5,
+      onTap: _runComprehensiveAnalysisDialog,
+    );
+    addStep(
+      key: 'report',
+      stepNumber: 6,
+      title: '6. Generate Report',
+      subtitle: 'Clinical PDF',
+      isDone: false,
+      isActive: activeStep == 6,
+      onTap: _openClinicalReportDialog,
+    );
+
+    if (stepWidgets.isEmpty) {
+      return const SizedBox.shrink();
     }
 
     return Container(
@@ -5402,64 +5496,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
-                children: [
-                  _buildWorkflowStepItem(
-                    stepNumber: 1,
-                    title: '1. Open File',
-                    subtitle: hasFile ? _basename(_activePath ?? 'Loaded') : 'Load EDF/PSG',
-                    isDone: hasFile,
-                    isActive: activeStep == 1,
-                    onTap: () => _openRecording(kind: 'edf'),
-                  ),
-                  _buildWorkflowStepDivider(),
-                  _buildWorkflowStepItem(
-                    stepNumber: 2,
-                    title: '2. AASM Montage',
-                    subtitle: hasMontage ? 'Applied' : 'PSG Derivations',
-                    isDone: hasMontage,
-                    isActive: activeStep == 2,
-                    onTap: _openMontageDialog,
-                  ),
-                  _buildWorkflowStepDivider(),
-                  _buildWorkflowStepItem(
-                    stepNumber: 3,
-                    title: '3. Autoscore',
-                    subtitle: hasScoring ? 'Scored' : 'AutoscoreNidra',
-                    isDone: hasScoring,
-                    isActive: activeStep == 3,
-                    onTap: _runAutoScoring,
-                  ),
-                  _buildWorkflowStepDivider(),
-                  _buildWorkflowStepItem(
-                    stepNumber: 4,
-                    title: '4. Review',
-                    subtitle: 'Manual Review',
-                    isDone: hasScoring,
-                    isActive: activeStep == 4,
-                    onTap: () {
-                      _jumpToEpoch(1);
-                      _viewerFocusNode.requestFocus();
-                    },
-                  ),
-                  _buildWorkflowStepDivider(),
-                  _buildWorkflowStepItem(
-                    stepNumber: 5,
-                    title: '5. Run Analyses',
-                    subtitle: hasAnalysis ? 'Completed' : 'All-in-One Pipeline',
-                    isDone: hasAnalysis,
-                    isActive: activeStep == 5,
-                    onTap: _runComprehensiveAnalysisDialog,
-                  ),
-                  _buildWorkflowStepDivider(),
-                  _buildWorkflowStepItem(
-                    stepNumber: 6,
-                    title: '6. Generate Report',
-                    subtitle: 'Clinical PDF',
-                    isDone: false,
-                    isActive: activeStep == 6,
-                    onTap: _openClinicalReportDialog,
-                  ),
-                ],
+                children: stepWidgets,
               ),
             ),
           ),
@@ -5467,6 +5504,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       ),
     );
   }
+
 
   Widget _buildWorkflowStepDivider() {
     return Padding(
@@ -5788,6 +5826,30 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                     border: OutlineInputBorder(),
                   ),
                 ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: _config.reportHypnogramMode,
+                  decoration: const InputDecoration(
+                    labelText: 'Hypnogram on Subsequent Pages',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'strip',
+                      child: Text('Compact Color Strip (Clean, non-redundant)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'full',
+                      child: Text('Full Stepped Hypnogram (Repeated on each page)'),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) {
+                      setState(() => _config.reportHypnogramMode = v);
+                    }
+                  },
+                ),
               ],
             ),
           ),
@@ -5884,6 +5946,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final nlgReport = selectedPages.length > 8 && selectedPages[8] && nlgPath != null
         ? await loadPsgReport(nlgPath)
         : null;
+    final remReport = _activePath != null ? await loadRemReport(_activePath!) : null;
+
     final bytes = buildPublicationSleepReport(
       viewport: viewport,
       recordingName: _basename(_activePath ?? viewport.sourceDescription),
@@ -5893,6 +5957,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       plmReport: plmReport,
       capReport: capReport,
       nlgReport: nlgReport,
+      remReport: remReport,
+      summaryRespiratoryReport: respiratoryPath != null ? await loadPsgReport(respiratoryPath) : null,
+      summaryPlmReport: plmPath != null ? await loadPsgReport(plmPath) : null,
+      summaryCapReport: capPath != null ? await loadPsgReport(capPath) : null,
+      summaryNlgReport: nlgPath != null ? await loadPsgReport(nlgPath) : null,
       metadata: ReportMetadata(
         title: _config.reportTitle,
         studySite: _config.studySite,
@@ -5900,6 +5969,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         subjectId: _config.subjectId,
         subjectDetails: _config.subjectDetails,
         recordingDate: _config.recordingDate,
+        hypnogramMode: _config.reportHypnogramMode,
       ),
     );
     await File(outputPath).writeAsBytes(bytes);

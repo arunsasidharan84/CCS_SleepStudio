@@ -4,6 +4,33 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.41.0]
+*   **Configurable Clinical Workflow Bar in Settings:**
+    - Added a dedicated **Workflow** configuration tab in the settings dialog (`ConfigDialog`).
+    - Added global toggle `Show Guided Clinical Workflow Bar` to show/hide the top workflow strip.
+    - Added individual step enable/disable checkboxes (`1. Open File`, `2. AASM Montage`, `3. Autoscore`, `4. Manual Review`, `5. Run Analyses`, `6. Generate Report`).
+    - Workflow preferences are persisted to `.ccsconfig` and synchronized across sessions.
+*   **Configurable Hypnogram Redundancy Modes for Reports:**
+    - Added `Hypnogram on Subsequent Pages` dropdown in both the Report Configuration tab and the Clinical Sleep Report Generator dialog.
+    - Supports `Compact Color Strip (strip)` (16–22 pt slim stage timeline strip on subsequent pages to avoid visual redundancy) and `Full Stepped Hypnogram (full)` (repeated full 88 pt hypnogram).
+*   **Comprehensive Report Interpretation Cards (Page 8):**
+    - Redesigned "Understanding Your Results" into 7 structured visual interpretation cards with category tags, badges, and clinical bullet points:
+      - Sleep Macroarchitecture & Continuity
+      - Respiration & Nocturnal Breathing (OSA)
+      - Periodic Limb Movements in Sleep (PLM)
+      - Rapid Eye Movements (REM) & Ocular Saccades
+      - Sleep Stability & Microcontinuity (CAP & NeuroLoopGain)
+      - Microstructure & Oscillatory Coupling
+      - Important Limitations & Disclaimer
+*   **Sleep Cycle Table Fallback Support:**
+    - Updated `_buildSleepCyclePage` to support both `Cyc${c}_` and `C${c}_` coordinate keys from `analyseNidra`, fixing empty cycle tables and missing Odd/Even raster bars.
+*   **Wake Stage Features in Information Theory & ACW:**
+    - Added Stage 0 (`W`) to `analyseNidra` regional and feature extraction loops, populating wake values in LZc and Autocorrelation Window (ACW) plots.
+*   **NeuroLoopGain Physiological Scaling:**
+    - Corrected NeuroLoopGain unitless ratio scaling across both hypnogram overlay painters and report generator timelines.
+*   **Robust 1000 Hz REM Detection Engine:**
+    - Integrated Butterworth zero-phase bandpass filtering, 50 ms moving derivative, and 80 ms saccade gap tolerance to reliably detect REMs on high-frequency recordings.
+
 ## [1.40.0]
 *   **Guided Clinical Workflow Bar:**
     - Integrated a top clinical workflow toolbar directly above the EEG viewport: `[1. Open File] ➔ [2. AASM Montage] ➔ [3. Autoscore] ➔ [4. Review] ➔ [5. Run Analyses] ➔ [6. Generate Report]`.

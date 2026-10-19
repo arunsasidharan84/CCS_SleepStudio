@@ -58,7 +58,7 @@ fn feature_columns() -> Vec<String> {
 
 fn feature_columns_for_bands(bands: &[BandDefinition]) -> Vec<String> {
     let mut output = Vec::new();
-    for stage in ["N1", "N2", "N3", "REM"] {
+    for stage in ["W", "N1", "N2", "N3", "REM"] {
         for suffix in ["PSD", "FOOOF"] {
             for band in bands {
                 output.push(format!("{stage}_{}_{suffix}", band.label));

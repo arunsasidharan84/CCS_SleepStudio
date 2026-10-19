@@ -205,11 +205,14 @@ class AppConfig {
     this.referenceLineColor = 'Light Grey',
     this.hypnogramZoom = 'Full Night',
     this.reportTitle = 'CCS Sleep Studio Sleep EEG Report',
+    this.reportHypnogramMode = 'strip',
     this.studySite = '',
     this.investigatorName = '',
     this.subjectId = '',
     this.subjectDetails = '',
     this.recordingDate = '',
+    this.showWorkflowBar = true,
+    Map<String, bool>? workflowSteps,
     this.channels = const [],
     Map<int, String>? customEventNames,
     // Preprocessing configuration
@@ -270,6 +273,16 @@ class AppConfig {
        customEventNames = customEventNames != null
            ? Map<int, String>.from(customEventNames)
            : {},
+       workflowSteps = workflowSteps != null
+           ? Map<String, bool>.from(workflowSteps)
+           : {
+               'open_file': true,
+               'montage': true,
+               'autoscore': true,
+               'review': true,
+               'analyses': true,
+               'report': true,
+             },
        bands = bands != null
            ? bands.map((b) => b.copy()).toList()
            : [
@@ -408,11 +421,14 @@ class AppConfig {
   String referenceLineColor;
   String hypnogramZoom;
   String reportTitle;
+  String reportHypnogramMode;
   String studySite;
   String investigatorName;
   String subjectId;
   String subjectDetails;
   String recordingDate;
+  bool showWorkflowBar;
+  Map<String, bool> workflowSteps;
   List<ChannelConfig> channels;
   Map<int, String> customEventNames;
 
@@ -459,11 +475,14 @@ class AppConfig {
       'referenceLineColor': referenceLineColor,
       'hypnogramZoom': hypnogramZoom,
       'reportTitle': reportTitle,
+      'reportHypnogramMode': reportHypnogramMode,
       'studySite': studySite,
       'investigatorName': investigatorName,
       'subjectId': subjectId,
       'subjectDetails': subjectDetails,
       'recordingDate': recordingDate,
+      'showWorkflowBar': showWorkflowBar,
+      'workflowSteps': workflowSteps,
       'channels': channels.map((c) => c.toJson()).toList(),
       'customEventNames':
           customEventNames.map((k, v) => MapEntry(k.toString(), v)),
@@ -622,11 +641,19 @@ class AppConfig {
       hypnogramZoom: json['hypnogramZoom'] as String? ?? 'Full Night',
       reportTitle:
           json['reportTitle'] as String? ?? 'CCS Sleep Studio Sleep EEG Report',
+      reportHypnogramMode:
+          json['reportHypnogramMode'] as String? ?? json['Report_hypnogram_mode'] as String? ?? 'strip',
       studySite: json['studySite'] as String? ?? '',
       investigatorName: json['investigatorName'] as String? ?? '',
       subjectId: json['subjectId'] as String? ?? '',
       subjectDetails: json['subjectDetails'] as String? ?? '',
       recordingDate: json['recordingDate'] as String? ?? '',
+      showWorkflowBar: safeBool(json['showWorkflowBar'], true),
+      workflowSteps: json['workflowSteps'] is Map
+          ? (json['workflowSteps'] as Map).map(
+              (k, v) => MapEntry(k.toString(), safeBool(v, true)),
+            )
+          : null,
       customEventNames: parsedEventNames,
       channels:
           (json['channels'] as List<dynamic>?)
@@ -767,6 +794,7 @@ class AppConfig {
       'Reference_line_color': referenceLineColor,
       'Hypnogram_zoom': hypnogramZoom,
       'Report_title': reportTitle,
+      'Report_hypnogram_mode': reportHypnogramMode,
       'Study_site': studySite,
       'Investigator_name': investigatorName,
       'Subject_id': subjectId,
@@ -957,6 +985,7 @@ class AppConfig {
         referenceLineColor: referenceLineColor,
         hypnogramZoom: hypnogramZoom,
         reportTitle: reportTitle,
+        reportHypnogramMode: global['Report_hypnogram_mode'] as String? ?? global['reportHypnogramMode'] as String? ?? 'strip',
         studySite: studySite,
         investigatorName: investigatorName,
         subjectId: subjectId,

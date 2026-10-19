@@ -194,7 +194,7 @@ pub fn compute_core_stage_features_with_config(
     config: &FeatureConfig,
 ) -> CoreStageFeatures {
     let window_samples = (config.feature_window_sec * recording.edf.sfreq).round() as usize;
-    let stages = [("N1", 1_i8), ("N2", 2_i8), ("N3", 3_i8), ("REM", 4_i8)];
+    let stages = [("W", 0_i8), ("N1", 1_i8), ("N2", 2_i8), ("N3", 3_i8), ("REM", 4_i8)];
     let channel_results: Vec<(String, BTreeMap<String, f64>)> = recording
         .edf
         .channels

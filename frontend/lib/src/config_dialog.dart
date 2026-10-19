@@ -106,11 +106,14 @@ class _ConfigDialogState extends State<ConfigDialog> {
       referenceLineColor: widget.config.referenceLineColor,
       hypnogramZoom: widget.config.hypnogramZoom,
       reportTitle: widget.config.reportTitle,
+      reportHypnogramMode: widget.config.reportHypnogramMode,
       studySite: widget.config.studySite,
       investigatorName: widget.config.investigatorName,
       subjectId: widget.config.subjectId,
       subjectDetails: widget.config.subjectDetails,
       recordingDate: widget.config.recordingDate,
+      showWorkflowBar: widget.config.showWorkflowBar,
+      workflowSteps: Map<String, bool>.from(widget.config.workflowSteps),
       preprocessDownsampleHz: widget.config.preprocessDownsampleHz,
       preprocessBandpassLo: widget.config.preprocessBandpassLo,
       preprocessBandpassHi: widget.config.preprocessBandpassHi,
@@ -260,7 +263,7 @@ class _ConfigDialogState extends State<ConfigDialog> {
   Widget build(BuildContext context) {
     final labels = _working.channels.map((channel) => channel.name).toList();
     return DefaultTabController(
-      length: 9,
+      length: 10,
       initialIndex: widget.initialTabIndex,
       child: AlertDialog(
         title: const Text('Configuration Window'),
@@ -278,6 +281,7 @@ class _ConfigDialogState extends State<ConfigDialog> {
                 indicatorColor: Colors.blue,
                 tabs: [
                   Tab(text: 'Configuration'),
+                  Tab(text: 'Workflow'),
                   Tab(text: 'Report'),
                   Tab(text: 'Channels'),
                   Tab(text: 'Events'),
@@ -507,6 +511,124 @@ class _ConfigDialogState extends State<ConfigDialog> {
                         ],
                       ),
                     ),
+                    // Tab: Guided Clinical Workflow
+                    SingleChildScrollView(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Text(
+                            'Guided Clinical & Sleep Workflow Bar',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          const Text(
+                            'Configure the step-by-step workflow bar displayed at the top of the workspace. '
+                            'You can toggle the whole bar on/off or customize which steps appear in your routine.',
+                            style: TextStyle(color: Colors.black54, fontSize: 13),
+                          ),
+                          const SizedBox(height: 16),
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text(
+                              'Show Guided Clinical Workflow Bar',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                            ),
+                            subtitle: const Text(
+                              'Displays the interactive 1-to-6 navigation strip above the EEG traces.',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            value: _working.showWorkflowBar,
+                            onChanged: (val) {
+                              setState(() => _working.showWorkflowBar = val);
+                            },
+                          ),
+                          const Divider(height: 24),
+                          const Text(
+                            'Workflow Steps',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1E88E5),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Card(
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              side: BorderSide(color: Colors.grey.shade300),
+                            ),
+                            child: Column(
+                              children: [
+                                CheckboxListTile(
+                                  dense: true,
+                                  title: const Text('1. Open File'),
+                                  subtitle: const Text('Load EDF/PSG or CCSEEG recording'),
+                                  value: _working.workflowSteps['open_file'] ?? true,
+                                  onChanged: _working.showWorkflowBar
+                                      ? (v) => setState(() => _working.workflowSteps['open_file'] = v ?? true)
+                                      : null,
+                                ),
+                                const Divider(height: 1),
+                                CheckboxListTile(
+                                  dense: true,
+                                  title: const Text('2. AASM Montage'),
+                                  subtitle: const Text('Apply Frontal, Central, Occipital, EOG & EMG derivations'),
+                                  value: _working.workflowSteps['montage'] ?? true,
+                                  onChanged: _working.showWorkflowBar
+                                      ? (v) => setState(() => _working.workflowSteps['montage'] = v ?? true)
+                                      : null,
+                                ),
+                                const Divider(height: 1),
+                                CheckboxListTile(
+                                  dense: true,
+                                  title: const Text('3. Autoscore'),
+                                  subtitle: const Text('Run AutoscoreNidra deep-learning sleep stager'),
+                                  value: _working.workflowSteps['autoscore'] ?? true,
+                                  onChanged: _working.showWorkflowBar
+                                      ? (v) => setState(() => _working.workflowSteps['autoscore'] = v ?? true)
+                                      : null,
+                                ),
+                                const Divider(height: 1),
+                                CheckboxListTile(
+                                  dense: true,
+                                  title: const Text('4. Manual Review'),
+                                  subtitle: const Text('Epoch-by-epoch visual inspection and correction'),
+                                  value: _working.workflowSteps['review'] ?? true,
+                                  onChanged: _working.showWorkflowBar
+                                      ? (v) => setState(() => _working.workflowSteps['review'] = v ?? true)
+                                      : null,
+                                ),
+                                const Divider(height: 1),
+                                CheckboxListTile(
+                                  dense: true,
+                                  title: const Text('5. Run Analyses'),
+                                  subtitle: const Text('All-in-one analysis (AnalyseNidra, REM, CAP, OSA, PLM, NLG)'),
+                                  value: _working.workflowSteps['analyses'] ?? true,
+                                  onChanged: _working.showWorkflowBar
+                                      ? (v) => setState(() => _working.workflowSteps['analyses'] = v ?? true)
+                                      : null,
+                                ),
+                                const Divider(height: 1),
+                                CheckboxListTile(
+                                  dense: true,
+                                  title: const Text('6. Generate Report'),
+                                  subtitle: const Text('Export publication & clinical grade PDF sleep report'),
+                                  value: _working.workflowSteps['report'] ?? true,
+                                  onChanged: _working.showWorkflowBar
+                                      ? (v) => setState(() => _working.workflowSteps['report'] = v ?? true)
+                                      : null,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                     // Report identity and subject metadata
                     SingleChildScrollView(
                       padding: const EdgeInsets.all(20),
@@ -562,6 +684,45 @@ class _ConfigDialogState extends State<ConfigDialog> {
                             controller: _recordingDateCtrl,
                             onChanged: (value) =>
                                 _working.recordingDate = value.trim(),
+                          ),
+                          const SizedBox(height: 16),
+                          const Divider(),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Report Layout & Visual Appearance',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          const Text(
+                            'Choose how the hypnogram timeline is rendered across subsequent analysis pages (Sleep Cycles, OSA, PLM, CAP, NLG).',
+                            style: TextStyle(color: Colors.black54, fontSize: 12),
+                          ),
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<String>(
+                            value: _working.reportHypnogramMode,
+                            decoration: const InputDecoration(
+                              labelText: 'Hypnogram on subsequent pages',
+                              isDense: true,
+                              border: OutlineInputBorder(),
+                            ),
+                            items: const [
+                              DropdownMenuItem(
+                                value: 'strip',
+                                child: Text('Compact Stage Color Strip (Recommended)'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'full',
+                                child: Text('Full Stepped Hypnogram (Repeated on each page)'),
+                              ),
+                            ],
+                            onChanged: (v) {
+                              if (v != null) {
+                                setState(() => _working.reportHypnogramMode = v);
+                              }
+                            },
                           ),
                         ],
                       ),

@@ -930,21 +930,43 @@ class HypnogramPainter extends CustomPainter {
     final visibleCount = math.max(1, eEpoch - sEpoch);
     final drawWidth = size.width - _hypPad;
     final epochW = drawWidth / visibleCount;
-    double yOf(double gain) =>
-        _toCanvasY(5.0 * (gain.clamp(0.0, 100.0) / 100.0) - 4.0, size.height);
 
-    // Faint 0 / 50 / 100 % guides on the right edge.
+    var maxGain = 0.0;
+    for (final series in data.epochGain.values) {
+      for (var i = sEpoch; i < eEpoch && i < series.length; i++) {
+        final v = series[i];
+        if (v != null && v > maxGain) maxGain = v;
+      }
+    }
+    final isPercent = maxGain > 15.0;
+    final scaleMax = isPercent ? 100.0 : math.max(2.0, (maxGain * 1.15).ceilToDouble());
+
+    double yOf(double gain) =>
+        _toCanvasY(5.0 * (gain / scaleMax).clamp(0.0, 1.0) - 4.0, size.height);
+
+    // Faint guides on the right edge.
     final guide = Paint()
       ..color = Colors.black.withOpacity(0.10)
       ..strokeWidth = 0.6;
-    for (final g in [0.0, 50.0, 100.0]) {
+    final guideVals = isPercent
+        ? [0.0, 50.0, 100.0]
+        : (scaleMax <= 4.0
+            ? [0.0, 1.0, 2.0, scaleMax]
+            : [0.0, 1.0, (scaleMax / 2).roundToDouble(), scaleMax]);
+    for (final g in guideVals) {
       final y = yOf(g);
       canvas.drawLine(Offset(_hypPad, y), Offset(size.width, y), guide);
+      final label = isPercent
+          ? '${g.toStringAsFixed(0)}%'
+          : (g == 1.0 ? '1.0 (loop)' : g.toStringAsFixed(1));
       _drawText(
         canvas,
-        '${g.toStringAsFixed(0)}%',
+        label,
         Offset(size.width - 3, y - 6),
-        style: _axisTextStyle.copyWith(fontSize: 8.5, color: Colors.black45),
+        style: _axisTextStyle.copyWith(
+          fontSize: 8.5,
+          color: g == 1.0 ? Colors.orange.shade800 : Colors.black45,
+        ),
         align: TextAlign.right,
       );
     }

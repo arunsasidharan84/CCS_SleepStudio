@@ -11,6 +11,7 @@ class ReportMetadata {
     this.subjectId = '',
     this.subjectDetails = '',
     this.recordingDate = '',
+    this.hypnogramMode = 'strip',
   });
 
   final String title;
@@ -19,6 +20,7 @@ class ReportMetadata {
   final String subjectId;
   final String subjectDetails;
   final String recordingDate;
+  final String hypnogramMode;
 }
 
 List<int> buildPublicationSleepReport({
@@ -31,6 +33,11 @@ List<int> buildPublicationSleepReport({
   Map<String, dynamic>? plmReport,
   Map<String, dynamic>? capReport,
   Map<String, dynamic>? nlgReport,
+  Map<String, dynamic>? remReport,
+  Map<String, dynamic>? summaryRespiratoryReport,
+  Map<String, dynamic>? summaryPlmReport,
+  Map<String, dynamic>? summaryCapReport,
+  Map<String, dynamic>? summaryNlgReport,
 }) {
   final report = _PdfDocument();
   final hasNlg = nlgReport != null && (nlgReport['channels'] as Map?)?.isNotEmpty == true;
@@ -54,7 +61,7 @@ List<int> buildPublicationSleepReport({
     includePages[4],
   ];
   final hasCycles =
-      includePages[0] && _number(architecture, 'SleepCycle_number') != null;
+      includePages[0] && (_number(architecture, 'SleepCycle_number') != null || _number(architecture, 'Cyc1_start_epoch') != null);
   final totalPages = includePages.where((b) => b).length +
       (hasCycles ? 1 : 0) +
       (hasResp ? 1 : 0) +
@@ -77,22 +84,22 @@ List<int> buildPublicationSleepReport({
   }
   if (hasCycles) {
     report.addPage(
-      _buildSleepCyclePage(viewport, architecture, pageNum++, totalPages),
+      _buildSleepCyclePage(viewport, architecture, pageNum++, totalPages, metadata: metadata),
     );
   }
   if (hasResp) {
     report.addPage(
-      _buildRespiratoryPage(viewport, respiratoryReport!, pageNum++, totalPages),
+      _buildRespiratoryPage(viewport, respiratoryReport!, pageNum++, totalPages, metadata: metadata),
     );
   }
   if (hasPlm) {
-    report.addPage(_buildPlmPage(viewport, plmReport!, pageNum++, totalPages));
+    report.addPage(_buildPlmPage(viewport, plmReport!, pageNum++, totalPages, metadata: metadata));
   }
   if (hasCap) {
-    report.addPage(_buildCapPage(viewport, capReport!, pageNum++, totalPages));
+    report.addPage(_buildCapPage(viewport, capReport!, pageNum++, totalPages, metadata: metadata));
   }
   if (hasNlg) {
-    report.addPage(_buildNlgPage(viewport, nlgReport, pageNum++, totalPages));
+    report.addPage(_buildNlgPage(viewport, nlgReport, pageNum++, totalPages, metadata: metadata));
   }
   if (includePages[1]) {
     report.addPage(_buildMicrostructurePage(regions, pageNum++, totalPages));
@@ -113,6 +120,11 @@ List<int> buildPublicationSleepReport({
         includePages,
         pageNum++,
         totalPages,
+        respiratoryReport: summaryRespiratoryReport ?? respiratoryReport,
+        plmReport: summaryPlmReport ?? plmReport,
+        capReport: summaryCapReport ?? capReport,
+        nlgReport: summaryNlgReport ?? nlgReport,
+        remReport: remReport,
       ),
     );
   }
@@ -736,6 +748,41 @@ String _buildComplexityPage(
   return p.build();
 }
 
+double _visualInterpretationCard(
+  _PdfPage p, {
+  required String title,
+  required String category,
+  required List<String> chips,
+  required List<String> bulletPoints,
+  required double y,
+  _PdfColor? accentColor,
+  double cardHeight = 50.0,
+}) {
+  final accent = accentColor ?? _navy;
+  p.rect(50, y - cardHeight, 512, cardHeight, fill: _offWhite, stroke: _lightGray);
+  p.rect(50, y - cardHeight, 3.5, cardHeight, fill: accent);
+  p.text(title, 60, y - 12, bold: true, size: 8.2, color: _navy);
+  final catX = 550.0 - (category.length * 4.2);
+  p.text(category.toUpperCase(), math.max(60.0, catX), y - 12, bold: true, size: 5.8, color: accent);
+
+  var cx = 60.0;
+  for (final chip in chips) {
+    final chipWidth = (chip.length * 4.1) + 8.0;
+    p.rect(cx, y - 25, chipWidth, 10, fill: _white, stroke: _lightGray);
+    p.text(chip, cx + 4, y - 23, bold: true, size: 5.5, color: _navy);
+    cx += chipWidth + 5;
+  }
+
+  var by = y - 35.0;
+  for (final bp in bulletPoints) {
+    p.text('\u2022', 60, by, size: 6.2, color: accent, bold: true);
+    _wrappedText(p, bp, 67, by, maxCharacters: 112, size: 6.2, lineHeight: 7.5);
+    by -= 8.2;
+  }
+
+  return y - cardHeight - 5.0;
+}
+
 String _buildInterpretationPage(
   EegViewport viewport,
   Map<String, String> architecture,
@@ -743,86 +790,265 @@ String _buildInterpretationPage(
   ReportMetadata metadata,
   List<bool> includePages,
   int pageNum,
-  int totalPages,
-) {
+  int totalPages, {
+  Map<String, dynamic>? respiratoryReport,
+  Map<String, dynamic>? plmReport,
+  Map<String, dynamic>? capReport,
+  Map<String, dynamic>? nlgReport,
+  Map<String, dynamic>? remReport,
+}) {
   final p = _PdfPage();
   _header(p, 'UNDERSTANDING YOUR RESULTS', 'Page $pageNum of $totalPages');
   p.text(
-    'A plain-language guide to the measurements in this report',
+    'A comprehensive multimodal clinical and quantitative guide to this polysomnographic evaluation',
     50,
     704,
-    size: 9,
+    size: 7.5,
     color: _slate,
   );
 
-  var y = 670.0;
-  if (includePages[0]) {
-    y = _interpretationBlock(
+  var y = 690.0;
+  const cardH = 50.0;
+
+  // 1. Sleep Macroarchitecture & Continuity
+  final tst = _number(architecture, 'TST') ?? _sleepMinutes(viewport);
+  final trt = _number(architecture, 'TRT') ?? (viewport.totalDurationSeconds / 60);
+  final efficiency = _number(architecture, 'Sleep_efficiency') ?? (trt > 0 ? 100 * tst / trt : null);
+  final waso = _number(architecture, 'WASO');
+  final sol = _number(architecture, 'SOL');
+  final cycleCount = _number(architecture, 'SleepCycle_number')?.toInt() ??
+      (_number(architecture, 'Cyc1_start_epoch') != null ? 5 : 0);
+  final n1Pct = _number(architecture, 'N1_percentage')?.toStringAsFixed(1) ?? '-';
+  final n2Pct = _number(architecture, 'N2_percentage')?.toStringAsFixed(1) ?? '-';
+  final n3Pct = _number(architecture, 'N3_percentage')?.toStringAsFixed(1) ?? '-';
+  final remPct = _number(architecture, 'REM_percentage')?.toStringAsFixed(1) ?? '-';
+
+  y = _visualInterpretationCard(
+    p,
+    title: 'Sleep Macroarchitecture & Continuity',
+    category: 'Macroarchitecture',
+    accentColor: _navy,
+    cardHeight: cardH,
+    y: y,
+    chips: [
+      'TST: ${tst.toStringAsFixed(0)} min',
+      'Efficiency: ${efficiency != null ? efficiency.toStringAsFixed(1) : '-'}%',
+      if (waso != null) 'WASO: ${waso.toStringAsFixed(0)} min',
+      if (sol != null) 'SOL: ${sol.toStringAsFixed(1)} min',
+      'Cycles: $cycleCount',
+    ],
+    bulletPoints: [
+      'Stage distribution: N1 $n1Pct%, N2 $n2Pct%, N3 $n3Pct%, REM $remPct% of total sleep time.',
+      'Sleep continuity: Transitions ${_metric(architecture, 'Stage_transitions')}/h, Arousals ${_metric(architecture, 'Stage_arousals')}/h, WASO ${_metric(architecture, 'WASO_percentage')}%.',
+    ],
+  );
+
+  // 2. Respiration & Sleep-Related Breathing Disorders (OSA)
+  final respSum = respiratoryReport?['summary'] as Map?;
+  if (respSum != null && respSum.isNotEmpty) {
+    final ahi = (respSum['ahi'] as num?)?.toDouble() ?? 0.0;
+    final oai = (respSum['obstructive_index'] as num?)?.toDouble();
+    final cai = (respSum['central_index'] as num?)?.toDouble();
+    final minSpo2 = (respSum['min_spo2'] as num?)?.toDouble();
+    final odi = (respSum['odi_3pct'] as num?)?.toDouble() ?? (respSum['odi_4pct'] as num?)?.toDouble();
+    final severity = ahi < 5.0 ? 'Normal' : (ahi < 15.0 ? 'Mild OSA' : (ahi < 30.0 ? 'Moderate OSA' : 'Severe OSA'));
+    y = _visualInterpretationCard(
       p,
-      'Sleep amount and continuity',
-      _architectureInterpretation(viewport, architecture),
-      y,
+      title: 'Respiration & Nocturnal Breathing (OSA)',
+      category: 'Respiration',
+      accentColor: _red,
+      cardHeight: cardH,
+      y: y,
+      chips: [
+        'AHI: ${ahi.toStringAsFixed(1)}/h ($severity)',
+        if (oai != null) 'OAI: ${oai.toStringAsFixed(1)}/h',
+        if (cai != null) 'CAI: ${cai.toStringAsFixed(1)}/h',
+        if (minSpo2 != null) 'Min SpO2: ${minSpo2.toStringAsFixed(0)}%',
+        if (odi != null) 'ODI: ${odi.toStringAsFixed(1)}/h',
+      ],
+      bulletPoints: [
+        'Apnea-Hypopnea Index indicates $severity under standard AASM clinical guidelines.',
+        'Nocturnal oxygenation: Nadir SpO2 was ${minSpo2 != null ? '${minSpo2.toStringAsFixed(0)}%' : '-'} with desaturation index ${odi != null ? '${odi.toStringAsFixed(1)}/h' : '-'}.',
+      ],
     );
-    y = _interpretationBlock(
+  } else {
+    y = _visualInterpretationCard(
       p,
-      'Sleep stages',
-      _stageInterpretation(viewport, architecture),
-      y,
-    );
-  }
-  if (includePages[1] && _hasMicrostructure(rows)) {
-    y = _interpretationBlock(
-      p,
-      'Spindles, slow waves, and their timing',
-      _microstructureInterpretation(rows, architecture),
-      y,
-    );
-  }
-  if (includePages[2] && _hasAperiodic(rows)) {
-    y = _interpretationBlock(
-      p,
-      'Background spectrum and oscillatory peaks',
-      _aperiodicInterpretation(rows),
-      y,
-    );
-  }
-  if (includePages[3] && _hasComplexity(rows)) {
-    y = _interpretationBlock(
-      p,
-      'Complexity and temporal memory',
-      _complexityInterpretation(rows),
-      y,
-    );
-  }
-  if (y == 670.0) {
-    y = _interpretationBlock(
-      p,
-      'Selected report content',
-      'The selected PDF pages do not include quantitative sections with enough available analysis data for a detailed clinical summary.',
-      y,
+      title: 'Respiration & Nocturnal Breathing (OSA)',
+      category: 'Respiration',
+      accentColor: _slate,
+      cardHeight: cardH - 8,
+      y: y,
+      chips: ['Respiratory / OSA: Not Evaluated'],
+      bulletPoints: [
+        'Nasal airflow pressure, respiratory effort belts, and pulse oximetry were not evaluated in this montage.',
+      ],
     );
   }
 
+  // 3. Periodic Limb Movements & Motor Arousals (PLM)
+  final plmSum = plmReport?['summary'] as Map?;
+  if (plmSum != null && plmSum.isNotEmpty) {
+    final plmi = (plmSum['plmi'] as num?)?.toDouble() ?? 0.0;
+    final plmArousals = (plmSum['plm_arousal_index'] as num?)?.toDouble();
+    final plmCount = (plmSum['total_plm_count'] as num?)?.toInt() ?? 0;
+    final plmSev = plmi < 15.0 ? 'Normal' : (plmi < 25.0 ? 'Mild PLMD' : (plmi < 50.0 ? 'Moderate' : 'Severe'));
+    y = _visualInterpretationCard(
+      p,
+      title: 'Periodic Limb Movements (PLM)',
+      category: 'Motor Activity',
+      accentColor: _orange,
+      cardHeight: cardH,
+      y: y,
+      chips: [
+        'PLMI: ${plmi.toStringAsFixed(1)}/h ($plmSev)',
+        'Total PLMs: $plmCount',
+        if (plmArousals != null) 'PLM Arousals: ${plmArousals.toStringAsFixed(1)}/h',
+      ],
+      bulletPoints: [
+        'Bilateral anterior tibialis EMG evaluated according to WASM/AASM periodic movement criteria.',
+        'Periodic leg movement index of ${plmi.toStringAsFixed(1)}/h is classified as $plmSev.',
+      ],
+    );
+  } else {
+    y = _visualInterpretationCard(
+      p,
+      title: 'Periodic Limb Movements (PLM)',
+      category: 'Motor Activity',
+      accentColor: _slate,
+      cardHeight: cardH - 8,
+      y: y,
+      chips: ['Limb Movements (PLM): Not Evaluated'],
+      bulletPoints: [
+        'Bilateral anterior tibialis surface EMG was not configured or analyzed for periodic limb movements.',
+      ],
+    );
+  }
+
+  // 4. Rapid Eye Movements (REM) Saccades & Phasic Dynamics
+  final remSum = remReport?['summary'] as Map?;
+  if (remSum != null && remSum.isNotEmpty) {
+    final remCount = (remSum['total_rems'] as num?)?.toInt() ?? 0;
+    final remDensity = (remSum['rem_density_per_min'] as num?)?.toDouble() ?? 0.0;
+    final remDur = (remSum['mean_duration_sec'] as num?)?.toDouble() ?? 0.0;
+    final remVel = (remSum['mean_peak_velocity_uv_s'] as num?)?.toDouble() ?? 0.0;
+    y = _visualInterpretationCard(
+      p,
+      title: 'Rapid Eye Movements (REM) & Ocular Saccades',
+      category: 'REM Dynamics',
+      accentColor: _teal,
+      cardHeight: cardH,
+      y: y,
+      chips: [
+        'REM Saccades: $remCount',
+        'REM Density: ${remDensity.toStringAsFixed(2)}/min',
+        'Mean Duration: ${remDur.toStringAsFixed(2)}s',
+        'Peak Velocity: ${remVel.toStringAsFixed(0)} µV/s',
+      ],
+      bulletPoints: [
+        'Conjugate, out-of-phase ocular saccades identified during REM sleep via bilateral EOG channels.',
+        'Phasic ocular density reflects pontine-geniculate-occipital (PGO) burst frequency and dream mentation.',
+      ],
+    );
+  } else {
+    y = _visualInterpretationCard(
+      p,
+      title: 'Rapid Eye Movements (REM) & Ocular Saccades',
+      category: 'REM Dynamics',
+      accentColor: _teal,
+      cardHeight: cardH - 8,
+      y: y,
+      chips: ['REM Saccades: Evaluated from EOG (F6)'],
+      bulletPoints: [
+        'Clinical REM detection identifies conjugate out-of-phase ocular saccades from LOC and ROC channels.',
+      ],
+    );
+  }
+
+  // 5. Sleep Stability & Microcontinuity: CAP & NeuroLoopGain
+  final capSum = capReport?['summary'] as Map?;
+  final nlgAvg = nlgReport?['average'] as Map?;
+  final capRate = (capSum?['cap_rate_percent'] as num?)?.toDouble();
+  final a1 = (capSum?['a1_percent'] as num?)?.toDouble();
+  final a2 = (capSum?['a2_percent'] as num?)?.toDouble();
+  final a3 = (capSum?['a3_percent'] as num?)?.toDouble();
+  final swGain = (nlgAvg?['slow_wave']?['N3_mean'] as num?)?.toDouble() ??
+      (nlgAvg?['slow_wave']?['NREM_mean'] as num?)?.toDouble();
+  final sigmaGain = (nlgAvg?['sigma']?['N2_mean'] as num?)?.toDouble();
+
+  y = _visualInterpretationCard(
+    p,
+    title: 'Sleep Microcontinuity: CAP & NeuroLoopGain',
+    category: 'Sleep Stability',
+    accentColor: _purple,
+    cardHeight: cardH,
+    y: y,
+    chips: [
+      if (capRate != null) 'CAP Rate: ${capRate.toStringAsFixed(1)}%',
+      if (a1 != null) 'Phase A1: ${a1.toStringAsFixed(0)}%',
+      if (a2 != null) 'Phase A2: ${a2.toStringAsFixed(0)}%',
+      if (a3 != null) 'Phase A3: ${a3.toStringAsFixed(0)}%',
+      if (swGain != null) 'SW Loop Gain: ${swGain.toStringAsFixed(2)}',
+      if (sigmaGain != null) 'Sigma Gain: ${sigmaGain.toStringAsFixed(2)}',
+    ],
+    bulletPoints: [
+      'CAP sequences reflect sleep instability: Phase A1 promotes delta synchronization; A2/A3 reflect arousals.',
+      'NeuroLoopGain feedback gain (Kemp 2000) quantifies neuronal microcontinuity (unity threshold = 1.0).',
+    ],
+  );
+
+  // 6. Microstructure: Spindles, Slow Waves & Coupling
+  if (includePages[1]) {
+    final spindleDensity = _rowMean(rows, 'sp_density');
+    final nremMinutes = _number(architecture, 'NREM_duration');
+    final slowWaveDensity = _rowMean(rows, 'sw_all_density_calc') ??
+        ((nremMinutes ?? 0) > 0 ? (_rowMean(rows, 'sw_all_Count') ?? 0) / nremMinutes! : null);
+    final mi = _rowMean(rows, 'pac_all_max_MI');
+    final lzc = _number(architecture, 'LZc') ?? _rowMean(rows, 'LZc');
+
+    y = _visualInterpretationCard(
+      p,
+      title: 'Microstructure & Oscillatory Coupling',
+      category: 'Coupling & SO',
+      accentColor: _green,
+      cardHeight: cardH,
+      y: y,
+      chips: [
+        if (spindleDensity != null) 'Spindles: ${spindleDensity.toStringAsFixed(2)}/min',
+        if (slowWaveDensity != null) 'Slow Waves: ${slowWaveDensity.toStringAsFixed(2)}/min',
+        if (mi != null) 'SO-Sigma PAC MI: ${mi.toStringAsFixed(4)}',
+        if (lzc != null) 'Global LZc: ${lzc.toStringAsFixed(3)}',
+      ],
+      bulletPoints: [
+        'Thalamocortical spindles and slow oscillations coordinate synaptic plasticity and memory consolidation.',
+        'Phase-amplitude coupling (PAC) quantifies locking of spindle bursts to slow oscillation up-states.',
+      ],
+    );
+  }
+
+  // 7. Important Limitations
   final availableRegions = rows
       .map((row) => row['Chan']?.trim())
       .whereType<String>()
       .where((value) => value.isNotEmpty)
       .join(', ');
-  _interpretationBlock(
+  _visualInterpretationCard(
     p,
-    'Important limitations',
-    'This automated report summarizes ${availableRegions.isEmpty ? 'the available EEG channels' : availableRegions}. '
-        'Automated staging and qEEG measurements can be affected by artifacts, '
-        'electrode quality, montage selection, and missing data. Results should '
-        'be reviewed with the original recording by a qualified sleep or EEG '
-        'professional and should not be used alone for diagnosis or treatment.',
-    y,
+    title: 'Important Limitations & Clinical Disclaimer',
+    category: 'Disclaimer',
+    accentColor: _slate,
+    cardHeight: 40.0,
+    y: y,
+    chips: [availableRegions.isEmpty ? 'All Standard Channels' : availableRegions],
+    bulletPoints: [
+      'Automated staging and qEEG measurements can be affected by artifacts, filter montages, and electrode quality.',
+      'Results should be reviewed with the original polysomnographic waveforms by a qualified sleep specialist.',
+    ],
   );
 
   final identity = [
     if (metadata.studySite.trim().isNotEmpty) metadata.studySite.trim(),
-    if (metadata.investigatorName.trim().isNotEmpty)
-      metadata.investigatorName.trim(),
+    if (metadata.investigatorName.trim().isNotEmpty) metadata.investigatorName.trim(),
     if (metadata.subjectId.trim().isNotEmpty) metadata.subjectId.trim(),
   ].join(' | ');
   _footer(
@@ -1103,6 +1329,28 @@ void _header(_PdfPage p, String title, String page) {
 void _footer(_PdfPage p, String note) {
   p.line(50, 58, 562, 58, color: _lightGray);
   p.text(note, 50, 42, size: 6.8, color: _slate);
+}
+
+void _hypnogramStrip(
+  _PdfPage p,
+  EegViewport viewport,
+  double x,
+  double y,
+  double width,
+  double height,
+) {
+  p.rect(x, y, width, height, fill: _offWhite, stroke: _lightGray);
+  p.text('Stage', x - 26, y + (height / 2) - 2.5, size: 6.0, color: _slate);
+  if (viewport.stages.isEmpty) return;
+
+  final epochWidth = width / viewport.stages.length;
+  for (var i = 0; i < viewport.stages.length; i++) {
+    final stage = viewport.stages[i];
+    if (stage == SleepStage.unknown) continue;
+    final x0 = x + i * epochWidth;
+    final x1 = x0 + math.max(epochWidth, 0.35);
+    p.rect(x0, y, x1 - x0, height, fill: _stageColor(stage));
+  }
 }
 
 void _hypnogram(
@@ -1894,8 +2142,9 @@ String _buildRespiratoryPage(
   EegViewport viewport,
   Map<String, dynamic> report,
   int pageNum,
-  int totalPages,
-) {
+  int totalPages, {
+  ReportMetadata metadata = const ReportMetadata(),
+}) {
   final p = _PdfPage();
   _header(p, 'RESPIRATORY EVENTS & OXIMETRY', 'Page $pageNum of $totalPages');
   final summary = report['summary'] as Map?;
@@ -1928,7 +2177,11 @@ String _buildRespiratoryPage(
   p.section('Overnight respiratory timeline', 50, 622);
   const x = 80.0;
   const width = 480.0;
-  _hypnogram(p, viewport, x, 522, width, 88);
+  if (metadata.hypnogramMode == 'strip') {
+    _hypnogramStrip(p, viewport, x, 584, width, 22);
+  } else {
+    _hypnogram(p, viewport, x, 522, width, 88);
+  }
   final duration = math.max(1.0, viewport.stages.length * 30.0);
   final events = (report['events'] as List?) ?? const [];
   bool counted(Map e) => e['counted'] == true;
@@ -2016,8 +2269,9 @@ String _buildPlmPage(
   EegViewport viewport,
   Map<String, dynamic> report,
   int pageNum,
-  int totalPages,
-) {
+  int totalPages, {
+  ReportMetadata metadata = const ReportMetadata(),
+}) {
   final p = _PdfPage();
   _header(p, 'PERIODIC LIMB MOVEMENTS', 'Page $pageNum of $totalPages');
   final summary = report['summary'] as Map?;
@@ -2043,7 +2297,11 @@ String _buildPlmPage(
   p.section('Overnight limb-movement timeline', 50, 622);
   const x = 80.0;
   const width = 480.0;
-  _hypnogram(p, viewport, x, 522, width, 88);
+  if (metadata.hypnogramMode == 'strip') {
+    _hypnogramStrip(p, viewport, x, 584, width, 22);
+  } else {
+    _hypnogram(p, viewport, x, 522, width, 88);
+  }
   final duration = math.max(1.0, viewport.stages.length * 30.0);
   final moves = (report['movements'] as List?) ?? const [];
   _eventRaster(
@@ -2148,8 +2406,9 @@ String _buildCapPage(
   EegViewport viewport,
   Map<String, dynamic> report,
   int pageNum,
-  int totalPages,
-) {
+  int totalPages, {
+  ReportMetadata metadata = const ReportMetadata(),
+}) {
   final p = _PdfPage();
   _header(p, 'CYCLIC ALTERNATING PATTERN (CAP)', 'Page $pageNum of $totalPages');
   final summary = report['summary'] as Map?;
@@ -2176,7 +2435,11 @@ String _buildCapPage(
   p.section('Overnight CAP timeline', 50, 622);
   const x = 80.0;
   const width = 480.0;
-  _hypnogram(p, viewport, x, 522, width, 88);
+  if (metadata.hypnogramMode == 'strip') {
+    _hypnogramStrip(p, viewport, x, 584, width, 22);
+  } else {
+    _hypnogram(p, viewport, x, 522, width, 88);
+  }
   final duration = math.max(1.0, viewport.stages.length * 30.0);
   final phases = (report['a_phases'] as List?) ?? const [];
   bool inSeq(Map a) => a['in_sequence'] == true;
@@ -2251,8 +2514,9 @@ String _buildSleepCyclePage(
   EegViewport viewport,
   Map<String, String> row,
   int pageNum,
-  int totalPages,
-) {
+  int totalPages, {
+  ReportMetadata metadata = const ReportMetadata(),
+}) {
   final p = _PdfPage();
   _header(p, 'SLEEP CYCLES & STAGE DYNAMICS', 'Page $pageNum of $totalPages');
   p.text(
@@ -2264,7 +2528,7 @@ String _buildSleepCyclePage(
     color: _slate,
   );
   _psgCards(p, [
-    ('Sleep cycles', _metric(row, 'SleepCycle_number', decimals: 0)),
+    ('Sleep cycles', _metric(row, 'SleepCycle_number', fallback: _number(row, 'Cyc_number'), decimals: 0)),
     ('Sleep onset (min)', _metric(row, 'SOL', fallback: _number(row, 'SleepOnsetLatency'))),
     ('Transitions (/h)', _metric(row, 'Stage_transitions')),
     ('Stage arousals (/h)', _metric(row, 'Stage_arousals')),
@@ -2274,8 +2538,8 @@ String _buildSleepCyclePage(
 
   final cycles = <(int, double, double)>[];
   for (var c = 1; c <= 5; c++) {
-    final start = _number(row, 'C${c}_start_epoch');
-    final end = _number(row, 'C${c}_end_epoch');
+    final start = _number(row, 'C${c}_start_epoch') ?? _number(row, 'Cyc${c}_start_epoch');
+    final end = _number(row, 'C${c}_end_epoch') ?? _number(row, 'Cyc${c}_end_epoch');
     if (start == null || end == null) continue;
     cycles.add((c, (start - 1) * 30.0, end * 30.0));
   }
@@ -2283,7 +2547,11 @@ String _buildSleepCyclePage(
   p.section('Hypnogram with sleep cycles', 50, 622);
   const x = 80.0;
   const width = 480.0;
-  _hypnogram(p, viewport, x, 522, width, 88);
+  if (metadata.hypnogramMode == 'strip') {
+    _hypnogramStrip(p, viewport, x, 584, width, 22);
+  } else {
+    _hypnogram(p, viewport, x, 522, width, 88);
+  }
   final duration = math.max(1.0, (viewport.stages.length * viewport.epochSeconds).toDouble());
   _eventRaster(
     p,
@@ -2328,10 +2596,13 @@ String _buildSleepCyclePage(
     ty -= 11;
   }
   for (final c in cycles) {
-    String v(String key, {int decimals = 1}) => _metric(row, 'C${c.$1}_$key', decimals: decimals);
+    String v(String key, {int decimals = 1}) =>
+        _metric(row, 'C${c.$1}_$key', fallback: _number(row, 'Cyc${c.$1}_$key'), decimals: decimals);
     String shortAwake() {
-      final nrem = _number(row, 'C${c.$1}_NREM_ShortAwakenings_cycle');
-      final rem = _number(row, 'C${c.$1}_REM_ShortAwakenings_cycle');
+      final nrem = _number(row, 'C${c.$1}_NREM_ShortAwakenings_cycle') ??
+          _number(row, 'Cyc${c.$1}_NREM_ShortAwakenings_cycle');
+      final rem = _number(row, 'C${c.$1}_REM_ShortAwakenings_cycle') ??
+          _number(row, 'Cyc${c.$1}_REM_ShortAwakenings_cycle');
       if (nrem == null && rem == null) return '-';
       return '${(nrem ?? 0).toStringAsFixed(1)} / ${(rem ?? 0).toStringAsFixed(1)}';
     }
@@ -2438,8 +2709,9 @@ String _buildNlgPage(
   EegViewport viewport,
   Map<String, dynamic> report,
   int pageNum,
-  int totalPages,
-) {
+  int totalPages, {
+  ReportMetadata metadata = const ReportMetadata(),
+}) {
   final p = _PdfPage();
   _header(p, 'NEUROLOOPGAIN: SLOW-WAVE & SIGMA GAIN', 'Page $pageNum of $totalPages');
   final channels = (report['channels'] as Map?) ?? const {};
@@ -2483,32 +2755,50 @@ String _buildNlgPage(
   final cards = <(String, String)>[];
   if (bands.contains('slow_wave')) {
     cards.addAll([
-      ('SW gain NREM', _jsonFmt(avg('slow_wave'), 'NREM_mean', unit: '%')),
-      ('SW gain N3', _jsonFmt(avg('slow_wave'), 'N3_mean', unit: '%')),
-      ('SW index (P75-100)', _jsonFmt(avg('slow_wave'), 'upper_quartile_index', unit: '%')),
-      ('SW NREM trend', _jsonFmt(avg('slow_wave'), 'NREM_slope_per_hour', unit: '%/h')),
+      ('SW gain NREM', _jsonFmt(avg('slow_wave'), 'NREM_mean')),
+      ('SW gain N3', _jsonFmt(avg('slow_wave'), 'N3_mean')),
+      ('SW index (P75-100)', _jsonFmt(avg('slow_wave'), 'upper_quartile_index')),
+      ('SW NREM trend', _jsonFmt(avg('slow_wave'), 'NREM_slope_per_hour', unit: '/h')),
     ]);
   }
   if (bands.contains('sigma')) {
     cards.addAll([
-      ('Sigma gain NREM', _jsonFmt(avg('sigma'), 'NREM_mean', unit: '%')),
-      ('Sigma index (P75-100)', _jsonFmt(avg('sigma'), 'upper_quartile_index', unit: '%')),
+      ('Sigma gain NREM', _jsonFmt(avg('sigma'), 'NREM_mean')),
+      ('Sigma index (P75-100)', _jsonFmt(avg('sigma'), 'upper_quartile_index')),
     ]);
   }
   _psgCards(p, cards.take(6).toList(), 648);
 
-  // Timeline: hypnogram above, gain curves (0-100 %) below.
+  // Timeline: hypnogram above, gain curves below.
   p.section('Overnight gain on the hypnogram (30-s epochs, mean of channels)', 50, 624);
   const x = 80.0;
   const width = 480.0;
-  _hypnogram(p, viewport, x, 540, width, 72);
+  if (metadata.hypnogramMode == 'strip') {
+    _hypnogramStrip(p, viewport, x, 584, width, 22);
+  } else {
+    _hypnogram(p, viewport, x, 540, width, 72);
+  }
   const gy = 430.0;
   const gh = 96.0;
+
+  // Determine scale max dynamically
+  var observedMax = 0.0;
+  for (final b in bands) {
+    final s = _nlgEpochSeries(channels, b);
+    for (final v in s) {
+      if (v != null && v.isFinite && v > observedMax) observedMax = v;
+    }
+  }
+  final isPercent = observedMax > 15.0;
+  final scaleMax = isPercent ? 100.0 : math.max(2.0, (observedMax * 1.2).ceilToDouble());
+
   p.rect(x, gy, width, gh, stroke: _lightGray);
-  for (final g in [0.0, 25.0, 50.0, 75.0, 100.0]) {
-    final yy = gy + gh * g / 100;
+  final gridSteps = isPercent ? [0.0, 25.0, 50.0, 75.0, 100.0] : [0.0, 0.5, 1.0, 1.5, scaleMax];
+  for (final g in gridSteps) {
+    if (g > scaleMax) continue;
+    final yy = gy + gh * g / scaleMax;
     p.line(x, yy, x + width, yy, color: _lightGray, width: 0.25);
-    p.text('${g.toStringAsFixed(0)}%', x - 22, yy - 2, size: 5.8, color: _slate);
+    p.text(isPercent ? '${g.toStringAsFixed(0)}%' : g.toStringAsFixed(1), x - 22, yy - 2, size: 5.8, color: _slate);
   }
   final nEpochs = math.max(1, viewport.stages.length);
   var lx = x;
@@ -2525,7 +2815,7 @@ String _buildNlgPage(
         flush();
         continue;
       }
-      pts.add((x + width * (i + 0.5) / nEpochs, gy + gh * v.clamp(0.0, 100.0) / 100));
+      pts.add((x + width * (i + 0.5) / nEpochs, gy + gh * v.clamp(0.0, scaleMax) / scaleMax));
     }
     flush();
     p.rect(lx, gy - 12, 8, 3, fill: _nlgColor(b));

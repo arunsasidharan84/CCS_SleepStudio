@@ -43,6 +43,7 @@ import 'group_statistics.dart';
 import 'montage_dialog.dart';
 import 'legacy_file_migration.dart';
 import 'rem_detection.dart';
+import 'pattern_search.dart';
 
 const double _plotLeftPadding = 90.0;
 const bool buildLite = bool.fromEnvironment('LITE_BUILD', defaultValue: false);
@@ -829,9 +830,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   void _showEditEventNamesDialog() {
     final controllers = <int, TextEditingController>{};
-    for (var i = 0; i <= 8; i++) {
+    for (var i = 0; i <= 12; i++) {
       controllers[i] = TextEditingController(
-        text: _config.customEventNames[i] ?? '',
+        text: _config.customEventNames[i] ?? kDefaultAasmEventNames[i] ?? '',
       );
     }
 
@@ -842,30 +843,30 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           children: [
             Icon(Icons.edit_note, size: 22, color: Colors.indigo),
             SizedBox(width: 8),
-            Text('Customize Event Names'),
+            Text('Customize Event Names (AASM Defaults)'),
           ],
         ),
         content: SizedBox(
-          width: 380,
+          width: 440,
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Define custom labels for event shortcut keys (0–8).\nLeave empty to use the default name.',
+                  'Define custom labels for event shortcut keys (0–12 / A, F1–F12).\nPre-populated with clinical AASM standards; customize any as needed.',
                   style: TextStyle(fontSize: 12, color: Colors.black54),
                 ),
                 const SizedBox(height: 12),
-                for (var i = 0; i <= 8; i++) ...[
+                for (var i = 0; i <= 12; i++) ...[
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 3),
                     child: Row(
                       children: [
                         SizedBox(
-                          width: 80,
+                          width: 85,
                           child: Text(
-                            i == 0 ? 'Artefact [A]:' : 'Event $i [F$i]:',
+                            i == 0 ? 'Artifact [A]:' : '${kDefaultAasmShortcuts[i] ?? "F$i"}:',
                             style: const TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
@@ -880,9 +881,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                               controller: controllers[i],
                               style: const TextStyle(fontSize: 12),
                               decoration: InputDecoration(
-                                hintText: i == 0
-                                    ? 'Artifact'
-                                    : 'Event $i (e.g. Spindle)',
+                                hintText: kDefaultAasmEventNames[i] ?? 'Event $i',
                                 hintStyle: const TextStyle(
                                   fontSize: 11,
                                   color: Colors.black38,
@@ -907,14 +906,22 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         ),
         actions: [
           TextButton(
+            onPressed: () {
+              for (var i = 0; i <= 12; i++) {
+                controllers[i]?.text = kDefaultAasmEventNames[i] ?? '';
+              }
+            },
+            child: const Text('Reset Defaults'),
+          ),
+          TextButton(
             onPressed: () => Navigator.of(dialogCtx).pop(),
             child: const Text('Cancel'),
           ),
           FilledButton(
             onPressed: () {
               final newMap = <int, String>{};
-              for (var i = 0; i <= 8; i++) {
-                final txt = controllers[i]!.text.trim();
+              for (var i = 0; i <= 12; i++) {
+                final txt = controllers[i]?.text.trim() ?? '';
                 if (txt.isNotEmpty) {
                   newMap[i] = txt;
                 }
@@ -1437,14 +1444,20 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         final end = selection.startSec < selection.endSec
             ? selection.endSec
             : selection.startSec;
-        if (end > start) {
+        final isPoint = (end - start).abs() < 0.05;
+        if (end > start || isPoint) {
+          final selCh = selection.channel;
+          final channelName = selCh >= 0 && selCh < v.signalChannelLabels.length
+              ? v.signalChannelLabels[selCh]
+              : null;
           newEvents.add(
             ScoredEvent(
               digit: digit,
               key: key,
               label: label,
               startSec: start,
-              endSec: end,
+              endSec: isPoint ? start : end,
+              channel: channelName,
             ),
           );
         }
@@ -1594,7 +1607,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     if (custom != null && custom.isNotEmpty) return custom;
     final psgName = kPsgEventNames[digit];
     if (psgName != null) return psgName;
-    return digit == 0 ? 'Artifact' : 'Event $digit';
+    return kDefaultAasmEventNames[digit] ?? (digit == 0 ? 'Artifact' : 'Event $digit');
   }
 
   // ─── Scoring I/O ──────────────────────────────────────────────────────────
@@ -4572,6 +4585,101 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
+  Future<void> _openPatternSearchDialog({
+    String? templateChannel,
+    EventSelection? selection,
+  }) async {
+    final eeg = _loadedEeg;
+    final v = _viewport;
+    if (eeg == null || v == null) {
+      _setStatus('Load an EEG recording first');
+      return;
+    }
+
+    final allLabels = _config.channels.isNotEmpty
+        ? _config.channels.map((c) => c.name).toList()
+        : eeg.channelLabels;
+
+    final targetCh = templateChannel ??
+        (v.eventSelections.isNotEmpty &&
+                v.eventSelections.first.channel >= 0 &&
+                v.eventSelections.first.channel < v.signalChannelLabels.length
+            ? v.signalChannelLabels[v.eventSelections.first.channel]
+            : (allLabels.isNotEmpty ? allLabels.first : eeg.channelLabels.first));
+
+    final sel = selection ??
+        (v.eventSelections.isNotEmpty ? v.eventSelections.first : null);
+
+    double startSec;
+    double endSec;
+    if (sel != null && (sel.endSec - sel.startSec).abs() >= 0.05) {
+      startSec = math.min(sel.startSec, sel.endSec);
+      endSec = math.max(sel.startSec, sel.endSec);
+    } else {
+      // Default to 1.2-second segment at the center of the current epoch
+      final epochStart = (v.currentEpoch - 1) * v.epochSeconds;
+      startSec = epochStart + 10.0;
+      endSec = epochStart + 11.2;
+    }
+
+    final sig = _getChannelSignal(eeg, targetCh);
+    if (sig == null || sig.isEmpty) {
+      _setStatus('Could not extract signal for channel "$targetCh"');
+      return;
+    }
+
+    final fs = eeg.sampleRateHz;
+    final startIdx = (startSec * fs).round().clamp(0, sig.length - 1);
+    final endIdx = (endSec * fs).round().clamp(startIdx + 4, sig.length);
+    final snippet = sig.sublist(startIdx, endIdx);
+
+    final template = PatternTemplate(
+      channel: targetCh,
+      startSec: startSec,
+      endSec: endSec,
+      samples: snippet,
+      sampleRateHz: fs,
+    );
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => PatternSearchDialog(
+        template: template,
+        channelLabels: allLabels.isNotEmpty ? allLabels : eeg.channelLabels,
+        hasStages: v.stages.any((s) => s.isScored),
+        sampleRateHz: fs,
+        stages: v.stages,
+        epochSeconds: v.epochSeconds.toDouble(),
+        getChannelSignal: (ch) => _getChannelSignal(eeg, ch),
+        onJumpToTime: (sec) {
+          final ep = (sec / v.epochSeconds).floor() + 1;
+          _jumpToEpoch(ep);
+        },
+        onAddEvents: (newEvents) {
+          final merged = _mergeScoredEvents([...v.scoredEvents, ...newEvents]);
+          if (mounted) {
+            setState(() {
+              _viewport = v.copyWith(
+                scoredEvents: merged,
+                clearEventSelections: true,
+              );
+              _status = 'Added ${newEvents.length} pattern events to scoring.';
+            });
+            autoSaveScoring(
+              _activePath,
+              _viewport!.stages,
+              _viewport!.epochSeconds,
+              events: _viewport!.scoredEvents,
+              stagesUncertain: _viewport!.stagesUncertain,
+              stagesConfidence: _viewport!.stagesConfidence,
+              stageProbabilities: _viewport!.stageProbabilities,
+            );
+          }
+        },
+      ),
+    );
+  }
+
   void _runAnalyseNidraDetection() {
     final eeg = _loadedEeg;
     final v = _viewport;
@@ -5499,6 +5607,15 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 children: stepWidgets,
               ),
             ),
+          ),
+          const SizedBox(width: 6),
+          IconButton(
+            icon: const Icon(Icons.tune, size: 16),
+            tooltip: 'Configure Workflow Steps',
+            onPressed: () => _openConfigDialog(initialTabIndex: _kConfigWorkflowTab),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+            color: Colors.blueGrey.shade600,
           ),
         ],
       ),
@@ -7475,22 +7592,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     String? selectedChannel = channel;
 
     final availableLabels = <(int, String)>[
-      (0, _eventLabel(0)),
-      (kDigitArousal, 'Arousal'),
-      (1, _eventLabel(1)),
-      (2, _eventLabel(2)),
-      (3, _eventLabel(3)),
-      (4, _eventLabel(4)),
-      (5, _eventLabel(5)),
-      (6, _eventLabel(6)),
-      (7, _eventLabel(7)),
-      (8, _eventLabel(8)),
-      (kDigitObstructiveApnea, 'Obstructive Apnea'),
-      (kDigitCentralApnea, 'Central Apnea'),
-      (kDigitMixedApnea, 'Mixed Apnea'),
-      (kDigitHypopnea, 'Hypopnea'),
-      (kDigitDesaturation, 'Desaturation'),
-      (kDigitLegMovement, 'Leg Movement'),
+      for (var i = 0; i <= 12; i++)
+        (i, _eventLabel(i)),
     ];
 
     await showDialog<void>(
@@ -7701,6 +7804,16 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         ],
         if (v.eventSelections.isNotEmpty) ...[
           PopupMenuItem(
+            value: 'pattern:search',
+            child: Row(
+              children: [
+                const Icon(Icons.saved_search, size: 16, color: Color(0xFF0284C7)),
+                const SizedBox(width: 8),
+                Text('Search selected pattern in $label…'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
             value: 'selection:clear',
             child: Row(
               children: [
@@ -7724,36 +7837,92 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             ),
           ),
           PopupMenuItem(
-            value: 'marker:quick:0:Artifact',
+            value: 'marker:quick:0:${_eventLabel(0)}',
             child: Row(
               children: [
-                Container(
-                  width: 9,
-                  height: 9,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFE53935),
-                    shape: BoxShape.circle,
-                  ),
-                ),
+                Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFFE53935), shape: BoxShape.circle)),
                 const SizedBox(width: 8),
-                const Text('Mark Artifact (0)'),
+                Text('Mark ${_eventLabel(0)} [A]'),
               ],
             ),
           ),
           PopupMenuItem(
-            value: 'marker:quick:25:Arousal',
+            value: 'marker:quick:1:${_eventLabel(1)}',
             child: Row(
               children: [
-                Container(
-                  width: 9,
-                  height: 9,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFFFB300),
-                    shape: BoxShape.circle,
-                  ),
-                ),
+                Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFFFFB300), shape: BoxShape.circle)),
                 const SizedBox(width: 8),
-                const Text('Mark Arousal (A)'),
+                Text('Mark ${_eventLabel(1)} [F1]'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'marker:quick:2:${_eventLabel(2)}',
+            child: Row(
+              children: [
+                Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFF0284C7), shape: BoxShape.circle)),
+                const SizedBox(width: 8),
+                Text('Mark ${_eventLabel(2)} [F2]'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'marker:quick:3:${_eventLabel(3)}',
+            child: Row(
+              children: [
+                Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFF8B5CF6), shape: BoxShape.circle)),
+                const SizedBox(width: 8),
+                Text('Mark ${_eventLabel(3)} [F3]'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'marker:quick:4:${_eventLabel(4)}',
+            child: Row(
+              children: [
+                Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFF10B981), shape: BoxShape.circle)),
+                const SizedBox(width: 8),
+                Text('Mark ${_eventLabel(4)} [F4]'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'marker:quick:8:${_eventLabel(8)}',
+            child: Row(
+              children: [
+                Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFFD97706), shape: BoxShape.circle)),
+                const SizedBox(width: 8),
+                Text('Mark ${_eventLabel(8)} [F8]'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'marker:quick:10:${_eventLabel(10)}',
+            child: Row(
+              children: [
+                Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFF6366F1), shape: BoxShape.circle)),
+                const SizedBox(width: 8),
+                Text('Mark ${_eventLabel(10)} [F10]'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'marker:quick:12:${_eventLabel(12)}',
+            child: Row(
+              children: [
+                Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFFEC4899), shape: BoxShape.circle)),
+                const SizedBox(width: 8),
+                Text('Mark ${_eventLabel(12)} [F12]'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'pattern:search',
+            child: Row(
+              children: [
+                const Icon(Icons.saved_search, size: 16, color: Color(0xFF0284C7)),
+                const SizedBox(width: 8),
+                Text('Search waveform pattern in $label…'),
               ],
             ),
           ),
@@ -7780,6 +7949,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     if (choice == null || !mounted) return;
     if (choice == 'selection:clear') {
       _clearSelection();
+      return;
+    }
+    if (choice == 'pattern:search') {
+      final sel = v.eventSelections.isNotEmpty ? v.eventSelections.first : null;
+      unawaited(_openPatternSearchDialog(templateChannel: label, selection: sel));
       return;
     }
     if (choice == 'marker:dialog' && clickSec != null) {
@@ -7829,8 +8003,14 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     }
   }
 
+  /// Index of the "Workflow" tab in [ConfigDialog].
+  static const int _kConfigWorkflowTab = 1;
+
+  /// Index of the "Report" tab in [ConfigDialog].
+  static const int _kConfigReportTab = 2;
+
   /// Index of the "Channels" tab in [ConfigDialog].
-  static const int _kConfigChannelsTab = 2;
+  static const int _kConfigChannelsTab = 3;
 
   void _adjustChannelScale(int visibleIndex, double multiplier) {
     final v = _viewport;
@@ -8222,6 +8402,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               PlatformMenuItem(
                 label: 'Rapid Eye Movement (REM) Detection…',
                 onSelected: _runRemDetection,
+              ),
+              PlatformMenuItem(
+                label: 'Waveform Pattern Search (NCC)…',
+                onSelected: _openPatternSearchDialog,
               ),
               PlatformMenuItem(
                 label: 'Run Comprehensive Analysis Pipeline (All-in-One)…',

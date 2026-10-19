@@ -14,11 +14,14 @@ class RemDetectionOptions {
     this.rocChannel = 'E2-M1',
     this.minDurationSeconds = 0.1,
     this.maxDurationSeconds = 1.2,
-    this.minAmplitudeUv = 25.0,
-    this.minVelocityUvPerSec = 150.0,
+    this.minAmplitudeUv = 15.0,
+    this.minVelocityUvPerSec = 75.0,
     this.restrictToRemStage = true,
     this.frequencyLowHz = 0.5,
     this.frequencyHighHz = 5.0,
+    this.adaptiveThreshold = true,
+    this.relativeThresholdSd = 2.0,
+    this.detectLrlrBursts = true,
   });
 
   final String locChannel;
@@ -30,6 +33,9 @@ class RemDetectionOptions {
   final bool restrictToRemStage;
   final double frequencyLowHz;
   final double frequencyHighHz;
+  final bool adaptiveThreshold;
+  final double relativeThresholdSd;
+  final bool detectLrlrBursts;
 
   RemDetectionOptions copyWith({
     String? locChannel,
@@ -41,6 +47,9 @@ class RemDetectionOptions {
     bool? restrictToRemStage,
     double? frequencyLowHz,
     double? frequencyHighHz,
+    bool? adaptiveThreshold,
+    double? relativeThresholdSd,
+    bool? detectLrlrBursts,
   }) {
     return RemDetectionOptions(
       locChannel: locChannel ?? this.locChannel,
@@ -52,6 +61,9 @@ class RemDetectionOptions {
       restrictToRemStage: restrictToRemStage ?? this.restrictToRemStage,
       frequencyLowHz: frequencyLowHz ?? this.frequencyLowHz,
       frequencyHighHz: frequencyHighHz ?? this.frequencyHighHz,
+      adaptiveThreshold: adaptiveThreshold ?? this.adaptiveThreshold,
+      relativeThresholdSd: relativeThresholdSd ?? this.relativeThresholdSd,
+      detectLrlrBursts: detectLrlrBursts ?? this.detectLrlrBursts,
     );
   }
 
@@ -65,6 +77,9 @@ class RemDetectionOptions {
         'restrict_to_rem': restrictToRemStage,
         'filter_low_hz': frequencyLowHz,
         'filter_high_hz': frequencyHighHz,
+        'adaptive_threshold': adaptiveThreshold,
+        'relative_threshold_sd': relativeThresholdSd,
+        'detect_lrlr_bursts': detectLrlrBursts,
       };
 }
 
@@ -75,6 +90,7 @@ class DetectedRemEvent {
     required this.peakAmplitudeUv,
     required this.peakVelocityUvPerSec,
     required this.stage,
+    this.polarity = 1,
   });
 
   final double startSeconds;
@@ -82,6 +98,7 @@ class DetectedRemEvent {
   final double peakAmplitudeUv;
   final double peakVelocityUvPerSec;
   final String stage;
+  final int polarity;
 
   double get endSeconds => startSeconds + durationSeconds;
 
@@ -90,6 +107,33 @@ class DetectedRemEvent {
         'duration_sec': double.parse(durationSeconds.toStringAsFixed(3)),
         'peak_amplitude_uv': double.parse(peakAmplitudeUv.toStringAsFixed(1)),
         'peak_velocity_uv_s': double.parse(peakVelocityUvPerSec.toStringAsFixed(1)),
+        'stage': stage,
+        'polarity': polarity,
+      };
+}
+
+class LrlrBurstEvent {
+  const LrlrBurstEvent({
+    required this.startSeconds,
+    required this.durationSeconds,
+    required this.saccadeCount,
+    required this.sequence,
+    required this.stage,
+  });
+
+  final double startSeconds;
+  final double durationSeconds;
+  final int saccadeCount;
+  final String sequence;
+  final String stage;
+
+  double get endSeconds => startSeconds + durationSeconds;
+
+  Map<String, dynamic> toJson() => {
+        'start_sec': double.parse(startSeconds.toStringAsFixed(3)),
+        'duration_sec': double.parse(durationSeconds.toStringAsFixed(3)),
+        'saccade_count': saccadeCount,
+        'sequence': sequence,
         'stage': stage,
       };
 }
@@ -100,14 +144,17 @@ class RemAnalysisReport {
     required this.totalRemDurationMinutes,
     required this.totalRecordingMinutes,
     required this.options,
+    this.lrlrBursts = const [],
   });
 
   final List<DetectedRemEvent> events;
   final double totalRemDurationMinutes;
   final double totalRecordingMinutes;
   final RemDetectionOptions options;
+  final List<LrlrBurstEvent> lrlrBursts;
 
   int get totalRemCount => events.length;
+  int get totalLrlrBursts => lrlrBursts.length;
 
   double get remDensityPerMin => totalRemDurationMinutes > 0
       ? (totalRemCount / totalRemDurationMinutes)
@@ -140,6 +187,7 @@ class RemAnalysisReport {
         'options': options.toJson(),
         'summary': {
           'total_rems': totalRemCount,
+          'total_lrlr_bursts': totalLrlrBursts,
           'rem_sleep_duration_min': double.parse(totalRemDurationMinutes.toStringAsFixed(1)),
           'rem_density_per_min': double.parse(remDensityPerMin.toStringAsFixed(2)),
           'mean_duration_sec': double.parse(meanDurationSeconds.toStringAsFixed(2)),
@@ -147,6 +195,7 @@ class RemAnalysisReport {
           'mean_peak_velocity_uv_s': double.parse(meanVelocityUvPerSec.toStringAsFixed(1)),
         },
         'events': events.map((e) => e.toJson()).toList(),
+        'lrlr_bursts': lrlrBursts.map((b) => b.toJson()).toList(),
       };
 }
 
@@ -215,6 +264,33 @@ RemAnalysisReport detectRapidEyeMovements({
   final locDiff = _smoothedDerivative(locFilt, sampleRateHz);
   final rocDiff = _smoothedDerivative(rocFilt, sampleRateHz);
 
+  // Measure baseline EOG variance during REM sleep (or entire recording if unscored)
+  double sumLocSq = 0.0;
+  double sumRocSq = 0.0;
+  int remSampleCount = 0;
+  for (var i = 0; i < numSamples; i++) {
+    final tSec = i / sampleRateHz;
+    final epochIdx = (tSec / epochDurationSeconds).floor();
+    final stage = epochIdx >= 0 && epochIdx < stages.length ? stages[epochIdx] : 0;
+    if (!options.restrictToRemStage || stage == 5) {
+      sumLocSq += locFilt[i] * locFilt[i];
+      sumRocSq += rocFilt[i] * rocFilt[i];
+      remSampleCount++;
+    }
+  }
+
+  final locRms = remSampleCount > 0 ? math.sqrt(sumLocSq / remSampleCount) : 15.0;
+  final rocRms = remSampleCount > 0 ? math.sqrt(sumRocSq / remSampleCount) : 15.0;
+  final baselineSd = math.max(4.0, (locRms + rocRms) / 2.0);
+
+  // Adaptive threshold calculation
+  final effectiveMinAmp = options.adaptiveThreshold
+      ? math.max(8.0, math.min(options.minAmplitudeUv, options.relativeThresholdSd * baselineSd))
+      : options.minAmplitudeUv;
+  final effectiveMinVel = options.adaptiveThreshold
+      ? math.max(35.0, math.min(options.minVelocityUvPerSec, options.relativeThresholdSd * 20.0))
+      : options.minVelocityUvPerSec;
+
   final events = <DetectedRemEvent>[];
   var inEvent = false;
   var eventStartSample = 0;
@@ -225,7 +301,7 @@ RemAnalysisReport detectRapidEyeMovements({
   final minSamples = (options.minDurationSeconds * sampleRateHz).round();
   final maxSamples = (options.maxDurationSeconds * sampleRateHz).round();
   final gapSamples = math.max(2, (0.08 * sampleRateHz).round());
-  final velThreshold = options.minVelocityUvPerSec * 0.5;
+  final velThreshold = effectiveMinVel * 0.45;
 
   for (var i = 0; i < numSamples; i++) {
     final tSec = i / sampleRateHz;
@@ -257,14 +333,25 @@ RemAnalysisReport detectRapidEyeMovements({
       if (!isRem || (i - lastActiveSample > gapSamples)) {
         final length = lastActiveSample - eventStartSample;
         if (length >= minSamples && length <= maxSamples &&
-            maxAbsAmplitude >= options.minAmplitudeUv &&
-            maxAbsVelocity >= options.minVelocityUvPerSec) {
-          // Reject in-phase blinks (ensure net negative product over interval)
+            maxAbsAmplitude >= effectiveMinAmp &&
+            maxAbsVelocity >= effectiveMinVel) {
           var dot = 0.0;
+          var locNorm = 0.0;
+          var rocNorm = 0.0;
+          var maxLoc = -1e9;
+          var minLoc = 1e9;
           for (var k = eventStartSample; k <= lastActiveSample; k++) {
             dot += locFilt[k] * rocFilt[k];
+            locNorm += locFilt[k] * locFilt[k];
+            rocNorm += rocFilt[k] * rocFilt[k];
+            if (locFilt[k] > maxLoc) maxLoc = locFilt[k];
+            if (locFilt[k] < minLoc) minLoc = locFilt[k];
           }
-          if (dot <= 0.0) {
+          final denom = math.sqrt(locNorm * rocNorm);
+          final corr = denom > 1e-6 ? (dot / denom) : 0.0;
+          // Accept out-of-phase saccade (reject in-phase blinks where correlation > 0.2)
+          if (corr <= 0.2) {
+            final polarity = maxLoc.abs() >= minLoc.abs() ? (maxLoc >= 0 ? 1 : -1) : (minLoc >= 0 ? 1 : -1);
             final stageStr = stage == 5 ? 'REM' : (stage == 0 ? 'W' : 'NREM');
             events.add(DetectedRemEvent(
               startSeconds: eventStartSample / sampleRateHz,
@@ -272,6 +359,7 @@ RemAnalysisReport detectRapidEyeMovements({
               peakAmplitudeUv: maxAbsAmplitude,
               peakVelocityUvPerSec: maxAbsVelocity,
               stage: stageStr,
+              polarity: polarity,
             ));
           }
         }
@@ -280,7 +368,7 @@ RemAnalysisReport detectRapidEyeMovements({
     }
   }
 
-  // Merge fragmented sub-intervals belonging to the same saccade (gap <= 0.25s)
+  // Merge fragmented sub-intervals belonging to the same saccade (gap <= 0.20s)
   final mergedEvents = <DetectedRemEvent>[];
   for (final ev in events) {
     if (mergedEvents.isEmpty) {
@@ -288,16 +376,52 @@ RemAnalysisReport detectRapidEyeMovements({
     } else {
       final prev = mergedEvents.last;
       final gap = ev.startSeconds - prev.endSeconds;
-      if (gap <= 0.25) {
+      if (gap <= 0.20) {
         mergedEvents[mergedEvents.length - 1] = DetectedRemEvent(
           startSeconds: prev.startSeconds,
           durationSeconds: (ev.endSeconds - prev.startSeconds),
           peakAmplitudeUv: math.max(prev.peakAmplitudeUv, ev.peakAmplitudeUv),
           peakVelocityUvPerSec: math.max(prev.peakVelocityUvPerSec, ev.peakVelocityUvPerSec),
           stage: prev.stage,
+          polarity: prev.polarity,
         );
       } else {
         mergedEvents.add(ev);
+      }
+    }
+  }
+
+  // Detect LRLR alternating pattern bursts (sequences of >= 3 alternating direction saccades within <= 2.2s)
+  final lrlrBursts = <LrlrBurstEvent>[];
+  if (options.detectLrlrBursts && mergedEvents.length >= 3) {
+    var burstStart = 0;
+    while (burstStart < mergedEvents.length) {
+      var burstEnd = burstStart;
+      while (burstEnd + 1 < mergedEvents.length) {
+        final current = mergedEvents[burstEnd];
+        final next = mergedEvents[burstEnd + 1];
+        final gap = next.startSeconds - current.endSeconds;
+        if (gap <= 2.2 && current.polarity * next.polarity < 0) {
+          burstEnd++;
+        } else {
+          break;
+        }
+      }
+      final count = burstEnd - burstStart + 1;
+      if (count >= 3) {
+        final first = mergedEvents[burstStart];
+        final last = mergedEvents[burstEnd];
+        final seq = [for (var k = burstStart; k <= burstEnd; k++) mergedEvents[k].polarity > 0 ? 'L' : 'R'].join('-');
+        lrlrBursts.add(LrlrBurstEvent(
+          startSeconds: first.startSeconds,
+          durationSeconds: last.endSeconds - first.startSeconds,
+          saccadeCount: count,
+          sequence: seq,
+          stage: first.stage,
+        ));
+        burstStart = burstEnd + 1;
+      } else {
+        burstStart++;
       }
     }
   }
@@ -307,6 +431,7 @@ RemAnalysisReport detectRapidEyeMovements({
     totalRemDurationMinutes: totalRemDurationMinutes,
     totalRecordingMinutes: totalRecordingMinutes,
     options: options,
+    lrlrBursts: lrlrBursts,
   );
 }
 
@@ -447,6 +572,27 @@ Future<List<ScoredEvent>> loadRemEvents(String recordingPath) async {
           endSec: start + dur,
         ),
       );
+    }
+    final rawBursts = map['lrlr_bursts'] as List?;
+    if (rawBursts != null) {
+      for (final b in rawBursts) {
+        if (b is! Map) continue;
+        final start = (b['start_sec'] as num?)?.toDouble() ?? 0.0;
+        final dur = (b['duration_sec'] as num?)?.toDouble() ?? 0.0;
+        final count = (b['saccade_count'] as num?)?.toInt() ?? 0;
+        final seq = b['sequence'] as String? ?? 'L-R-L-R';
+        res.add(
+          ScoredEvent(
+            digit: 12,
+            key: 'F12',
+            label: 'LRLR Burst ($seq, $count)',
+            type: 'REM',
+            channel: 'EOG',
+            startSec: start,
+            endSec: start + dur,
+          ),
+        );
+      }
     }
     return res;
   } catch (_) {

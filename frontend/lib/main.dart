@@ -51,6 +51,28 @@ void main() {
                     details.exceptionAsString(),
                     maxLines: 8,
                     textAlign: TextAlign.center,
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: Colors.black87),
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.arrow_back, size: 18),
+                        label: const Text('Back / Dismiss View'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1E88E5),
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: () {
+                          // Try popping any active dialog or route
+                          final nav = Navigator.maybeOf(details.context as BuildContext? ?? WidgetsBinding.instance.rootElement!);
+                          if (nav != null && nav.canPop()) {
+                            nav.pop();
+                          }
+                        },
+                      ),
+                    ],
                   ),
                 ],
               ),

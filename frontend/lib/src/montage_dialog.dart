@@ -69,6 +69,21 @@ const List<MontagePreset> builtInMontagePresets = [
     ],
   ),
   MontagePreset(
+    name: 'AASM Sleep + PLM + OSA (Comprehensive PSG)',
+    description: 'Comprehensive AASM clinical PSG: standard derivations plus bilateral leg movements (LAT, RAT, PLM) and complete respiratory channels (Flow, Thorax, Abdomen, SpO2, Snore, Body Position)',
+    derivations: [
+      ('E1', 'M2'),
+      ('E2', 'M1'),
+      ('F4', 'M1'),
+      ('F3', 'M2'),
+      ('C4', 'M1'),
+      ('C3', 'M2'),
+      ('O2', 'M1'),
+      ('O1', 'M2'),
+      ('CHIN1', 'CHIN2'),
+    ],
+  ),
+  MontagePreset(
     name: 'Longitudinal Bipolar (Double Banana)',
     description: 'Anterior-to-posterior longitudinal chains covering temporal and parasagittal columns',
     derivations: [
@@ -1117,21 +1132,25 @@ List<ChannelConfig> generateMontagePresetChannels({
       );
     }
 
-    // 4. Extended Respiratory channels for OSA Preset
-    if (preset.name.contains('OSA')) {
+    // 4. Extended Respiratory channels for OSA Preset or Comprehensive Preset
+    if (preset.name.contains('OSA') || preset.name.contains('Comprehensive')) {
       final respSignals = [
-        ('Flow', ['FLOW', 'CANNULA', 'THERMAL', 'THERMISTOR', 'AIRFLOW', 'NASAL', 'PNOSE']),
-        ('Thorax', ['THORAX', 'CHEST', 'THOR', 'THO', 'EFFORT_THOR']),
-        ('Abdomen', ['ABDOMEN', 'ABDO', 'ABD', 'EFFORT_ABDO']),
-        ('SpO2', ['SPO2', 'SAO2', 'OXIMETRY', 'PULSEOX', 'SAT']),
-        ('Snore', ['SNORE', 'MIC', 'TRACHEA']),
+        ('Flow', ['FLOW', 'CANNULA', 'THERMAL', 'THERMISTOR', 'AIRFLOW', 'NASAL', 'PNOSE', 'PRESSUREFLOW', 'PRESSURE_FLOW', 'FLOWTH', 'FLOW_TH']),
+        ('Thorax', ['THORAX', 'CHEST', 'THOR', 'THO', 'EFFORTTHOR', 'EFFORT_THOR', 'RIPTHORAX', 'RIP_THORAX', 'THORAXRIP']),
+        ('Abdomen', ['ABDOMEN', 'ABDO', 'ABD', 'EFFORTABDO', 'EFFORT_ABDO', 'RIPABDOMEN', 'RIP_ABDOMEN', 'ABDOMENRIP']),
+        ('SpO2', ['SPO2', 'SAO2', 'OXIMETRY', 'PULSEOX', 'SAT', 'PLETH', 'PULSE']),
+        ('Snore', ['SNORE', 'MIC', 'TRACHEA', 'PRESSURESNORE', 'PRESSURE_SNORE']),
       ];
       for (final item in respSignals) {
         final match = findMatchingElectrode(item.$1, availableChannels) ??
             availableChannels.firstWhere(
               (c) {
                 final cleanC = cleanChannelLabel(c).toUpperCase();
-                return item.$2.any((t) => cleanC.contains(t));
+                final alphanumC = cleanC.replaceAll(RegExp(r'[^A-Z0-9]'), '');
+                return item.$2.any((t) {
+                  final cleanT = t.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+                  return cleanC.contains(t) || alphanumC.contains(cleanT);
+                });
               },
               orElse: () => '',
             );
@@ -1160,19 +1179,23 @@ List<ChannelConfig> generateMontagePresetChannels({
       }
     }
 
-    // 5. Extended Limb Movement channels for PLM Preset
-    if (preset.name.contains('PLM')) {
+    // 5. Extended Limb Movement channels for PLM Preset or Comprehensive Preset
+    if (preset.name.contains('PLM') || preset.name.contains('Comprehensive')) {
       final legSignals = [
-        ('LAT', ['LAT', 'L-LEG', 'LEG_L', 'LEGL', 'EMG_LEG_L', 'TIB_L', 'TIB_LEFT']),
-        ('RAT', ['RAT', 'R-LEG', 'LEG_R', 'LEGR', 'EMG_LEG_R', 'TIB_R', 'TIB_RIGHT']),
-        ('Position', ['POS', 'POSITION', 'BODYPOS', 'SLEEP_POS']),
+        ('LAT', ['LAT', 'L-LEG', 'LEG_L', 'LEGL', 'EMG_LEG_L', 'TIB_L', 'TIB_LEFT', 'PLML', 'PLM_L', 'PLM-L', 'L-PLM', 'LPLM']),
+        ('RAT', ['RAT', 'R-LEG', 'LEG_R', 'LEGR', 'EMG_LEG_R', 'TIB_R', 'TIB_RIGHT', 'PLMR', 'PLM_R', 'PLM-R', 'R-PLM', 'RPLM']),
+        ('Position', ['POS', 'POSITION', 'BODYPOS', 'SLEEP_POS', 'POS.']),
       ];
       for (final item in legSignals) {
         final match = findMatchingElectrode(item.$1, availableChannels) ??
             availableChannels.firstWhere(
               (c) {
                 final cleanC = cleanChannelLabel(c).toUpperCase();
-                return item.$2.any((t) => cleanC.contains(t));
+                final alphanumC = cleanC.replaceAll(RegExp(r'[^A-Z0-9]'), '');
+                return item.$2.any((t) {
+                  final cleanT = t.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+                  return cleanC.contains(t) || alphanumC.contains(cleanT);
+                });
               },
               orElse: () => '',
             );

@@ -270,9 +270,9 @@ class AppConfig {
        featureAnalyses = featureAnalyses != null
            ? List<String>.from(featureAnalyses)
            : ['core', 'spindles', 'slow_waves', 'pac', 'nlg'],
-       customEventNames = customEventNames != null
+       customEventNames = (customEventNames != null && customEventNames.isNotEmpty)
            ? Map<int, String>.from(customEventNames)
-           : {},
+           : Map<int, String>.from(kDefaultAasmEventNames),
        workflowSteps = workflowSteps != null
            ? Map<String, bool>.from(workflowSteps)
            : {
@@ -573,6 +573,9 @@ class AppConfig {
           parsedEventNames[d] = v.toString().trim();
         }
       });
+    }
+    if (parsedEventNames.isEmpty) {
+      parsedEventNames.addAll(kDefaultAasmEventNames);
     }
 
     final parsedBands = <BandConfig>[];
@@ -2757,18 +2760,30 @@ class EegBackend {
         return old.copyWith(scoredEvents: newEvents);
       }
 
-      // 3. Otherwise, click outside -> clear all selections!
+      // 3. Single click on a channel: establish a point selection at this timestamp!
+      final pointSelection = EventSelection(
+        startSec: startSec,
+        endSec: startSec,
+        channel: channel,
+        startUv: startUv ?? 0.0,
+        endUv: endUv ?? 0.0,
+        peakToPeakUv: 0.0,
+      );
       final (periodogram, freqs) = _epochPeriodogramWithFreqs(
         eeg,
         old.currentEpoch,
         cfg,
       );
       return old.copyWith(
-        eventSelections: const [],
+        eventSelections: [pointSelection],
         currentEpochPeriodogram: periodogram,
         periodogramFreqs: freqs,
-        clearSelection: true,
-        clearEventSelections: true,
+        selectionStartSec: startSec,
+        selectionEndSec: startSec,
+        selectionChannel: channel,
+        selectionStartUv: startUv,
+        selectionEndUv: endUv,
+        selectionPeakToPeakUv: 0.0,
       );
     }
 

@@ -2440,32 +2440,59 @@ class SelectionOverlayPainter extends CustomPainter {
     final y2 =
         (baselineFraction - (endUv / viewport.amplitudeRangeUv) * 0.42 / n) *
         size.height;
-    final boxRect = Rect.fromLTRB(
-      math.min(x1, x2),
-      math.min(y1, y2),
-      math.max(x1, x2),
-      math.max(y1, y2),
-    );
-    canvas.drawRect(boxRect, Paint()..color = const Color(0x280A640A));
-    canvas.drawRect(
-      boxRect,
-      Paint()
-        ..color = const Color(0xFF0A640A)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0,
-    );
-    if (showDuration) {
+    final isPoint = (x2 - x1).abs() < 2.0;
+    if (isPoint) {
+      canvas.drawLine(
+        Offset(x1, 0),
+        Offset(x1, size.height),
+        Paint()
+          ..color = const Color(0xFF0A640A).withOpacity(0.85)
+          ..strokeWidth = 1.8,
+      );
+      canvas.drawCircle(
+        Offset(x1, (y1 + y2) / 2),
+        4.5,
+        Paint()..color = const Color(0xFF0A640A),
+      );
       _drawText(
         canvas,
-        "${(endSec - startSec).abs().toStringAsFixed(2)} s",
-        Offset(boxRect.center.dx, boxRect.bottom + 8),
+        'Point Marker',
+        Offset(x1, math.max(14, (y1 + y2) / 2 - 14)),
         style: const TextStyle(
           color: Color(0xFF0A640A),
-          fontSize: 11,
+          fontSize: 10,
           fontWeight: FontWeight.bold,
         ),
         align: TextAlign.center,
       );
+    } else {
+      final boxRect = Rect.fromLTRB(
+        math.min(x1, x2),
+        math.min(y1, y2),
+        math.max(x1, x2),
+        math.max(y1, y2),
+      );
+      canvas.drawRect(boxRect, Paint()..color = const Color(0x280A640A));
+      canvas.drawRect(
+        boxRect,
+        Paint()
+          ..color = const Color(0xFF0A640A)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0,
+      );
+      if (showDuration) {
+        _drawText(
+          canvas,
+          "${(endSec - startSec).abs().toStringAsFixed(2)} s",
+          Offset(boxRect.center.dx, boxRect.bottom + 8),
+          style: const TextStyle(
+            color: Color(0xFF0A640A),
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+          ),
+          align: TextAlign.center,
+        );
+      }
     }
   }
 

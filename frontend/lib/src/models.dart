@@ -103,6 +103,42 @@ class EventSelection {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Standard AASM Events & Shortcuts
+// ─────────────────────────────────────────────────────────────────────────────
+
+const Map<int, String> kDefaultAasmEventNames = {
+  0: 'Artifact',
+  1: 'Arousal',
+  2: 'Obstructive Apnea',
+  3: 'Central Apnea',
+  4: 'Hypopnea',
+  5: 'Mixed Apnea',
+  6: 'Desaturation',
+  7: 'Leg Movement',
+  8: 'PLM',
+  9: 'RERA',
+  10: 'Spindle',
+  11: 'K-Complex',
+  12: 'REM',
+};
+
+const Map<int, String> kDefaultAasmShortcuts = {
+  0: 'A',
+  1: 'F1',
+  2: 'F2',
+  3: 'F3',
+  4: 'F4',
+  5: 'F5',
+  6: 'F6',
+  7: 'F7',
+  8: 'F8',
+  9: 'F9',
+  10: 'F10',
+  11: 'F11',
+  12: 'F12',
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 class ScoredEvent {
   const ScoredEvent({
@@ -1199,6 +1235,21 @@ String? findMatchingElectrode(String target, List<String> available) {
     // ECG / EKG
     'ECG': ['EKG', 'ECG1', 'EKG1', 'HEART'],
     'EKG': ['ECG', 'ECG1', 'EKG1', 'HEART'],
+
+    // Limb Movement / Leg EMG / PLM
+    'LAT': ['LLEG', 'LEGL', 'EMGLEGL', 'TIBL', 'TIBLEFT', 'PLML', 'PLM1', 'LPLM'],
+    'RAT': ['RLEG', 'LEGR', 'EMGLEGR', 'TIBR', 'TIBRIGHT', 'PLMR', 'PLM2', 'RPLM'],
+    'PLML': ['LAT', 'LLEG', 'LEGL', 'TIBL', 'TIBLEFT', 'LPLM'],
+    'PLMR': ['RAT', 'RLEG', 'LEGR', 'TIBR', 'TIBRIGHT', 'RPLM'],
+    'PLM': ['LAT', 'RAT', 'LEG', 'TIBIALIS', 'LIMB'],
+
+    // Respiratory & Effort
+    'FLOW': ['CANNULA', 'THERMAL', 'THERMISTOR', 'AIRFLOW', 'NASAL', 'PNOSE', 'PRESSUREFLOW', 'FLOWTH'],
+    'THORAX': ['CHEST', 'THOR', 'THO', 'EFFORTTHOR', 'RIPTHORAX'],
+    'ABDOMEN': ['ABDO', 'ABD', 'EFFORTABDO', 'RIPABDOMEN'],
+    'SPO2': ['SAO2', 'OXIMETRY', 'PULSEOX', 'SAT', 'PLETH', 'PULSE'],
+    'SNORE': ['MIC', 'TRACHEA', 'PRESSURESNORE'],
+    'POSITION': ['POS', 'BODYPOS', 'SLEEPPOS'],
   };
 
   final candList = aliases[targetClean];

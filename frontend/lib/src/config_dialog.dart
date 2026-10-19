@@ -903,7 +903,7 @@ class _ConfigDialogState extends State<ConfigDialog> {
                           _ChannelDropdown(
                             label: 'Channel',
                             channelLabels: labels,
-                            value: _working.spectrogramChannelIndex.clamp(
+                            value: labels.isEmpty ? 0 : _working.spectrogramChannelIndex.clamp(
                               0,
                               labels.length - 1,
                             ),
@@ -914,7 +914,7 @@ class _ConfigDialogState extends State<ConfigDialog> {
                           _ChannelDropdown(
                             label: 'SWA channel',
                             channelLabels: labels,
-                            value: _working.swaChannelIndex.clamp(
+                            value: labels.isEmpty ? 0 : _working.swaChannelIndex.clamp(
                               0,
                               labels.length - 1,
                             ),
@@ -956,7 +956,7 @@ class _ConfigDialogState extends State<ConfigDialog> {
                           _ChannelDropdown(
                             label: 'Channel',
                             channelLabels: labels,
-                            value: _working.periodogramChannelIndex.clamp(
+                            value: labels.isEmpty ? 0 : _working.periodogramChannelIndex.clamp(
                               0,
                               labels.length - 1,
                             ),
@@ -1002,7 +1002,7 @@ class _ConfigDialogState extends State<ConfigDialog> {
                             _ChannelDropdown(
                               label: 'Channel',
                               channelLabels: labels,
-                              value: _working.tfChannelIndex.clamp(
+                              value: labels.isEmpty ? 0 : _working.tfChannelIndex.clamp(
                                 0,
                                 labels.length - 1,
                               ),

@@ -17,11 +17,11 @@
 <p align="center">
   <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/arunsasidharan84/CCS_SleepStudio?style=for-the-badge&color=2563eb&label=RELEASE"></a>
   <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/actions/workflows/build.yml"><img alt="Desktop build" src="https://img.shields.io/github/actions/workflow/status/arunsasidharan84/CCS_SleepStudio/build.yml?style=for-the-badge&label=BUILD"></a>
-  <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/arunsasidharan84/CCS_SleepStudio/total?style=for-the-badge&color=16a34a&label=DOWNLOADS"></a>
+  <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/releases"><img alt="Unique Downloads" src="https://img.shields.io/github/downloads/arunsasidharan84/CCS_SleepStudio/latest/total?style=for-the-badge&color=16a34a&label=UNIQUE%20DOWNLOADS"></a>
 </p>
 
 <p align="center">
-  <b>Current version: 1.40.0</b> ·
+  <b>Current version: 1.42.0</b> ·
   <a href="CHANGELOG.md">Detailed changelog</a> ·
   <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/issues">Report a problem</a>
 </p>

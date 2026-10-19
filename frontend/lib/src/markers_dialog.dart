@@ -100,31 +100,11 @@ class _MarkersDialogState extends State<MarkersDialog> {
 
   Future<void> _showEditEventNamesDialog(BuildContext context) async {
     final controllers = <int, TextEditingController>{};
-    const defaults = <int, String>{
-      0: 'Artifact',
-      1: 'Event 1',
-      2: 'Event 2',
-      3: 'Event 3',
-      4: 'Event 4',
-      5: 'Event 5',
-      6: 'Event 6',
-      7: 'Event 7',
-      8: 'Event 8',
-    };
-    const shortcuts = <int, String>{
-      0: 'A',
-      1: 'F1',
-      2: 'F2',
-      3: 'F3',
-      4: 'F4',
-      5: 'F5',
-      6: 'F6',
-      7: 'F7',
-      8: 'F8',
-    };
+    final defaults = kDefaultAasmEventNames;
+    final shortcuts = kDefaultAasmShortcuts;
 
-    for (var i = 0; i <= 8; i++) {
-      final curName = widget.customEventNames?[i] ?? defaults[i]!;
+    for (var i = 0; i <= 12; i++) {
+      final curName = widget.customEventNames?[i] ?? defaults[i] ?? (i == 0 ? 'Artifact' : 'Event $i');
       controllers[i] = TextEditingController(text: curName);
     }
 
@@ -146,17 +126,17 @@ class _MarkersDialogState extends State<MarkersDialog> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Name your event types. These will appear in the application menus, shortcuts, and event overlays.',
+                  'Name your event types. Standard AASM clinical events are pre-defined by default and fully customizable.',
                   style: TextStyle(fontSize: 12, color: Colors.black54),
                 ),
                 const SizedBox(height: 12),
-                for (var i = 0; i <= 8; i++)
+                for (var i = 0; i <= 12; i++)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: Row(
                       children: [
                         Container(
-                          width: 34,
+                          width: 38,
                           alignment: Alignment.center,
                           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                           decoration: BoxDecoration(
@@ -165,7 +145,7 @@ class _MarkersDialogState extends State<MarkersDialog> {
                             border: Border.all(color: _eventColor(i), width: 1.0),
                           ),
                           child: Text(
-                            shortcuts[i]!,
+                            shortcuts[i] ?? 'F$i',
                             style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
                           ),
                         ),
@@ -178,7 +158,7 @@ class _MarkersDialogState extends State<MarkersDialog> {
                               isDense: true,
                               contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                               border: const OutlineInputBorder(),
-                              hintText: defaults[i],
+                              hintText: defaults[i] ?? 'Event $i',
                             ),
                           ),
                         ),
@@ -192,8 +172,8 @@ class _MarkersDialogState extends State<MarkersDialog> {
         actions: [
           TextButton(
             onPressed: () {
-              for (var i = 0; i <= 8; i++) {
-                controllers[i]!.text = defaults[i]!;
+              for (var i = 0; i <= 12; i++) {
+                controllers[i]!.text = defaults[i] ?? 'Event $i';
               }
             },
             child: const Text('Reset Defaults'),
@@ -212,7 +192,7 @@ class _MarkersDialogState extends State<MarkersDialog> {
 
     if (saved == true) {
       final newNames = <int, String>{};
-      for (var i = 0; i <= 8; i++) {
+      for (var i = 0; i <= 12; i++) {
         final text = controllers[i]!.text.trim();
         if (text.isNotEmpty) {
           newNames[i] = text;

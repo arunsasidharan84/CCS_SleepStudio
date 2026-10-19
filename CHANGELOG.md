@@ -4,6 +4,34 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.42.0]
+*   **Safe Error Dismissal & Config Dialog Fix:**
+    - Resolved `Invalid argument(s): 0` index clamping crash in `ConfigDialog` when opening settings with no file loaded.
+    - Added a global, styled **Back / Dismiss View** button to `ErrorWidget.builder` allowing immediate recovery and dismissal from any unhandled view exception without restarting the app.
+*   **Configurable Workflow & Quick Access:**
+    - Added a direct configure icon (`tune`) on the workflow bar for instant access to workflow customization.
+    - Workflow strip and individual workflow steps can be toggled and configured from settings.
+*   **Standard AASM Marker Defaults:**
+    - Pre-defined standard clinical AASM markers across all shortcut keys (0–12 / A, F1–F12): *Artifact*, *Arousal*, *Obstructive Apnea*, *Central Apnea*, *Hypopnea*, *Mixed Apnea*, *Desaturation*, *Leg Movement*, *PLM*, *RERA*, *Spindle*, *K-Complex*, and *REM*.
+    - Fully editable with a **Reset Defaults** button in the marker configuration dialog.
+*   **Mouse-Click Point Markers:**
+    - Added single-click point marker placement on channels (`startSec == endSec`).
+    - Rendered with an instant vertical pinpoint indicator, dot, and label in `SelectionOverlayPainter`.
+    - Added comprehensive quick AASM marker items directly in the channel right-click context menu.
+*   **Adaptive Low-Voltage REM Detection & LRLR Burst Grouping:**
+    - Integrated adaptive baseline standard-deviation thresholding (`relativeThresholdSd: 2.0`) in `RemDetector` to reliably capture low-amplitude ocular saccades in adult sleep recordings.
+    - Replaced rigid dot-product criteria with Pearson correlation ($r \le 0.2$), eliminating false rejections from slight DC offsets and in-phase blinks.
+    - Implemented **LRLR Alternating Burst Detection** ($\ge 3$ consecutive Left-Right-Left-Right saccade cycles in $\le 2.2$ s) with dedicated `.ccsrem` reporting.
+*   **Waveform Pattern Template Search (NCC):**
+    - Built interactive sliding Normalized Cross-Correlation (NCC) pattern matcher (`frontend/lib/src/pattern_search.dart`).
+    - Allows selecting any waveform snippet in a channel and scanning across the entire night or specific sleep stages (N1, N2, N3, REM, Wake).
+    - Includes interactive preview canvas, similarity threshold slider ($50\% - 98\%$), optional inverted matching, match jump navigation, and 1-click **Mark All as Events**.
+*   **AASM + PLM + OSA Montage Preset & Robust Channel Matching:**
+    - Added `AASM Sleep + PLM + OSA (Comprehensive PSG)` preset to `MontagePresets`.
+    - Expanded alias dictionary and alphanumeric normalization for pre-referenced PLM and respiratory channels (`PLMl`, `PLMr`, `Pressure Flow`, `RIP Thorax`, etc.).
+*   **README Unique Downloads Badge:**
+    - Updated download metrics badge to latest release unique downloads to prevent duplication across multiple version updates.
+
 ## [1.41.0]
 *   **Configurable Clinical Workflow Bar in Settings:**
     - Added a dedicated **Workflow** configuration tab in the settings dialog (`ConfigDialog`).

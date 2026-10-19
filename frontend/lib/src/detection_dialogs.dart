@@ -2470,9 +2470,11 @@ class _RemDetectionDialogState extends State<RemDetectionDialog> {
   late String _selectedRoc;
   double _minDuration = 0.1;
   double _maxDuration = 1.2;
-  double _minAmplitude = 25.0;
-  double _minVelocity = 150.0;
+  double _minAmplitude = 15.0;
+  double _minVelocity = 75.0;
   bool _restrictToRem = true;
+  bool _adaptiveThreshold = true;
+  bool _detectLrlr = true;
   double _filterLow = 0.5;
   double _filterHigh = 5.0;
 
@@ -2745,6 +2747,28 @@ class _RemDetectionDialogState extends State<RemDetectionDialog> {
                 value: _restrictToRem,
                 onChanged: (v) => setState(() => _restrictToRem = v ?? false),
               ),
+              CheckboxListTile(
+                title: const Text('Adaptive Baseline Threshold (Recommended)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                subtitle: const Text(
+                  'Scales amplitude and velocity thresholds relative to baseline noise during REM sleep (prevents missing low-voltage saccades).',
+                  style: TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                value: _adaptiveThreshold,
+                onChanged: (v) => setState(() => _adaptiveThreshold = v ?? true),
+              ),
+              CheckboxListTile(
+                title: const Text('Detect LRLR Alternating Saccades', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                subtitle: const Text(
+                  'Identifies rhythmic Left-Right-Left-Right conjugate eye movement bursts (>= 3 alternating saccades in <= 2.2s).',
+                  style: TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                value: _detectLrlr,
+                onChanged: (v) => setState(() => _detectLrlr = v ?? true),
+              ),
             ],
           ),
         ),
@@ -2776,6 +2800,8 @@ class _RemDetectionDialogState extends State<RemDetectionDialog> {
                 restrictToRemStage: _restrictToRem,
                 frequencyLowHz: _filterLow,
                 frequencyHighHz: _filterHigh,
+                adaptiveThreshold: _adaptiveThreshold,
+                detectLrlrBursts: _detectLrlr,
               ),
             );
           },

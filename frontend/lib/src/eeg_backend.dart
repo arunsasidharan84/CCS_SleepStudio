@@ -2765,8 +2765,8 @@ class EegBackend {
         startSec: startSec,
         endSec: startSec,
         channel: channel,
-        startUv: startUv ?? 0.0,
-        endUv: endUv ?? 0.0,
+        startUv: startUv,
+        endUv: endUv,
         peakToPeakUv: 0.0,
       );
       final (periodogram, freqs) = _epochPeriodogramWithFreqs(

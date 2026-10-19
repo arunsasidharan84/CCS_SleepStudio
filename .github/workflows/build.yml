@@ -128,6 +128,23 @@ jobs:
           cp backend/group_stats.py "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
           test -x "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/analyse-nidra"
 
+      - name: Verify Universal architectures (Lite - Intel x86_64 & Apple Silicon arm64)
+        run: |
+          APP="frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app"
+          echo "=== App Executable Architectures (Lite) ==="
+          lipo -info "$APP/Contents/MacOS/CCS Sleep Studio"
+          lipo -info "$APP/Contents/MacOS/CCS Sleep Studio" | grep -q "x86_64" || (echo "ERROR: Missing Intel x86_64 in app binary" && exit 1)
+          lipo -info "$APP/Contents/MacOS/CCS Sleep Studio" | grep -q "arm64" || (echo "ERROR: Missing Apple Silicon arm64 in app binary" && exit 1)
+          echo "=== Rust Bridge Dylib Architectures (Lite) ==="
+          lipo -info "$APP/Contents/Frameworks/librust_sleep_eeg.dylib"
+          lipo -info "$APP/Contents/Frameworks/librust_sleep_eeg.dylib" | grep -q "x86_64" || exit 1
+          lipo -info "$APP/Contents/Frameworks/librust_sleep_eeg.dylib" | grep -q "arm64" || exit 1
+          echo "=== AnalyseNidra CLI Architectures (Lite) ==="
+          lipo -info "$APP/Contents/Resources/analyse-nidra"
+          lipo -info "$APP/Contents/Resources/analyse-nidra" | grep -q "x86_64" || exit 1
+          lipo -info "$APP/Contents/Resources/analyse-nidra" | grep -q "arm64" || exit 1
+          echo "Lite Universal verification PASSED."
+
       - name: Ad-hoc sign macOS app (Lite)
         run: codesign --force --deep --sign - "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app"
 
@@ -149,6 +166,23 @@ jobs:
           cp -r analyseNidra/assets/models "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
           cp backend/group_stats.py "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/"
           test -x "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app/Contents/Resources/analyse-nidra"
+
+      - name: Verify Universal architectures (Full - Intel x86_64 & Apple Silicon arm64)
+        run: |
+          APP="frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app"
+          echo "=== App Executable Architectures (Full) ==="
+          lipo -info "$APP/Contents/MacOS/CCS Sleep Studio"
+          lipo -info "$APP/Contents/MacOS/CCS Sleep Studio" | grep -q "x86_64" || (echo "ERROR: Missing Intel x86_64 in app binary" && exit 1)
+          lipo -info "$APP/Contents/MacOS/CCS Sleep Studio" | grep -q "arm64" || (echo "ERROR: Missing Apple Silicon arm64 in app binary" && exit 1)
+          echo "=== Rust Bridge Dylib Architectures (Full) ==="
+          lipo -info "$APP/Contents/Frameworks/librust_sleep_eeg.dylib"
+          lipo -info "$APP/Contents/Frameworks/librust_sleep_eeg.dylib" | grep -q "x86_64" || exit 1
+          lipo -info "$APP/Contents/Frameworks/librust_sleep_eeg.dylib" | grep -q "arm64" || exit 1
+          echo "=== AnalyseNidra CLI Architectures (Full) ==="
+          lipo -info "$APP/Contents/Resources/analyse-nidra"
+          lipo -info "$APP/Contents/Resources/analyse-nidra" | grep -q "x86_64" || exit 1
+          lipo -info "$APP/Contents/Resources/analyse-nidra" | grep -q "arm64" || exit 1
+          echo "Full Universal verification PASSED."
 
       - name: Ad-hoc sign macOS app (Full)
         run: codesign --force --deep --sign - "frontend/build/macos/Build/Products/Release/CCS Sleep Studio.app"

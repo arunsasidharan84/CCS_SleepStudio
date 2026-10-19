@@ -584,7 +584,7 @@ class _PatternSearchDialogState extends State<PatternSearchDialog> {
                           Expanded(
                             child: ListView.separated(
                               itemCount: _matches.length,
-                              separatorBuilder: (_, __) => const Divider(height: 1),
+                              separatorBuilder: (context, index) => const Divider(height: 1),
                               itemBuilder: (ctx, i) {
                                 final m = _matches[i];
                                 final timeStr = _formatSec(m.startSec);

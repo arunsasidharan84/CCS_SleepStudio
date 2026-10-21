@@ -2013,19 +2013,24 @@ class TimelinePainter extends CustomPainter {
       }
     }
 
-    // Draw central vertical dashed line (at 15s)
-    final verticalPaint = Paint()
-      ..color = Colors.black.withOpacity(0.06)
-      ..strokeWidth = 1.0;
+    // Draw central vertical dashed line (at 15s) only in standard 30s/40s windows
+    final displayTotalSec = viewport.visibleDurationSeconds > 0
+        ? viewport.visibleDurationSeconds
+        : 40.0;
+    if (displayTotalSec <= 40.5) {
+      final verticalPaint = Paint()
+        ..color = Colors.black.withOpacity(0.06)
+        ..strokeWidth = 1.0;
 
-    final drawWidth = size.width - leftPad;
-    final centerX = leftPad + drawWidth / 2;
-    _drawDashedLine(
-      canvas,
-      Offset(centerX, 0),
-      Offset(centerX, size.height),
-      verticalPaint,
-    );
+      final drawWidth = size.width - leftPad;
+      final centerX = leftPad + drawWidth / 2;
+      _drawDashedLine(
+        canvas,
+        Offset(centerX, 0),
+        Offset(centerX, size.height),
+        verticalPaint,
+      );
+    }
   }
 
   @override
@@ -2059,10 +2064,14 @@ Color _channelColorForName(String name, {required int fallbackIndex}) {
   }
 }
 
-void _drawDashedLine(Canvas canvas, Offset p1, Offset p2, Paint paint) {
-  const dashLen = 8.0;
-  const gapLen = 4.0;
-
+void _drawDashedLine(
+  Canvas canvas,
+  Offset p1,
+  Offset p2,
+  Paint paint, {
+  double dashLen = 8.0,
+  double gapLen = 4.0,
+}) {
   if (p1.dy == p2.dy) {
     // Horizontal
     var x = p1.dx;
@@ -2143,12 +2152,19 @@ class SelectionOverlayPainter extends CustomPainter {
       canvas.drawRect(Rect.fromLTRB(r, 0, size.width, size.height), paint);
     } else {
       final grid = Paint()
-        ..color = Colors.black.withOpacity(0.18)
-        ..strokeWidth = 0.8;
+        ..color = Colors.black.withOpacity(0.35)
+        ..strokeWidth = 1.0;
       final first = (viewport.visibleStartSeconds / epochLen).ceil();
       for (var k = first; k * epochLen <= viewport.visibleStartSeconds + displayTotalSec; k++) {
         final x = xAt(k * epochLen);
-        canvas.drawLine(Offset(x, 0), Offset(x, size.height), grid);
+        _drawDashedLine(
+          canvas,
+          Offset(x, 0),
+          Offset(x, size.height),
+          grid,
+          dashLen: 3.0,
+          gapLen: 3.0,
+        );
       }
       final l = xAt(epochStart);
       final r = xAt(epochStart + epochLen);
@@ -2167,6 +2183,7 @@ class SelectionOverlayPainter extends CustomPainter {
 
     final visibleStart = viewport.visibleStartSeconds;
     final visibleEnd = visibleStart + displayTotalSec;
+    final badgeRowRight = <double>[leftPad, leftPad, leftPad];
     for (final event in viewport.scoredEvents) {
       if (isMarkerDisabled(event, viewport.disabledMarkerLabels)) continue;
       final rawStart = math.min(event.startSec, event.endSec);
@@ -2225,12 +2242,22 @@ class SelectionOverlayPainter extends CustomPainter {
         leftPad,
         math.max(leftPad, size.width - labelPainter.width - 4),
       ).toDouble();
+
+      // Find an available vertical row to avoid pill badges colliding
+      var targetRow = 0;
+      while (targetRow < badgeRowRight.length - 1 &&
+          bgX < badgeRowRight[targetRow]) {
+        targetRow++;
+      }
+      final badgeY = 2.0 + targetRow * (labelPainter.height + 3);
+      badgeRowRight[targetRow] = bgX + labelPainter.width + 6;
+
       final bgRect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(bgX, 2, labelPainter.width + 4, labelPainter.height + 2),
+        Rect.fromLTWH(bgX, badgeY, labelPainter.width + 4, labelPainter.height + 2),
         const Radius.circular(3),
       );
       canvas.drawRRect(bgRect, Paint()..color = color.withOpacity(0.88));
-      labelPainter.paint(canvas, Offset(bgX + 2, 3));
+      labelPainter.paint(canvas, Offset(bgX + 2, badgeY + 1));
     }
     // Active drag selection is drawn on top. Committed selections remain
     // visible and contribute to the total duration (multi-select).

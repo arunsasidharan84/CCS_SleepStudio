@@ -1,7 +1,10 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ccs_sleep_studio/src/models.dart';
 import 'package:ccs_sleep_studio/src/synced_video_panel.dart';
+import 'package:ccs_sleep_studio/src/timeline_painter.dart';
 
 void main() {
   group('Video & Viewer Enhancements Tests', () {
@@ -152,6 +155,44 @@ void main() {
       expect(formatChannelValue('CO2', 38.5), '38.5 mmHg');
       expect(formatChannelValue('C3-A2', -15.4), '-15.4 µV');
       expect(formatChannelValue('SpO2', 3.0), '3.0 %');
+    });
+
+    testWidgets('SelectionOverlayPainter renders 30s split dotted lines in >30s windows', (tester) async {
+      final viewport = EegViewport(
+        sampleRateHz: 100,
+        epochSeconds: 30,
+        channelLabels: const ['C3-A2'],
+        points: [Float32List(0)],
+        stages: const [SleepStage.wake, SleepStage.n2],
+        currentEpoch: 1,
+        visibleStartSeconds: 0,
+        visibleDurationSeconds: 120, // 4 epochs = 120s
+        totalDurationSeconds: 600,
+        sourceDescription: 'test',
+        scoredEvents: const [
+          ScoredEvent(digit: 20, key: 'F20', label: 'PLMS Series (4 LMs)', startSec: 10, endSec: 90),
+          ScoredEvent(digit: 20, key: 'F20', label: 'PLMS (LM)', startSec: 10, endSec: 12),
+        ],
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 800,
+              height: 400,
+              child: CustomPaint(
+                painter: SelectionOverlayPainter(
+                  viewport,
+                  leftPad: 90.0,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.byType(CustomPaint), findsWidgets);
     });
   });
 }

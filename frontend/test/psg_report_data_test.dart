@@ -122,6 +122,65 @@ void main() {
     expect(events.first.label, 'PLM');
   });
 
+  test('creates overarching PLMS and PLMW series extent markers enclosing multiple leg movements', () {
+    final report = {
+      'series': [
+        [100.0, 220.0, 4],
+        [300.0, 450.0, 5],
+      ],
+      'movements': [
+        // Series 0: in Sleep (N2)
+        {'start': 100.0, 'end': 102.0, 'series': 0, 'stage': 'N2', 'clm': true, 'periodic': true},
+        {'start': 130.0, 'end': 132.0, 'series': 0, 'stage': 'N2', 'clm': true, 'periodic': true},
+        {'start': 160.0, 'end': 162.0, 'series': 0, 'stage': 'N2', 'clm': true, 'periodic': true},
+        {'start': 218.0, 'end': 220.0, 'series': 0, 'stage': 'N2', 'clm': true, 'periodic': true},
+        // Isolated movement in Wake
+        {'start': 250.0, 'end': 252.0, 'stage': 'W', 'clm': true, 'periodic': false},
+        // Series 1: in Wake (W)
+        {'start': 300.0, 'end': 302.0, 'series': 1, 'stage': 'W', 'clm': true, 'periodic': true},
+        {'start': 330.0, 'end': 332.0, 'series': 1, 'stage': 'W', 'clm': true, 'periodic': true},
+        {'start': 360.0, 'end': 362.0, 'series': 1, 'stage': 'W', 'clm': true, 'periodic': true},
+        {'start': 400.0, 'end': 402.0, 'series': 1, 'stage': 'W', 'clm': true, 'periodic': true},
+        {'start': 448.0, 'end': 450.0, 'series': 1, 'stage': 'W', 'clm': true, 'periodic': true},
+      ],
+    };
+
+    final events = plmEventsFromReport(report);
+    // 2 series markers + 10 movements = 12 events
+    expect(events.length, 12);
+
+    // First event is PLMS Series extent spanning 100s to 220s (120s duration)
+    final series0 = events[0];
+    expect(series0.type, 'PLM Series');
+    expect(series0.label, 'PLMS Series (4 LMs)');
+    expect(series0.startSec, 100.0);
+    expect(series0.endSec, 220.0);
+    expect(series0.digit, kDigitPlm);
+
+    // Second event is PLMW Series extent spanning 300s to 450s (150s duration)
+    final series1 = events[1];
+    expect(series1.type, 'PLM Series');
+    expect(series1.label, 'PLMW Series (5 LMs)');
+    expect(series1.startSec, 300.0);
+    expect(series1.endSec, 450.0);
+    expect(series1.digit, kDigitPlm);
+
+    // Individual movements in sleep are labeled PLMS (LM)
+    final lm0 = events[2];
+    expect(lm0.label, 'PLMS (LM)');
+    expect(lm0.digit, kDigitPlm);
+
+    // Isolated movement is labeled Leg Movement
+    final isolated = events[6];
+    expect(isolated.label, 'Leg Movement');
+    expect(isolated.digit, kDigitLegMovement);
+
+    // Individual movements in wake are labeled PLMW (LM)
+    final lmWake = events[7];
+    expect(lmWake.label, 'PLMW (LM)');
+    expect(lmWake.digit, kDigitPlm);
+  });
+
   test('summary sections and interpretation mention key indices', () {
     final sections = respiratorySummarySections(_respiratoryReport());
     final flat = sections.expand((s) => s.$2).toList();

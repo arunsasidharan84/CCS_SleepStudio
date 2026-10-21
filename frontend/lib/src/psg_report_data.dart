@@ -187,21 +187,100 @@ List<ScoredEvent> respiratoryEventsFromReport(
 
 List<ScoredEvent> plmEventsFromReport(Map<String, dynamic> report) {
   final out = <ScoredEvent>[];
-  for (final m in (report['movements'] as List? ?? const [])) {
-    if (m is! Map || m['clm'] != true) continue;
-    final periodic = m['periodic'] == true;
-    final digit = periodic ? kDigitPlm : kDigitLegMovement;
+  final rawSeries = report['series'] as List? ?? const [];
+  final movementsList =
+      (report['movements'] as List? ?? const []).whereType<Map>().toList();
+
+  // 1. Overarching PLM / PLMS / PLMW Series extent markers
+  for (var i = 0; i < rawSeries.length; i++) {
+    final s = rawSeries[i];
+    double start = 0;
+    double end = 0;
+    int count = 0;
+    if (s is List && s.length >= 2) {
+      start = _num(s[0], 0);
+      end = _num(s[1], 0);
+      count = s.length >= 3 ? _num(s[2], 0).round() : 0;
+    } else if (s is Map) {
+      start = _num(s['start'], 0);
+      end = _num(s['end'], 0);
+      count = _num(s['count'], 0).round();
+    } else {
+      continue;
+    }
+    if (end <= start) continue;
+
+    // Match constituent movements for this series
+    final inSeries = movementsList.where((m) {
+      if (m['series'] == i) return true;
+      final mStart = _num(m['start'], -1);
+      final mEnd = _num(m['end'], -1);
+      return mStart >= start - 1.0 && mEnd <= end + 1.0;
+    }).toList();
+
+    if (count == 0 && inSeries.isNotEmpty) {
+      count = inSeries.length;
+    }
+
+    final sleepCount = inSeries.where((m) {
+      final st = (m['stage'] ?? '').toString().toUpperCase();
+      return st.isNotEmpty && st != 'W' && st != 'WAKE';
+    }).length;
+    final wakeCount = inSeries.where((m) {
+      final st = (m['stage'] ?? '').toString().toUpperCase();
+      return st == 'W' || st == 'WAKE';
+    }).length;
+
+    final String prefix;
+    if (inSeries.isEmpty || (sleepCount == 0 && wakeCount == 0)) {
+      prefix = 'PLM';
+    } else if (sleepCount >= wakeCount) {
+      prefix = 'PLMS';
+    } else {
+      prefix = 'PLMW';
+    }
+
+    final label = count > 0 ? '$prefix Series ($count LMs)' : '$prefix Series';
+
     out.add(
       ScoredEvent(
-        digit: digit,
-        key: 'F$digit',
-        label: periodic ? 'PLM' : 'Leg Movement',
-        type: 'Limb Movement',
+        digit: kDigitPlm,
+        key: 'F$kDigitPlm',
+        label: label,
+        type: 'PLM Series',
+        startSec: start,
+        endSec: end,
+      ),
+    );
+  }
+
+  // 2. Individual leg movements
+  for (final m in movementsList) {
+    if (m['clm'] != true) continue;
+    final periodic = m['periodic'] == true;
+    final st = (m['stage'] ?? '').toString().toUpperCase();
+    final isSleep = st.isNotEmpty && st != 'W' && st != 'WAKE';
+    final isWake = st == 'W' || st == 'WAKE';
+
+    final String label;
+    if (periodic) {
+      label = isSleep ? 'PLMS (LM)' : (isWake ? 'PLMW (LM)' : 'PLM');
+    } else {
+      label = 'Leg Movement';
+    }
+
+    out.add(
+      ScoredEvent(
+        digit: periodic ? kDigitPlm : kDigitLegMovement,
+        key: 'F${periodic ? kDigitPlm : kDigitLegMovement}',
+        label: label,
+        type: periodic ? 'PLM LM' : 'Limb Movement',
         startSec: _num(m['start'], 0),
         endSec: _num(m['end'], 0),
       ),
     );
   }
+
   return out;
 }
 

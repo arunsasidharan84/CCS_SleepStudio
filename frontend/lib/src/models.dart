@@ -324,6 +324,7 @@ class EegViewport {
     this.scoredEvents = const [],
     this.disabledMarkerLabels = const {},
     this.visibleChannelLabels = const [],
+    this.visibleChannelSourceLabels = const [],
     this.visibleChannelSourceIndices = const [],
     this.visibleChannelColors = const [],
     this.visibleChannelScales = const [],
@@ -435,6 +436,7 @@ class EegViewport {
   final List<ScoredEvent> scoredEvents;
   final Set<String> disabledMarkerLabels;
   final List<String> visibleChannelLabels;
+  final List<String> visibleChannelSourceLabels;
   final List<int> visibleChannelSourceIndices;
   final List<String> visibleChannelColors;
   final List<double> visibleChannelScales;
@@ -488,6 +490,7 @@ class EegViewport {
     List<ScoredEvent>? scoredEvents,
     Set<String>? disabledMarkerLabels,
     List<String>? visibleChannelLabels,
+    List<String>? visibleChannelSourceLabels,
     List<int>? visibleChannelSourceIndices,
     List<String>? visibleChannelColors,
     List<double>? visibleChannelScales,
@@ -596,6 +599,8 @@ class EegViewport {
       disabledMarkerLabels:
           disabledMarkerLabels ?? this.disabledMarkerLabels,
       visibleChannelLabels: visibleChannelLabels ?? this.visibleChannelLabels,
+      visibleChannelSourceLabels:
+          visibleChannelSourceLabels ?? this.visibleChannelSourceLabels,
       visibleChannelSourceIndices:
           visibleChannelSourceIndices ?? this.visibleChannelSourceIndices,
       visibleChannelColors: visibleChannelColors ?? this.visibleChannelColors,
@@ -1175,6 +1180,7 @@ String? findMatchingElectrode(String target, List<String> available) {
   String clean(String s) {
     return s
         .toUpperCase()
+        .replaceAll(RegExp(r'^(EEG|POL|EOG)[\s\-_]+'), '')
         .replaceAll(RegExp(r'^(EEG|POL)[\s\-_]*'), '')
         .replaceAll(RegExp(r'[\s\-_]*(REF|REFERENCE)$'), '')
         .replaceAll(RegExp(r'[^A-Z0-9]'), '');
@@ -1215,6 +1221,7 @@ String? findMatchingElectrode(String target, List<String> available) {
     'E1': [
       'EOG1',
       'LOC',
+      'LOC1',
       'EOGL',
       'LEOG',
       'EOGLEFT',
@@ -1222,21 +1229,51 @@ String? findMatchingElectrode(String target, List<String> available) {
       'EYE1',
       'EYEL',
       'EOG1REF',
+      'EOGLOC',
+      'EOGLOC1',
     ],
     'EOG1': [
       'E1',
       'LOC',
+      'LOC1',
       'EOGL',
       'LEOG',
       'EOGLEFT',
       'LEFTEOG',
       'EYE1',
       'EYEL',
+      'EOGLOC',
+      'EOGLOC1',
     ],
-    'LOC': ['E1', 'EOG1', 'EOGL', 'LEOG', 'EOGLEFT', 'LEFTEOG'],
+    'LOC': [
+      'E1',
+      'EOG1',
+      'LOC1',
+      'EOGL',
+      'LEOG',
+      'EOGLEFT',
+      'LEFTEOG',
+      'EYE1',
+      'EOGLOC',
+      'EOGLOC1',
+    ],
+    'LOC1': [
+      'E1',
+      'EOG1',
+      'LOC',
+      'EOGL',
+      'LEOG',
+      'EOGLEFT',
+      'LEFTEOG',
+      'EYE1',
+      'EOGLOC',
+      'EOGLOC1',
+    ],
     'E2': [
       'EOG2',
       'ROC',
+      'ROC1',
+      'ROC2',
       'EOGR',
       'REOG',
       'EOGRIGHT',
@@ -1244,18 +1281,67 @@ String? findMatchingElectrode(String target, List<String> available) {
       'EYE2',
       'EYER',
       'EOG2REF',
+      'EOGROC',
+      'EOGROC1',
+      'EOGROC2',
     ],
     'EOG2': [
       'E2',
       'ROC',
+      'ROC1',
+      'ROC2',
       'EOGR',
       'REOG',
       'EOGRIGHT',
       'RIGHTEOG',
       'EYE2',
       'EYER',
+      'EOGROC',
+      'EOGROC1',
+      'EOGROC2',
     ],
-    'ROC': ['E2', 'EOG2', 'EOGR', 'REOG', 'EOGRIGHT', 'RIGHTEOG'],
+    'ROC': [
+      'E2',
+      'EOG2',
+      'ROC1',
+      'ROC2',
+      'EOGR',
+      'REOG',
+      'EOGRIGHT',
+      'RIGHTEOG',
+      'EYE2',
+      'EOGROC',
+      'EOGROC1',
+      'EOGROC2',
+    ],
+    'ROC1': [
+      'E2',
+      'EOG2',
+      'ROC',
+      'ROC2',
+      'EOGR',
+      'REOG',
+      'EOGRIGHT',
+      'RIGHTEOG',
+      'EYE2',
+      'EOGROC',
+      'EOGROC1',
+      'EOGROC2',
+    ],
+    'ROC2': [
+      'E2',
+      'EOG2',
+      'ROC',
+      'ROC1',
+      'EOGR',
+      'REOG',
+      'EOGRIGHT',
+      'RIGHTEOG',
+      'EYE2',
+      'EOGROC',
+      'EOGROC1',
+      'EOGROC2',
+    ],
 
     // EMG / Chin channels
     'CHIN1': [
@@ -1323,10 +1409,10 @@ String? findPreReferencedChannel(String active, String ref, List<String> availab
   final cleanRef = ref.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
 
   final activeAliases = <String>{cleanActive};
-  if (cleanActive == 'E1' || cleanActive == 'EOG1' || cleanActive == 'LOC') {
-    activeAliases.addAll(['E1', 'EOG1', 'LOC', 'EOGL', 'LEOG', 'EYE1']);
-  } else if (cleanActive == 'E2' || cleanActive == 'EOG2' || cleanActive == 'ROC') {
-    activeAliases.addAll(['E2', 'EOG2', 'ROC', 'EOGR', 'REOG', 'EYE2']);
+  if (cleanActive == 'E1' || cleanActive == 'EOG1' || cleanActive == 'LOC' || cleanActive == 'LOC1') {
+    activeAliases.addAll(['E1', 'EOG1', 'LOC', 'LOC1', 'EOGL', 'LEOG', 'EYE1', 'EOGLOC', 'EOGLOC1']);
+  } else if (cleanActive == 'E2' || cleanActive == 'EOG2' || cleanActive == 'ROC' || cleanActive == 'ROC1' || cleanActive == 'ROC2') {
+    activeAliases.addAll(['E2', 'EOG2', 'ROC', 'ROC1', 'ROC2', 'EOGR', 'REOG', 'EYE2', 'EOGROC', 'EOGROC1', 'EOGROC2']);
   } else if (cleanActive == 'CHIN1' || cleanActive == 'EMG1') {
     activeAliases.addAll(['CHIN1', 'EMG1', 'CHIN', 'EMG']);
   }

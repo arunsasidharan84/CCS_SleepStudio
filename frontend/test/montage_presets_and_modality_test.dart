@@ -19,6 +19,10 @@ void main() {
       expect(detectChannelModality('EOG2'), equals(ChannelModality.eog));
       expect(detectChannelModality('LOC'), equals(ChannelModality.eog));
       expect(detectChannelModality('ROC'), equals(ChannelModality.eog));
+      expect(detectChannelModality('LOC1'), equals(ChannelModality.eog));
+      expect(detectChannelModality('ROC1'), equals(ChannelModality.eog));
+      expect(detectChannelModality('EOG LOC1'), equals(ChannelModality.eog));
+      expect(detectChannelModality('EOG ROC1'), equals(ChannelModality.eog));
       expect(detectChannelModality('E1-M2'), equals(ChannelModality.eog));
       expect(detectChannelModality('E2-M1'), equals(ChannelModality.eog));
       expect(detectChannelModality('LEOG'), equals(ChannelModality.eog));
@@ -101,6 +105,46 @@ void main() {
       // Raw mastoid reference channels are not displayed as active signals on screen
       expect(channels.firstWhere((c) => c.name == 'A1').displayOnScreen, isFalse);
       expect(channels.firstWhere((c) => c.name == 'A2').displayOnScreen, isFalse);
+    });
+
+    test('AASM preset detects LOC1 and ROC1 EOG channels as in AS_CNT_08_Night1.edf', () {
+      final asCntChannels = [
+        'A1', 'A2', 'F3', 'F4', 'C3', 'C4', 'O1', 'O2', 'LOC1', 'ROC1', 'EMG1', 'EMG2',
+      ];
+      final aasmPreset = builtInMontagePresets.firstWhere((p) => p.name.contains('AASM'));
+      final channels = generateMontagePresetChannels(
+        preset: aasmPreset,
+        availableChannels: asCntChannels,
+      );
+
+      final visible = channels.where((c) => c.displayOnScreen).toList();
+      final visibleNames = visible.map((c) => c.name).toList();
+
+      expect(visibleNames, contains('LOC1-A2'));
+      expect(visibleNames, contains('ROC1-A1'));
+      expect(visible.firstWhere((c) => c.name == 'LOC1-A2').reReference, 'A2');
+      expect(visible.firstWhere((c) => c.name == 'ROC1-A1').reReference, 'A1');
+      expect(detectChannelModality('LOC1-A2'), ChannelModality.eog);
+      expect(detectChannelModality('ROC1-A1'), ChannelModality.eog);
+    });
+
+    test('AASM preset preserves actual limb movement channel names PLMl and PLMr', () {
+      final goaSleepChannels = [
+        'E1:M2', 'E2:M2', 'F4:M1', 'F3:M2', 'C4:M1', 'C3:M2', 'O2:M1', 'O1:M2', 'EMG', 'PLMl', 'PLMr',
+      ];
+      final plmPreset = builtInMontagePresets.firstWhere((p) => p.name.contains('PLM'));
+      final channels = generateMontagePresetChannels(
+        preset: plmPreset,
+        availableChannels: goaSleepChannels,
+      );
+
+      final visible = channels.where((c) => c.displayOnScreen).toList();
+      final visibleNames = visible.map((c) => c.name).toList();
+
+      expect(visibleNames, contains('PLMl'));
+      expect(visibleNames, contains('PLMr'));
+      expect(visibleNames, isNot(contains('LAT')));
+      expect(visibleNames, isNot(contains('RAT')));
     });
 
     test('Bipolar Longitudinal preset strictly excludes orphaned single channels', () {

@@ -765,6 +765,17 @@ class _MontageDialogState extends State<MontageDialog> {
                                           child: Text('bipolar', style: TextStyle(fontSize: 9, color: Colors.indigo.shade800)),
                                         ),
                                       ],
+                                      if (ch.sourceChannel != null && !ch.sourceChannel!.equalsIgnoreCase(ch.name)) ...[
+                                        const SizedBox(width: 6),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                          decoration: BoxDecoration(
+                                            color: Colors.grey.shade200,
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                          child: Text('file: ${ch.sourceChannel}', style: TextStyle(fontSize: 9.5, color: Colors.grey.shade800)),
+                                        ),
+                                      ],
                                     ],
                                   ),
                                 ),
@@ -1012,8 +1023,12 @@ List<ChannelConfig> generateMontagePresetChannels({
       (c) => detectChannelModality(c.name) == ChannelModality.eog,
     );
     if (!hasEog) {
-      final e1 = findMatchingElectrode('E1', availableChannels);
-      final e2 = findMatchingElectrode('E2', availableChannels);
+      final e1 = findMatchingElectrode('E1', availableChannels) ??
+          findMatchingElectrode('LOC', availableChannels) ??
+          findMatchingElectrode('LOC1', availableChannels);
+      final e2 = findMatchingElectrode('E2', availableChannels) ??
+          findMatchingElectrode('ROC', availableChannels) ??
+          findMatchingElectrode('ROC1', availableChannels);
       final m1 = findMatchingElectrode('M1', availableChannels);
       final m2 = findMatchingElectrode('M2', availableChannels);
       if (e1 != null) {
@@ -1022,8 +1037,10 @@ List<ChannelConfig> generateMontagePresetChannels({
           (c) => c.name.equalsIgnoreCase(e1),
           orElse: () => ChannelConfig(name: e1),
         );
+        final cleanE1 = cleanChannelLabel(e1);
+        final cleanR = ref != null ? cleanChannelLabel(ref) : '';
         final label =
-            ref != null && !ref.equalsIgnoreCase(e1) ? 'E1-M2' : cleanChannelLabel(e1);
+            ref != null && !ref.equalsIgnoreCase(e1) ? '$cleanE1-$cleanR' : cleanE1;
         final e1Index = availableChannels.indexOf(e1);
         newChannels.add(
           ChannelConfig(
@@ -1045,8 +1062,10 @@ List<ChannelConfig> generateMontagePresetChannels({
           (c) => c.name.equalsIgnoreCase(e2),
           orElse: () => ChannelConfig(name: e2),
         );
+        final cleanE2 = cleanChannelLabel(e2);
+        final cleanR = ref != null ? cleanChannelLabel(ref) : '';
         final label =
-            ref != null && !ref.equalsIgnoreCase(e2) ? 'E2-M1' : cleanChannelLabel(e2);
+            ref != null && !ref.equalsIgnoreCase(e2) ? '$cleanE2-$cleanR' : cleanE2;
         final e2Index = availableChannels.indexOf(e2);
         newChannels.add(
           ChannelConfig(
@@ -1163,9 +1182,13 @@ List<ChannelConfig> generateMontagePresetChannels({
             (c) => c.name.equalsIgnoreCase(match),
             orElse: () => ChannelConfig(name: match),
           );
+          final cleanMatch = cleanChannelLabel(match);
+          final displayName = cleanMatch.equalsIgnoreCase(item.$1)
+              ? item.$1
+              : cleanMatch;
           newChannels.add(
             ChannelConfig(
-              name: item.$1,
+              name: displayName,
               sourceChannel: match,
               sourceIndex: idx >= 0 ? idx : null,
               reReference: 'None',
@@ -1208,9 +1231,13 @@ List<ChannelConfig> generateMontagePresetChannels({
             (c) => c.name.equalsIgnoreCase(match),
             orElse: () => ChannelConfig(name: match),
           );
+          final cleanMatch = cleanChannelLabel(match);
+          final displayName = cleanMatch.equalsIgnoreCase(item.$1)
+              ? item.$1
+              : cleanMatch;
           newChannels.add(
             ChannelConfig(
-              name: item.$1,
+              name: displayName,
               sourceChannel: match,
               sourceIndex: idx >= 0 ? idx : null,
               reReference: 'None',

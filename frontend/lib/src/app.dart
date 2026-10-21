@@ -14513,6 +14513,7 @@ class _ElectrodeScaleColumn extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final labels = viewport.signalChannelLabels;
+    final sourceLabels = viewport.visibleChannelSourceLabels;
     final scales = viewport.signalChannelScales;
     final notes = viewport.visibleChannelScaleNotes;
     final count = labels.length;
@@ -14526,6 +14527,8 @@ class _ElectrodeScaleColumn extends StatelessWidget {
             child: _ChannelScaleTile(
               channelIndex: i,
               channelName: labels[i],
+              sourceChannelName:
+                  i < sourceLabels.length ? sourceLabels[i] : null,
               scalePercent: scales[i],
               scaleNote: i < notes.length ? notes[i] : '',
               channelHeight: channelHeight,
@@ -14545,6 +14548,7 @@ class _ChannelScaleTile extends StatefulWidget {
   const _ChannelScaleTile({
     required this.channelIndex,
     required this.channelName,
+    this.sourceChannelName,
     required this.scalePercent,
     this.scaleNote = '',
     required this.channelHeight,
@@ -14558,6 +14562,7 @@ class _ChannelScaleTile extends StatefulWidget {
   final int channelIndex;
   final void Function(int channelIndex, Offset globalPosition)? onContextMenu;
   final String channelName;
+  final String? sourceChannelName;
   final double scalePercent;
 
   /// "auto" or the absolute range (e.g. "70–100 %") of polygraphic channels.
@@ -14610,7 +14615,7 @@ class _ChannelScaleTileState extends State<_ChannelScaleTile> {
               Expanded(
                 child: PopupMenuButton<double>(
                   tooltip:
-                      '${widget.channelName} (Scale: $scaleStr${widget.scaleNote.isEmpty ? '' : ', ${widget.scaleNote}'}) — Click for presets, scroll to zoom',
+                      '${widget.channelName}${widget.sourceChannelName != null && !widget.sourceChannelName!.equalsIgnoreCase(widget.channelName) ? ' [File track: ${widget.sourceChannelName}]' : ''} (Scale: $scaleStr${widget.scaleNote.isEmpty ? '' : ', ${widget.scaleNote}'}) — Click for presets, scroll to zoom',
                   padding: EdgeInsets.zero,
                   onSelected: (val) {
                     if (val == -1.0) {
@@ -14678,9 +14683,16 @@ class _ChannelScaleTileState extends State<_ChannelScaleTile> {
                               ),
                             ),
                             if (widget.scalePercent != 100.0 ||
-                                widget.scaleNote.isNotEmpty)
+                                widget.scaleNote.isNotEmpty ||
+                                (widget.sourceChannelName != null &&
+                                    !widget.sourceChannelName!
+                                        .equalsIgnoreCase(widget.channelName)))
                               Text(
                                 [
+                                  if (widget.sourceChannelName != null &&
+                                      !widget.sourceChannelName!
+                                          .equalsIgnoreCase(widget.channelName))
+                                    'src: ${widget.sourceChannelName}',
                                   if (widget.scaleNote.isNotEmpty) widget.scaleNote,
                                   if (widget.scalePercent != 100.0)
                                     '${widget.scalePercent.round()}%',
@@ -14711,6 +14723,19 @@ class _ChannelScaleTileState extends State<_ChannelScaleTile> {
                                 ),
                               ),
                             ),
+                            if (widget.sourceChannelName != null &&
+                                !widget.sourceChannelName!
+                                    .equalsIgnoreCase(widget.channelName)) ...[
+                              const SizedBox(width: 2),
+                              Text(
+                                '(${widget.sourceChannelName})',
+                                style: TextStyle(
+                                  fontSize: 7.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.indigo.shade700,
+                                ),
+                              ),
+                            ],
                             if (widget.scalePercent != 100.0) ...[
                               const SizedBox(width: 2),
                               Text(

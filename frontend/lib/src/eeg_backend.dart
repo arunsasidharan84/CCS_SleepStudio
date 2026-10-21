@@ -2153,6 +2153,7 @@ class EegBackend {
       amplitudeRangeUv: cfg.amplitudeRangeUv,
       referenceAmplitudeLineUv: cfg.referenceAmplitudeLineUv,
       visibleChannelLabels: visibleChannels.labels,
+      visibleChannelSourceLabels: visibleChannels.sourceLabels,
       visibleChannelSourceIndices: visibleChannels.indices,
       visibleChannelColors: visibleChannels.colors,
       visibleChannelScales: visibleChannels.scales,
@@ -2293,6 +2294,7 @@ class EegBackend {
       tfChannelLabel: tfChCfg.name,
       amplitudeRangeUv: cfg.amplitudeRangeUv,
       visibleChannelLabels: visibleChannels.labels,
+      visibleChannelSourceLabels: visibleChannels.sourceLabels,
       visibleChannelSourceIndices: visibleChannels.indices,
       visibleChannelColors: visibleChannels.colors,
       visibleChannelScales: visibleChannels.scales,
@@ -2441,6 +2443,7 @@ class EegBackend {
       tfChannelLabel: tfChCfg.name,
       amplitudeRangeUv: cfg.amplitudeRangeUv,
       visibleChannelLabels: visibleChannels.labels,
+      visibleChannelSourceLabels: visibleChannels.sourceLabels,
       visibleChannelSourceIndices: visibleChannels.indices,
       visibleChannelColors: visibleChannels.colors,
       visibleChannelScales: visibleChannels.scales,
@@ -3184,6 +3187,7 @@ class EegBackend {
   ({
     List<int> indices,
     List<String> labels,
+    List<String> sourceLabels,
     List<String> colors,
     List<double> scales,
     List<String> notes,
@@ -3193,6 +3197,7 @@ class EegBackend {
     _currentLoadedChannelLabels = eeg.channelLabels;
     final indices = <int>[];
     final labels = <String>[];
+    final sourceLabels = <String>[];
     final colors = <String>[];
     final scales = <double>[];
     final notes = <String>[];
@@ -3225,6 +3230,7 @@ class EegBackend {
             ? channelCfg.name
             : eeg.channelLabels[sourceIdx],
       );
+      sourceLabels.add(eeg.channelLabels[sourceIdx]);
       colors.add(
         channelCfg.color.isNotEmpty
             ? channelCfg.color
@@ -3246,6 +3252,7 @@ class EegBackend {
       labels.add(
         fallback.name.isNotEmpty ? fallback.name : eeg.channelLabels.first,
       );
+      sourceLabels.add(eeg.channelLabels.first);
       colors.add(fallback.color);
       scales.add(fallback.scalingFactor);
       notes.add(_channelScaleNote(eeg.channelSamples.first, fallback));
@@ -3254,6 +3261,7 @@ class EegBackend {
     return (
       indices: indices,
       labels: labels,
+      sourceLabels: sourceLabels,
       colors: colors,
       scales: scales,
       notes: notes,

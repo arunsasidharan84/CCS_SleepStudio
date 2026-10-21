@@ -4,6 +4,23 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.44.1]
+*   **AASM Montage EOG Channel Detection for LOC/ROC Variants:**
+    - Expanded EOG electrode matching to recognize `LOC`, `LOC1`, `ROC`, `ROC1`, `ROC2`, `EOGLOC`, `EOGROC`, and prefixed variants (`EOG LOC1`, `EOG-ROC1`, `POL LOC`).
+    - Resolves failure of AASM montage auto-detection on recordings with canthal electrode notation (such as `AS_CNT_08_Night1.edf`).
+    - Preserves exact derivation names (e.g. `LOC1-A2`, `ROC1-A1`) instead of forcing generic labels.
+*   **Resolution of Channel Label vs. File Track Ambiguity:**
+    - Montage presets now preserve actual recording channel names (e.g. `PLMl`, `PLMr`) instead of arbitrarily renaming them to `LAT`/`RAT`.
+    - In the montage manager, channels with differing display names now display an explicit `[file: <source>]` indicator.
+    - On the timeline waveform channel strip, channels with derived or mapped names display a subtle `src: <source>` subtitle note and detailed file track hover tooltip.
+*   **30s Epoch Split Dotted Lines for >30s Windows:**
+    - In viewing windows $>30$s (e.g. 60s, 120s, 300s/5 min), crisp vertical dotted lines are drawn at every 30s epoch boundary across all channels.
+*   **Overarching PLM / PLMS / PLMW Series Extent Markers:**
+    - PLM analysis now renders full extent markers encompassing all $\ge 4$ constituent leg movements of each periodic series, labeled with movement count and sleep/wake state (`PLMS Series (X LMs)` vs `PLMW Series (X LMs)`).
+    - Constituent movements display individual `PLMS (LM)` / `PLMW (LM)` badges with non-overlapping vertical row stacking.
+*   **Total Downloads Metric Badge:**
+    - Fixed the downloads badge in README to track total downloads across all releases (`https://img.shields.io/github/downloads/.../total`), avoiding the drop to 0 on new version releases.
+
 ## [1.42.0]
 *   **Safe Error Dismissal & Config Dialog Fix:**
     - Resolved `Invalid argument(s): 0` index clamping crash in `ConfigDialog` when opening settings with no file loaded.

@@ -148,13 +148,26 @@ class _EegUtilitiesDialogState extends State<EegUtilitiesDialog>
 
     setState(() {
       _isProcessing = true;
-      _statusText = 'Transforming EDF file…';
+      _progress = 0.0;
+      _statusText = 'Preparing EDF transformation…';
     });
 
     try {
       _singleOptions.channelNameMap = _channelRenames;
       _singleOptions.selectedChannels = _keptChannels.toList();
-      await processEdfFile(_inputFilePath!, _outputFilePath!, _singleOptions);
+      await processEdfFile(
+        _inputFilePath!,
+        _outputFilePath!,
+        _singleOptions,
+        onProgress: (pct, msg) {
+          if (mounted) {
+            setState(() {
+              _progress = pct;
+              _statusText = msg;
+            });
+          }
+        },
+      );
       if (mounted) {
         _showToast('Successfully exported EDF to $_outputFilePath');
       }
@@ -391,6 +404,19 @@ class _EegUtilitiesDialogState extends State<EegUtilitiesDialog>
             ),
             const SizedBox(height: 16),
           ],
+          if (_isProcessing || _statusText.isNotEmpty) ...[
+            LinearProgressIndicator(value: _isProcessing ? _progress : 1.0),
+            const SizedBox(height: 8),
+            Text(
+              _statusText,
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           SizedBox(
             width: double.infinity,
             height: 44,
@@ -563,164 +589,275 @@ class _EegUtilitiesDialogState extends State<EegUtilitiesDialog>
   }
 }
 
+typedef EdfProgressCallback = void Function(double progress, String status);
+
 /// Helper function to transform and write EDF binary file
 Future<void> processEdfFile(
   String inputPath,
   String outputPath,
   EdfTransformOptions options, {
   LoadedEeg? loadedEeg,
+  EdfProgressCallback? onProgress,
 }) async {
-  final file = File(inputPath);
-  if (!await file.exists()) throw Exception('Input file does not exist.');
+  final inFile = File(inputPath);
+  if (!await inFile.exists()) throw Exception('Input file does not exist: $inputPath');
+  final totalFileSize = await inFile.length();
+  if (totalFileSize < 256) throw Exception('File too small to be a valid EDF header.');
 
   final lower = inputPath.toLowerCase();
-  if (!lower.endsWith('.edf')) {
+  final needsSignalRecompute =
+      (options.downsample && options.targetSampleRateHz > 0) ||
+      (options.cropTime && options.endTimeSec > options.startTimeSec);
+
+  if (!lower.endsWith('.edf') || needsSignalRecompute) {
+    onProgress?.call(0.1, 'Loading recording for signal processing…');
     final loaded = loadedEeg ?? EegBackend().loadEdf(inputPath);
-    await _writeLoadedEegToEdf(loaded, outputPath, options);
+    onProgress?.call(0.3, 'Writing transformed EDF file…');
+    await _writeLoadedEegToEdf(loaded, outputPath, options, onProgress: onProgress);
+    onProgress?.call(1.0, 'EDF transformation complete.');
     return;
   }
 
-  final bytes = await file.readAsBytes();
-  if (bytes.length < 256) throw Exception('File too small to be a valid EDF header.');
+  onProgress?.call(0.02, 'Reading EDF header…');
+  final inRaf = await inFile.open(mode: FileMode.read);
+  final isSameFile =
+      File(inputPath).resolveSymbolicLinksSync() ==
+      (await File(outputPath).exists() ? File(outputPath).resolveSymbolicLinksSync() : outputPath);
+  final actualOutputPath = isSameFile ? '$outputPath.tmp_${DateTime.now().millisecondsSinceEpoch}' : outputPath;
 
-  // Parse basic primary header
-  final headerStr = String.fromCharCodes(bytes.sublist(0, 256));
-  final headerBytes = int.tryParse(headerStr.substring(184, 192).trim()) ?? 256;
-  final numRecords = int.tryParse(headerStr.substring(236, 244).trim()) ?? -1;
-  final recordDuration = double.tryParse(headerStr.substring(244, 252).trim()) ?? 1.0;
-  final numSignals = int.tryParse(headerStr.substring(252, 256).trim()) ?? 0;
-
-  if (numSignals <= 0) throw Exception('Invalid EDF: no signals declared.');
-
-  // Extract signal headers
-  final labels = <String>[];
-  final samplesPerRec = <int>[];
-  final physMin = <double>[];
-  final physMax = <double>[];
-  final digMin = <int>[];
-  final digMax = <int>[];
-
-  int offset = 256;
-  for (int i = 0; i < numSignals; i++) {
-    labels.add(String.fromCharCodes(bytes.sublist(offset + i * 16, offset + (i + 1) * 16)).trim());
-  }
-  offset += numSignals * 16; // Labels (16)
-  offset += numSignals * 80; // Transducer (80)
-  offset += numSignals * 8;  // Dimension (8)
-
-  for (int i = 0; i < numSignals; i++) {
-    physMin.add(double.tryParse(String.fromCharCodes(bytes.sublist(offset + i * 8, offset + (i + 1) * 8)).trim()) ?? -500.0);
-  }
-  offset += numSignals * 8;
-
-  for (int i = 0; i < numSignals; i++) {
-    physMax.add(double.tryParse(String.fromCharCodes(bytes.sublist(offset + i * 8, offset + (i + 1) * 8)).trim()) ?? 500.0);
-  }
-  offset += numSignals * 8;
-
-  for (int i = 0; i < numSignals; i++) {
-    digMin.add(int.tryParse(String.fromCharCodes(bytes.sublist(offset + i * 8, offset + (i + 1) * 8)).trim()) ?? -32768);
-  }
-  offset += numSignals * 8;
-
-  for (int i = 0; i < numSignals; i++) {
-    digMax.add(int.tryParse(String.fromCharCodes(bytes.sublist(offset + i * 8, offset + (i + 1) * 8)).trim()) ?? 32767);
-  }
-  offset += numSignals * 8;
-  offset += numSignals * 80; // Prefilter (80)
-
-  for (int i = 0; i < numSignals; i++) {
-    samplesPerRec.add(int.tryParse(String.fromCharCodes(bytes.sublist(offset + i * 8, offset + (i + 1) * 8)).trim()) ?? 100);
-  }
-
-  // Determine signals to keep
-  final keptIndices = <int>[];
-  for (int i = 0; i < numSignals; i++) {
-    final origLabel = labels[i];
-    if (options.selectedChannels.isEmpty || options.selectedChannels.contains(origLabel)) {
-      keptIndices.add(i);
-    }
-  }
-  if (keptIndices.isEmpty) {
-    for (int i = 0; i < numSignals; i++) keptIndices.add(i);
-  }
-
-  // Construct new header
-  final newNumSignals = keptIndices.length;
-  final newHeaderLen = 256 + newNumSignals * 256;
-
-  String patientId = options.anonymizeHeader ? options.patientId : String.fromCharCodes(bytes.sublist(8, 88)).trim();
-  String patientName = options.anonymizeHeader ? options.patientName : String.fromCharCodes(bytes.sublist(88, 168)).trim();
-
-  StringBuffer newHdr = StringBuffer();
-  newHdr.write('0'.padRight(8));
-  newHdr.write(patientId.padRight(80));
-  newHdr.write(patientName.padRight(80));
-  newHdr.write(String.fromCharCodes(bytes.sublist(168, 176))); // Start date
-  newHdr.write(String.fromCharCodes(bytes.sublist(176, 184))); // Start time
-  newHdr.write(newHeaderLen.toString().padRight(8));
-  newHdr.write('EDF+C'.padRight(44));
-  newHdr.write(numRecords.toString().padRight(8));
-  newHdr.write(recordDuration.toStringAsFixed(1).padRight(8));
-  newHdr.write(newNumSignals.toString().padRight(4));
-
-  // Write new signal attributes
-  final hdrBytes = BytesBuilder();
-  hdrBytes.add(newHdr.toString().codeUnits);
-
-  // Labels
-  for (final idx in keptIndices) {
-    String name = labels[idx];
-    if (options.channelNameMap.containsKey(name) && options.channelNameMap[name]!.isNotEmpty) {
-      name = options.channelNameMap[name]!;
-    }
-    hdrBytes.add(name.padRight(16).codeUnits.sublist(0, 16));
-  }
-  // Transducers
-  for (int i = 0; i < newNumSignals; i++) hdrBytes.add(''.padRight(80).codeUnits);
-  // Dimensions
-  for (int i = 0; i < newNumSignals; i++) hdrBytes.add('uV'.padRight(8).codeUnits);
-  // Phys min
-  for (final idx in keptIndices) hdrBytes.add(physMin[idx].toStringAsFixed(2).padRight(8).codeUnits);
-  // Phys max
-  for (final idx in keptIndices) hdrBytes.add(physMax[idx].toStringAsFixed(2).padRight(8).codeUnits);
-  // Dig min
-  for (final idx in keptIndices) hdrBytes.add(digMin[idx].toString().padRight(8).codeUnits);
-  // Dig max
-  for (final idx in keptIndices) hdrBytes.add(digMax[idx].toString().padRight(8).codeUnits);
-  // Prefilter
-  for (int i = 0; i < newNumSignals; i++) hdrBytes.add(''.padRight(80).codeUnits);
-  // Samples per record
-  for (final idx in keptIndices) hdrBytes.add(samplesPerRec[idx].toString().padRight(8).codeUnits);
-  // Reserved
-  for (int i = 0; i < newNumSignals; i++) hdrBytes.add(''.padRight(32).codeUnits);
-
-  // Copy raw signal payload for kept channels
-  final totalBytesPerRec = samplesPerRec.reduce((a, b) => a + b) * 2;
-  final totalRecs = numRecords > 0 ? numRecords : (bytes.length - headerBytes) ~/ totalBytesPerRec;
-
-  final outFile = File(outputPath);
-  final raf = await outFile.open(mode: FileMode.write);
   try {
-    await raf.writeFrom(hdrBytes.toBytes());
-    int dataPos = headerBytes;
-    for (int r = 0; r < totalRecs; r++) {
-      if (dataPos + totalBytesPerRec > bytes.length) break;
-      int recOffset = dataPos;
-      for (int s = 0; s < numSignals; s++) {
-        final sigLen = samplesPerRec[s] * 2;
-        if (keptIndices.contains(s)) {
-          await raf.writeFrom(bytes, recOffset, recOffset + sigLen);
-        }
-        recOffset += sigLen;
+    final primaryHeaderBytes = await inRaf.read(256);
+    if (primaryHeaderBytes.length < 256) {
+      throw Exception('File too small to be a valid EDF header.');
+    }
+    final headerStr = String.fromCharCodes(primaryHeaderBytes);
+    final headerBytes = int.tryParse(headerStr.substring(184, 192).trim()) ?? 256;
+    final numRecords = int.tryParse(headerStr.substring(236, 244).trim()) ?? -1;
+    final recordDuration = double.tryParse(headerStr.substring(244, 252).trim()) ?? 1.0;
+    final numSignals = int.tryParse(headerStr.substring(252, 256).trim()) ?? 0;
+
+    if (numSignals <= 0) throw Exception('Invalid EDF: no signals declared.');
+
+    await inRaf.setPosition(0);
+    final fullHeaderBytes = await inRaf.read(headerBytes);
+    if (fullHeaderBytes.length < headerBytes) {
+      throw Exception('Incomplete EDF header.');
+    }
+
+    final labels = <String>[];
+    final transducers = <String>[];
+    final dimensions = <String>[];
+    final physMin = <double>[];
+    final physMax = <double>[];
+    final digMin = <int>[];
+    final digMax = <int>[];
+    final prefilters = <String>[];
+    final samplesPerRec = <int>[];
+    final reserveds = <String>[];
+
+    int offset = 256;
+    for (int i = 0; i < numSignals; i++) {
+      labels.add(String.fromCharCodes(fullHeaderBytes.sublist(offset + i * 16, offset + (i + 1) * 16)).trim());
+    }
+    offset += numSignals * 16;
+
+    for (int i = 0; i < numSignals; i++) {
+      transducers.add(String.fromCharCodes(fullHeaderBytes.sublist(offset + i * 80, offset + (i + 1) * 80)));
+    }
+    offset += numSignals * 80;
+
+    for (int i = 0; i < numSignals; i++) {
+      dimensions.add(String.fromCharCodes(fullHeaderBytes.sublist(offset + i * 8, offset + (i + 1) * 8)));
+    }
+    offset += numSignals * 8;
+
+    for (int i = 0; i < numSignals; i++) {
+      physMin.add(double.tryParse(String.fromCharCodes(fullHeaderBytes.sublist(offset + i * 8, offset + (i + 1) * 8)).trim()) ?? -500.0);
+    }
+    offset += numSignals * 8;
+
+    for (int i = 0; i < numSignals; i++) {
+      physMax.add(double.tryParse(String.fromCharCodes(fullHeaderBytes.sublist(offset + i * 8, offset + (i + 1) * 8)).trim()) ?? 500.0);
+    }
+    offset += numSignals * 8;
+
+    for (int i = 0; i < numSignals; i++) {
+      digMin.add(int.tryParse(String.fromCharCodes(fullHeaderBytes.sublist(offset + i * 8, offset + (i + 1) * 8)).trim()) ?? -32768);
+    }
+    offset += numSignals * 8;
+
+    for (int i = 0; i < numSignals; i++) {
+      digMax.add(int.tryParse(String.fromCharCodes(fullHeaderBytes.sublist(offset + i * 8, offset + (i + 1) * 8)).trim()) ?? 32767);
+    }
+    offset += numSignals * 8;
+
+    for (int i = 0; i < numSignals; i++) {
+      prefilters.add(String.fromCharCodes(fullHeaderBytes.sublist(offset + i * 80, offset + (i + 1) * 80)));
+    }
+    offset += numSignals * 80;
+
+    for (int i = 0; i < numSignals; i++) {
+      samplesPerRec.add(int.tryParse(String.fromCharCodes(fullHeaderBytes.sublist(offset + i * 8, offset + (i + 1) * 8)).trim()) ?? 100);
+    }
+    offset += numSignals * 8;
+
+    for (int i = 0; i < numSignals; i++) {
+      reserveds.add(String.fromCharCodes(fullHeaderBytes.sublist(offset + i * 32, offset + (i + 1) * 32)));
+    }
+
+    final keptIndices = <int>[];
+    for (int i = 0; i < numSignals; i++) {
+      final origLabel = labels[i];
+      if (options.selectedChannels.isEmpty || options.selectedChannels.contains(origLabel)) {
+        keptIndices.add(i);
       }
-      dataPos += totalBytesPerRec;
+    }
+    if (keptIndices.isEmpty) {
+      for (int i = 0; i < numSignals; i++) keptIndices.add(i);
+    }
+
+    final newNumSignals = keptIndices.length;
+    final newHeaderLen = 256 + newNumSignals * 256;
+
+    String patientId = options.anonymizeHeader ? options.patientId : String.fromCharCodes(fullHeaderBytes.sublist(8, 88)).trim();
+    String patientName = options.anonymizeHeader ? options.patientName : String.fromCharCodes(fullHeaderBytes.sublist(88, 168)).trim();
+
+    final newHdr = StringBuffer();
+    newHdr.write('0'.padRight(8));
+    newHdr.write(patientId.padRight(80));
+    newHdr.write(patientName.padRight(80));
+    newHdr.write(String.fromCharCodes(fullHeaderBytes.sublist(168, 176))); // Start date
+    newHdr.write(String.fromCharCodes(fullHeaderBytes.sublist(176, 184))); // Start time
+    newHdr.write(newHeaderLen.toString().padRight(8));
+    newHdr.write('EDF+C'.padRight(44));
+    newHdr.write(numRecords.toString().padRight(8));
+    newHdr.write(recordDuration.toStringAsFixed(1).padRight(8));
+    newHdr.write(newNumSignals.toString().padRight(4));
+
+    final hdrBytes = BytesBuilder();
+    hdrBytes.add(newHdr.toString().codeUnits);
+
+    // Labels
+    for (final idx in keptIndices) {
+      String name = labels[idx];
+      if (options.channelNameMap.containsKey(name) && options.channelNameMap[name]!.isNotEmpty) {
+        name = options.channelNameMap[name]!;
+      }
+      hdrBytes.add(name.padRight(16).codeUnits.sublist(0, 16));
+    }
+    // Transducers
+    for (final idx in keptIndices) hdrBytes.add(transducers[idx].padRight(80).codeUnits.sublist(0, 80));
+    // Dimensions
+    for (final idx in keptIndices) hdrBytes.add(dimensions[idx].padRight(8).codeUnits.sublist(0, 8));
+    // Phys min
+    for (final idx in keptIndices) hdrBytes.add(physMin[idx].toStringAsFixed(2).padRight(8).codeUnits.sublist(0, 8));
+    // Phys max
+    for (final idx in keptIndices) hdrBytes.add(physMax[idx].toStringAsFixed(2).padRight(8).codeUnits.sublist(0, 8));
+    // Dig min
+    for (final idx in keptIndices) hdrBytes.add(digMin[idx].toString().padRight(8).codeUnits.sublist(0, 8));
+    // Dig max
+    for (final idx in keptIndices) hdrBytes.add(digMax[idx].toString().padRight(8).codeUnits.sublist(0, 8));
+    // Prefilter
+    for (final idx in keptIndices) hdrBytes.add(prefilters[idx].padRight(80).codeUnits.sublist(0, 80));
+    // Samples per record
+    for (final idx in keptIndices) hdrBytes.add(samplesPerRec[idx].toString().padRight(8).codeUnits.sublist(0, 8));
+    // Reserved
+    for (final idx in keptIndices) hdrBytes.add(reserveds[idx].padRight(32).codeUnits.sublist(0, 32));
+
+    final totalBytesPerRec = samplesPerRec.reduce((a, b) => a + b) * 2;
+    final totalRecs = numRecords > 0 ? numRecords : (totalFileSize - headerBytes) ~/ totalBytesPerRec;
+
+    final outFile = File(actualOutputPath);
+    final outRaf = await outFile.open(mode: FileMode.write);
+    try {
+      await outRaf.writeFrom(hdrBytes.toBytes());
+
+      if (keptIndices.length == numSignals) {
+        // Fast streaming copy: all channels kept, so data records are identical
+        await inRaf.setPosition(headerBytes);
+        const chunkSize = 2 * 1024 * 1024; // 2 MB chunks
+        final buffer = Uint8List(chunkSize);
+        int remaining = totalFileSize - headerBytes;
+        final totalToCopy = remaining;
+        int copied = 0;
+        onProgress?.call(0.05, 'Transferring EDF records…');
+        while (remaining > 0) {
+          final toRead = remaining < chunkSize ? remaining : chunkSize;
+          final read = await inRaf.readInto(buffer, 0, toRead);
+          if (read <= 0) break;
+          await outRaf.writeFrom(buffer, 0, read);
+          copied += read;
+          remaining -= read;
+          if (onProgress != null && totalToCopy > 0) {
+            final pct = (copied / totalToCopy).clamp(0.0, 1.0);
+            final mbCopied = (copied / (1024 * 1024)).toStringAsFixed(1);
+            final mbTotal = (totalToCopy / (1024 * 1024)).toStringAsFixed(1);
+            onProgress(pct, 'Anonymizing EDF: ${(pct * 100).toStringAsFixed(0)}% ($mbCopied MB / $mbTotal MB)');
+          }
+        }
+      } else {
+        // Subsetting channels: buffer multiple records in memory
+        final newBytesPerRec = keptIndices.fold<int>(0, (sum, i) => sum + samplesPerRec[i] * 2);
+        final recordsPerBatch = math.max(1, (2 * 1024 * 1024) ~/ totalBytesPerRec);
+        final inBatchBytes = recordsPerBatch * totalBytesPerRec;
+        final outBatchBytes = recordsPerBatch * newBytesPerRec;
+        final inBuffer = Uint8List(inBatchBytes);
+        final outBuffer = Uint8List(outBatchBytes);
+
+        final channelOffsets = List<int>.filled(numSignals, 0);
+        int curOff = 0;
+        for (int s = 0; s < numSignals; s++) {
+          channelOffsets[s] = curOff;
+          curOff += samplesPerRec[s] * 2;
+        }
+
+        await inRaf.setPosition(headerBytes);
+        int recsProcessed = 0;
+        while (recsProcessed < totalRecs) {
+          final recsInThisBatch = math.min(recordsPerBatch, totalRecs - recsProcessed);
+          final bytesToRead = recsInThisBatch * totalBytesPerRec;
+          final read = await inRaf.readInto(inBuffer, 0, bytesToRead);
+          if (read <= 0) break;
+
+          final actualRecs = read ~/ totalBytesPerRec;
+          if (actualRecs <= 0) break;
+
+          int outPos = 0;
+          for (int r = 0; r < actualRecs; r++) {
+            final recBase = r * totalBytesPerRec;
+            for (final s in keptIndices) {
+              final sLen = samplesPerRec[s] * 2;
+              final sSrc = recBase + channelOffsets[s];
+              outBuffer.setRange(outPos, outPos + sLen, inBuffer, sSrc);
+              outPos += sLen;
+            }
+          }
+
+          await outRaf.writeFrom(outBuffer, 0, outPos);
+          recsProcessed += actualRecs;
+
+          if (onProgress != null && totalRecs > 0) {
+            final pct = (recsProcessed / totalRecs).clamp(0.0, 1.0);
+            onProgress(pct, 'Extracting channels: ${(pct * 100).toStringAsFixed(0)}% (Record $recsProcessed / $totalRecs)');
+          }
+        }
+      }
+    } finally {
+      await outRaf.close();
     }
   } finally {
-    await raf.close();
+    await inRaf.close();
   }
 
-  // Preserve epochs, markers, protocols, and transform options in <recording>.edf.ccsmeta
+  if (isSameFile) {
+    final finalFile = File(outputPath);
+    if (await finalFile.exists()) await finalFile.delete();
+    await File(actualOutputPath).rename(outputPath);
+  }
+
+  onProgress?.call(1.0, 'EDF export completed successfully.');
+
+  // Preserve epochs, markers, protocols in sidecar
   await _writeCcsMetaSidecar(
     inputPath: inputPath,
     outputPath: outputPath,
@@ -731,8 +868,9 @@ Future<void> processEdfFile(
 Future<void> _writeLoadedEegToEdf(
   LoadedEeg loaded,
   String outputPath,
-  EdfTransformOptions options,
-) async {
+  EdfTransformOptions options, {
+  EdfProgressCallback? onProgress,
+}) async {
   final keptIndices = <int>[];
   for (int i = 0; i < loaded.channelLabels.length; i++) {
     final label = loaded.channelLabels[i];
@@ -768,7 +906,7 @@ Future<void> _writeLoadedEegToEdf(
   String patientId = options.anonymizeHeader ? options.patientId : 'ANONYMOUS';
   String patientName = options.anonymizeHeader ? options.patientName : 'Anonymous';
 
-  StringBuffer newHdr = StringBuffer();
+  final newHdr = StringBuffer();
   newHdr.write('0'.padRight(8));
   newHdr.write(patientId.padRight(80));
   newHdr.write(patientName.padRight(80));
@@ -822,14 +960,16 @@ Future<void> _writeLoadedEegToEdf(
     await raf.writeFrom(hdrBytes.toBytes());
 
     final recordBytes = recordSamples * newNumSignals * 2;
-    final recordBuffer = Uint8List(recordBytes);
-    final byteData = ByteData.sublistView(recordBuffer);
+    final batchRecs = math.max(1, (1024 * 1024) ~/ recordBytes);
+    final batchBuffer = Uint8List(batchRecs * recordBytes);
+    final batchByteData = ByteData.sublistView(batchBuffer);
 
+    int recInBatch = 0;
     for (int r = 0; r < numRecords; r++) {
       final recordStartSec = r * 1.0;
       final rStartSample = startSample + (recordStartSec * loaded.sampleRateHz).round();
 
-      int byteOffset = 0;
+      int byteOffset = recInBatch * recordBytes;
       for (final chIdx in keptIndices) {
         final samples = loaded.channelSamples[chIdx];
         final samplesLen = samples.length;
@@ -837,11 +977,19 @@ Future<void> _writeLoadedEegToEdf(
           final srcIdx = rStartSample + (s * sampleStep);
           final val = (srcIdx >= 0 && srcIdx < samplesLen) ? samples[srcIdx] : 0.0;
           final int16Val = ((val - physMin) * scale + digMin).round().clamp(-32768, 32767);
-          byteData.setInt16(byteOffset, int16Val, Endian.little);
+          batchByteData.setInt16(byteOffset, int16Val, Endian.little);
           byteOffset += 2;
         }
       }
-      await raf.writeFrom(recordBuffer);
+      recInBatch++;
+      if (recInBatch >= batchRecs || r == numRecords - 1) {
+        await raf.writeFrom(batchBuffer, 0, recInBatch * recordBytes);
+        recInBatch = 0;
+        if (onProgress != null && numRecords > 0) {
+          final pct = ((r + 1) / numRecords).clamp(0.0, 1.0);
+          onProgress(pct, 'Writing resampled EDF: ${(pct * 100).toStringAsFixed(0)}% (Record ${r + 1} / $numRecords)');
+        }
+      }
     }
   } finally {
     await raf.close();

@@ -92,6 +92,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   AnalyseNidraOptions _batchAnalyseOptions = AnalyseNidraOptions();
   String? _activePath;
   String _status = 'Ready — load an EDF file to begin scoring';
+  String? _hoverStatus;
   String _appVersion = '';
   int _navigationSerial = 0;
   Timer? _tfRefreshTimer;
@@ -6922,6 +6923,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final label = rawIdx < v.channelLabels.length
         ? v.channelLabels[rawIdx]
         : 'Channel';
+    final isSpo2 = levelSignalKind(label) == LevelSignalKind.spo2;
+    final isEeg = isEegLabel(label);
+    final title = isSpo2
+        ? 'Selected SpO₂: $label'
+        : (isEeg ? 'Selected EEG: $label' : 'Selected Signal: $label');
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -6933,13 +6939,13 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               Padding(
                 padding: const EdgeInsets.all(8),
                 child: Text(
-                  'Selected EEG: $label',
+                  title,
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
               Expanded(
                 child: CustomPaint(
-                  painter: _ZoomSignalPainter(samples, srate),
+                  painter: _ZoomSignalPainter(samples, srate, channelLabel: label),
                   child: const SizedBox.expand(),
                 ),
               ),
@@ -11934,6 +11940,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                     videoCursor: _videoCursor,
                                     onVideoCursorDrag: _handleVideoCursorDrag,
                                     viewport: viewport,
+                                    loadedEeg: _loadedEeg,
+                                    onHoverStatus: (s) =>
+                                        setState(() => _hoverStatus = s),
                                     onJump: _jumpToEpochCoalesced,
                                     swaSlider: _swaSlider,
                                     onSwaSlider: (v) =>
@@ -11988,6 +11997,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                         viewport: viewport,
                         comparisonStages: _comparisonStages,
                         onTimeUnitChanged: _setEegPanelTimeUnit,
+                        hoverStatus: _hoverStatus,
                       ),
                     ],
                   ),
@@ -12735,6 +12745,8 @@ class _ScoringHeroSurface extends StatefulWidget {
     required this.tfEnabled,
     required this.onResizeFlex,
     required this.onLightsMarkersChanged,
+    this.loadedEeg,
+    this.onHoverStatus,
     this.comparisonStages,
     this.nlgOverlay,
     this.onOverlayChanged,
@@ -12798,6 +12810,8 @@ class _ScoringHeroSurface extends StatefulWidget {
   final bool spectrogramEnabled;
   final VoidCallback? onOpenTimeline;
   final void Function(double clickSec, int channelIndex)? onAddMarkerAt;
+  final LoadedEeg? loadedEeg;
+  final ValueChanged<String?>? onHoverStatus;
 
   @override
   State<_ScoringHeroSurface> createState() => _ScoringHeroSurfaceState();
@@ -12809,6 +12823,12 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
   int? _dragChannel;
   double? _dragStartUv;
   double? _dragEndUv;
+
+  Offset? _hoverPos;
+  int? _hoverChannel;
+  double? _hoverSec;
+  double? _hoverVal;
+  String? _hoverChannelName;
 
   double _cumulativeDx = 0.0;
   int _dragSpecStartFlex = 0;
@@ -12948,7 +12968,13 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
       _dragChannel = ch;
       _dragStartUv = uv;
       _dragEndUv = uv;
+      _hoverPos = null;
+      _hoverChannel = null;
+      _hoverSec = null;
+      _hoverVal = null;
+      _hoverChannelName = null;
     });
+    widget.onHoverStatus?.call(null);
   }
 
   void _handlePanUpdate(DragUpdateDetails details, BoxConstraints constraints) {
@@ -13001,6 +13027,153 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
       _dragStartUv = null;
       _dragEndUv = null;
     });
+  }
+
+  void _handleWaveformHover(PointerHoverEvent event, BoxConstraints constraints) {
+    if (_dragStartSec != null) {
+      if (_hoverPos != null) _clearHover();
+      return;
+    }
+    final pos = event.localPosition;
+    if (pos.dx >= _waveformPlotLeftPad && constraints.maxWidth > _waveformPlotLeftPad) {
+      final drawWidth = (constraints.maxWidth - _waveformPlotLeftPad).clamp(
+        1.0,
+        double.infinity,
+      );
+      final fx = ((pos.dx - _waveformPlotLeftPad) / drawWidth).clamp(0.0, 1.0);
+      final sec = widget.viewport.visibleStartSeconds +
+          fx * widget.viewport.visibleDurationSeconds;
+      final n = widget.viewport.channelCount;
+      if (n > 0 && constraints.maxHeight > 0) {
+        final ch = (pos.dy / constraints.maxHeight * n).floor().clamp(0, n - 1);
+        final chName = ch < widget.viewport.signalChannelLabels.length
+            ? widget.viewport.signalChannelLabels[ch]
+            : 'Ch $ch';
+        double? val;
+        final srcIdx = (ch < widget.viewport.signalChannelSourceIndices.length)
+            ? widget.viewport.signalChannelSourceIndices[ch]
+            : ch;
+        final loaded = widget.loadedEeg;
+        if (loaded != null &&
+            srcIdx >= 0 &&
+            srcIdx < loaded.channelSamples.length) {
+          final samples = loaded.channelSamples[srcIdx];
+          final sampleIdx = (sec * loaded.sampleRateHz).round();
+          if (sampleIdx >= 0 && sampleIdx < samples.length) {
+            val = samples[sampleIdx];
+          }
+        }
+        if (val != null) {
+          final formatted = formatChannelValue(chName, val);
+          setState(() {
+            _hoverPos = pos;
+            _hoverChannel = ch;
+            _hoverSec = sec;
+            _hoverVal = val;
+            _hoverChannelName = chName;
+          });
+          widget.onHoverStatus?.call('$chName: $formatted');
+          return;
+        }
+      }
+    }
+    if (_hoverPos != null) {
+      _clearHover();
+    }
+  }
+
+  void _clearHover() {
+    if (_hoverPos != null) {
+      setState(() {
+        _hoverPos = null;
+        _hoverChannel = null;
+        _hoverSec = null;
+        _hoverVal = null;
+        _hoverChannelName = null;
+      });
+      widget.onHoverStatus?.call(null);
+    }
+  }
+
+  Widget _buildHoverPill(BoxConstraints constraints) {
+    final pos = _hoverPos!;
+    final name = _hoverChannelName!;
+    final val = _hoverVal!;
+    final formatted = formatChannelValue(name, val);
+    final isSpo2 = levelSignalKind(name) == LevelSignalKind.spo2;
+
+    const pillW = 125.0;
+    const pillH = 26.0;
+    double left = pos.dx + 12.0;
+    if (left + pillW > constraints.maxWidth - 6.0) {
+      left = pos.dx - pillW - 12.0;
+    }
+    if (left < _waveformPlotLeftPad + 4.0) {
+      left = _waveformPlotLeftPad + 4.0;
+    }
+
+    double top = pos.dy - pillH - 6.0;
+    if (top < 4.0) {
+      top = pos.dy + 12.0;
+    }
+    if (top + pillH > constraints.maxHeight - 4.0) {
+      top = constraints.maxHeight - pillH - 4.0;
+    }
+
+    return Positioned(
+      left: left,
+      top: top,
+      child: IgnorePointer(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          decoration: BoxDecoration(
+            color: isSpo2 ? const Color(0xF20F172A) : const Color(0xEE1E293B),
+            borderRadius: BorderRadius.circular(5),
+            border: Border.all(
+              color: isSpo2 ? const Color(0xFF38BDF8) : Colors.white24,
+              width: isSpo2 ? 1.0 : 0.8,
+            ),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x33000000),
+                blurRadius: 4,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isSpo2) ...[
+                const Icon(
+                  Icons.favorite,
+                  color: Color(0xFF38BDF8),
+                  size: 12,
+                ),
+                const SizedBox(width: 4),
+              ],
+              Text(
+                '$name: ',
+                style: TextStyle(
+                  color: isSpo2 ? const Color(0xFFE2E8F0) : const Color(0xFFCBD5E1),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              Text(
+                formatted,
+                style: TextStyle(
+                  color: isSpo2 ? const Color(0xFF38BDF8) : Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -13235,101 +13408,110 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                 return Stack(
                   fit: StackFit.expand,
                   children: [
-                    GestureDetector(
-                      onPanStart: (d) {
-                        if (d.localPosition.dx >= _waveformPlotLeftPad) {
-                          _handlePanStart(d, constraints);
-                        }
-                      },
-                      onPanUpdate: (d) {
-                        if (d.localPosition.dx >= _waveformPlotLeftPad ||
-                            _dragStartSec != null) {
-                          _handlePanUpdate(d, constraints);
-                        }
-                      },
-                      onPanEnd: _handlePanEnd,
-                      onPanCancel: _handlePanCancel,
-                      onTapUp: (d) {
-                        if (d.localPosition.dx >= _waveformPlotLeftPad) {
+                    MouseRegion(
+                      onHover: (e) => _handleWaveformHover(e, constraints),
+                      onExit: (_) => _clearHover(),
+                      child: GestureDetector(
+                        onPanStart: (d) {
+                          if (d.localPosition.dx >= _waveformPlotLeftPad) {
+                            _handlePanStart(d, constraints);
+                          }
+                        },
+                        onPanUpdate: (d) {
+                          if (d.localPosition.dx >= _waveformPlotLeftPad ||
+                              _dragStartSec != null) {
+                            _handlePanUpdate(d, constraints);
+                          }
+                        },
+                        onPanEnd: _handlePanEnd,
+                        onPanCancel: _handlePanCancel,
+                        onTapUp: (d) {
+                          if (d.localPosition.dx >= _waveformPlotLeftPad) {
+                            final n = widget.viewport.channelCount;
+                            if (n == 0) return;
+                            final drawWidth = (constraints.maxWidth - _waveformPlotLeftPad)
+                                .clamp(1.0, double.infinity);
+                            final fx = ((d.localPosition.dx - _waveformPlotLeftPad) / drawWidth)
+                                .clamp(0.0, 1.0);
+                            final clickSec = widget.viewport.visibleStartSeconds +
+                                fx * widget.viewport.visibleDurationSeconds;
+                            final ch = (d.localPosition.dy / constraints.maxHeight * n)
+                                .floor()
+                                .clamp(0, n - 1);
+                            final baselineFraction = (ch + 0.5) / n;
+                            final yFrac = d.localPosition.dy / constraints.maxHeight;
+                            final normalizedVal = (baselineFraction - yFrac) * n / 0.42;
+                            final uv = normalizedVal * widget.viewport.amplitudeRangeUv;
+                            widget.onSelectionEnd(clickSec, clickSec, ch, uv, uv);
+                          }
+                        },
+                        onSecondaryTapDown: (d) {
                           final n = widget.viewport.channelCount;
-                          if (n == 0) return;
-                          final drawWidth = (constraints.maxWidth - _waveformPlotLeftPad)
-                              .clamp(1.0, double.infinity);
-                          final fx = ((d.localPosition.dx - _waveformPlotLeftPad) / drawWidth)
-                              .clamp(0.0, 1.0);
-                          final clickSec = widget.viewport.visibleStartSeconds +
-                              fx * widget.viewport.visibleDurationSeconds;
+                          if (n == 0 || widget.onChannelContextMenu == null) return;
                           final ch = (d.localPosition.dy / constraints.maxHeight * n)
                               .floor()
                               .clamp(0, n - 1);
-                          final baselineFraction = (ch + 0.5) / n;
-                          final yFrac = d.localPosition.dy / constraints.maxHeight;
-                          final normalizedVal = (baselineFraction - yFrac) * n / 0.42;
-                          final uv = normalizedVal * widget.viewport.amplitudeRangeUv;
-                          widget.onSelectionEnd(clickSec, clickSec, ch, uv, uv);
-                        }
-                      },
-                      onSecondaryTapDown: (d) {
-                        final n = widget.viewport.channelCount;
-                        if (n == 0 || widget.onChannelContextMenu == null) return;
-                        final ch = (d.localPosition.dy / constraints.maxHeight * n)
-                            .floor()
-                            .clamp(0, n - 1);
-                        double? clickSec;
-                        if (d.localPosition.dx >= _waveformPlotLeftPad) {
-                          final drawWidth = (constraints.maxWidth - _waveformPlotLeftPad)
-                              .clamp(1.0, double.infinity);
-                          final fx = ((d.localPosition.dx - _waveformPlotLeftPad) / drawWidth)
-                              .clamp(0.0, 1.0);
-                          clickSec = widget.viewport.visibleStartSeconds +
-                              fx * widget.viewport.visibleDurationSeconds;
-                        }
-                        widget.onChannelContextMenu!(ch, d.globalPosition, clickSec: clickSec);
-                      },
-                      onDoubleTapDown: (d) {
-                        if (d.localPosition.dx >= _waveformPlotLeftPad) {
-                          final drawWidth = (constraints.maxWidth - _waveformPlotLeftPad)
-                              .clamp(1.0, double.infinity);
-                          final fx = ((d.localPosition.dx - _waveformPlotLeftPad) / drawWidth)
-                              .clamp(0.0, 1.0);
-                          final clickSec = widget.viewport.visibleStartSeconds +
-                              fx * widget.viewport.visibleDurationSeconds;
-                          final n = widget.viewport.channelCount;
-                          final ch = n > 0
-                              ? (d.localPosition.dy / constraints.maxHeight * n)
-                                  .floor()
-                                  .clamp(0, n - 1)
-                              : 0;
-                          widget.onAddMarkerAt?.call(clickSec, ch);
-                        }
-                      },
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          _Panel(
-                            painter: TimelinePainter(
-                              widget.viewport,
-                              drawChannelLabels: false,
-                              leftPad: _waveformPlotLeftPad,
-                            ),
-                            padding: EdgeInsets.zero,
-                          ),
-                          IgnorePointer(
-                            child: CustomPaint(
-                              painter: SelectionOverlayPainter(
+                          double? clickSec;
+                          if (d.localPosition.dx >= _waveformPlotLeftPad) {
+                            final drawWidth = (constraints.maxWidth - _waveformPlotLeftPad)
+                                .clamp(1.0, double.infinity);
+                            final fx = ((d.localPosition.dx - _waveformPlotLeftPad) / drawWidth)
+                                .clamp(0.0, 1.0);
+                            clickSec = widget.viewport.visibleStartSeconds +
+                                fx * widget.viewport.visibleDurationSeconds;
+                          }
+                          widget.onChannelContextMenu!(ch, d.globalPosition, clickSec: clickSec);
+                        },
+                        onDoubleTapDown: (d) {
+                          if (d.localPosition.dx >= _waveformPlotLeftPad) {
+                            final drawWidth = (constraints.maxWidth - _waveformPlotLeftPad)
+                                .clamp(1.0, double.infinity);
+                            final fx = ((d.localPosition.dx - _waveformPlotLeftPad) / drawWidth)
+                                .clamp(0.0, 1.0);
+                            final clickSec = widget.viewport.visibleStartSeconds +
+                                fx * widget.viewport.visibleDurationSeconds;
+                            final n = widget.viewport.channelCount;
+                            final ch = n > 0
+                                ? (d.localPosition.dy / constraints.maxHeight * n)
+                                    .floor()
+                                    .clamp(0, n - 1)
+                                : 0;
+                            widget.onAddMarkerAt?.call(clickSec, ch);
+                          }
+                        },
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            _Panel(
+                              painter: TimelinePainter(
                                 widget.viewport,
-                                activeDragStartSec: _dragStartSec,
-                                activeDragEndSec: _dragEndSec,
-                                activeDragChannel: _dragChannel,
-                                activeDragStartUv: _dragStartUv,
-                                activeDragEndUv: _dragEndUv,
+                                drawChannelLabels: false,
                                 leftPad: _waveformPlotLeftPad,
                               ),
+                              padding: EdgeInsets.zero,
                             ),
-                          ),
-                        ],
+                            IgnorePointer(
+                              child: CustomPaint(
+                                painter: SelectionOverlayPainter(
+                                  widget.viewport,
+                                  activeDragStartSec: _dragStartSec,
+                                  activeDragEndSec: _dragEndSec,
+                                  activeDragChannel: _dragChannel,
+                                  activeDragStartUv: _dragStartUv,
+                                  activeDragEndUv: _dragEndUv,
+                                  leftPad: _waveformPlotLeftPad,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
+                    if (_hoverPos != null &&
+                        _hoverChannelName != null &&
+                        _hoverVal != null &&
+                        _dragStartSec == null)
+                      _buildHoverPill(constraints),
                     // Maximize / Restore floating pill in top right corner
                     Positioned(
                       top: 4,
@@ -13462,6 +13644,7 @@ class _StatusBar extends StatelessWidget {
     required this.viewport,
     this.comparisonStages,
     this.onTimeUnitChanged,
+    this.hoverStatus,
   });
 
   final String status;
@@ -13469,6 +13652,7 @@ class _StatusBar extends StatelessWidget {
   final EegViewport? viewport;
   final List<SleepStage>? comparisonStages;
   final ValueChanged<String>? onTimeUnitChanged;
+  final String? hoverStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -13653,6 +13837,37 @@ class _StatusBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Row(
         children: [
+          if (hoverStatus != null && hoverStatus!.isNotEmpty) ...[
+            Container(
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+              decoration: BoxDecoration(
+                color: hoverStatus!.toUpperCase().contains('SPO2') ||
+                        hoverStatus!.toUpperCase().contains('SPO₂')
+                    ? const Color(0xFFE0F2FE)
+                    : const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: hoverStatus!.toUpperCase().contains('SPO2') ||
+                          hoverStatus!.toUpperCase().contains('SPO₂')
+                      ? const Color(0xFF0284C7)
+                      : const Color(0xFF94A3B8),
+                  width: 0.8,
+                ),
+              ),
+              child: Text(
+                hoverStatus!,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.bold,
+                  color: hoverStatus!.toUpperCase().contains('SPO2') ||
+                          hoverStatus!.toUpperCase().contains('SPO₂')
+                      ? const Color(0xFF0369A1)
+                      : const Color(0xFF1E293B),
+                ),
+              ),
+            ),
+          ],
           Expanded(
             child: Text(
               cleanStatus,
@@ -14595,10 +14810,11 @@ class _ToolButton extends StatelessWidget {
 }
 
 class _ZoomSignalPainter extends CustomPainter {
-  const _ZoomSignalPainter(this.samples, this.sampleRate);
+  const _ZoomSignalPainter(this.samples, this.sampleRate, {this.channelLabel = ''});
 
   final List<double> samples;
   final double sampleRate;
+  final String channelLabel;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -14607,7 +14823,7 @@ class _ZoomSignalPainter extends CustomPainter {
     final minV = samples.reduce(math.min);
     final maxV = samples.reduce(math.max);
     final range = math.max(maxV - minV, 1e-6);
-    const pad = EdgeInsets.fromLTRB(44, 12, 12, 28);
+    const pad = EdgeInsets.fromLTRB(56, 12, 12, 28);
     final plotW = size.width - pad.left - pad.right;
     final plotH = size.height - pad.top - pad.bottom;
     final axisPaint = Paint()
@@ -14658,15 +14874,21 @@ class _ZoomSignalPainter extends CustomPainter {
       Offset(pad.left + plotW, size.height - 12),
       TextAlign.right,
     );
+    final maxLabel = channelLabel.isNotEmpty
+        ? formatChannelValue(channelLabel, maxV)
+        : '${maxV.toStringAsFixed(1)} µV';
+    final minLabel = channelLabel.isNotEmpty
+        ? formatChannelValue(channelLabel, minV)
+        : '${minV.toStringAsFixed(1)} µV';
     _paintText(
       canvas,
-      '${maxV.toStringAsFixed(1)} µV',
+      maxLabel,
       Offset(4, pad.top + 6),
       TextAlign.left,
     );
     _paintText(
       canvas,
-      '${minV.toStringAsFixed(1)} µV',
+      minLabel,
       Offset(4, pad.top + plotH - 6),
       TextAlign.left,
     );
@@ -14688,7 +14910,9 @@ class _ZoomSignalPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_ZoomSignalPainter oldDelegate) =>
-      oldDelegate.samples != samples || oldDelegate.sampleRate != sampleRate;
+      oldDelegate.samples != samples ||
+      oldDelegate.sampleRate != sampleRate ||
+      oldDelegate.channelLabel != channelLabel;
 }
 
 class _Divider extends StatelessWidget {

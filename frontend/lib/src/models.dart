@@ -678,6 +678,55 @@ LevelSignalKind? levelSignalKind(String label) {
   return LevelSignalKind.other;
 }
 
+/// Checks whether a channel label is an EEG/EOG/EMG/ECG-like signal.
+bool isEegLabel(String label) => _eegLikeLabel.hasMatch(label.toUpperCase());
+
+/// Returns the engineering unit string for a given channel label
+/// ('%' for SpO2, 'bpm' for pulse, 'mmHg' for CO2, '' for respiratory/position, 'µV' for EEG/EOG/EMG/ECG).
+String channelUnitFor(String label) {
+  final kind = levelSignalKind(label);
+  if (kind != null) {
+    switch (kind) {
+      case LevelSignalKind.spo2:
+        return '%';
+      case LevelSignalKind.pulse:
+        return 'bpm';
+      case LevelSignalKind.co2:
+        return 'mmHg';
+      case LevelSignalKind.position:
+        return '';
+      case LevelSignalKind.other:
+        return '';
+    }
+  }
+  final u = label.toUpperCase();
+  if (_respiratoryLabel.hasMatch(u)) {
+    return '';
+  }
+  return 'µV';
+}
+
+/// Formats a channel's physical numeric value with its appropriate unit
+/// (e.g. `95.0 %` for SpO2, `72 bpm` for Pulse, `35.0 mmHg` for CO2, `-12.5 µV` for EEG).
+String formatChannelValue(String label, double rawValue) {
+  final kind = levelSignalKind(label);
+  if (kind == LevelSignalKind.spo2) {
+    final val = (rawValue > 0 && rawValue <= 1.0) ? rawValue * 100.0 : rawValue;
+    return '${val.toStringAsFixed(1)} %';
+  } else if (kind == LevelSignalKind.pulse) {
+    return '${rawValue.toStringAsFixed(0)} bpm';
+  } else if (kind == LevelSignalKind.co2) {
+    return '${rawValue.toStringAsFixed(1)} mmHg';
+  } else if (kind == LevelSignalKind.position) {
+    return rawValue.toStringAsFixed(0);
+  }
+  final u = label.toUpperCase();
+  if (_respiratoryLabel.hasMatch(u)) {
+    return rawValue.toStringAsFixed(1);
+  }
+  return '${rawValue.toStringAsFixed(1)} µV';
+}
+
 /// Default display mode for a channel label: SpO2, pulse, position and CO2
 /// on an absolute scale; flow, pressure, effort and snore auto-scaled; EEG,
 /// EOG, EMG and ECG in µV.

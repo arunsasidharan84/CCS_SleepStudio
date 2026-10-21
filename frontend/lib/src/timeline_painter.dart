@@ -2318,9 +2318,21 @@ class SelectionOverlayPainter extends CustomPainter {
         );
       }
 
-      // Top label: Height of the box in microvolts
-      final heightUv = (labelTarget.endUv - labelTarget.startUv).abs();
-      final topText = "${heightUv.toStringAsFixed(1)} µV";
+      final ch = labelTarget.channel;
+      final channelLabel = (ch >= 0 && ch < viewport.signalChannelLabels.length)
+          ? viewport.signalChannelLabels[ch]
+          : '';
+
+      // Top label: Height of the box
+      final double boxHeightValue;
+      if (levelSignalKind(channelLabel) == LevelSignalKind.spo2) {
+        final deltaNorm = (labelTarget.endUv - labelTarget.startUv).abs() /
+            (viewport.amplitudeRangeUv > 0 ? viewport.amplitudeRangeUv : 75.0);
+        boxHeightValue = deltaNorm * 30.0;
+      } else {
+        boxHeightValue = (labelTarget.endUv - labelTarget.startUv).abs();
+      }
+      final topText = formatChannelValue(channelLabel, boxHeightValue);
       _drawText(
         canvas,
         topText,
@@ -2394,7 +2406,13 @@ class SelectionOverlayPainter extends CustomPainter {
       }
 
       if (peakToPeak != null) {
-        final leftText = "${peakToPeak.toStringAsFixed(1)} µV";
+        double ptpValue = peakToPeak;
+        if (hasActiveDrag && levelSignalKind(channelLabel) == LevelSignalKind.spo2) {
+          final deltaNorm = ptpValue /
+              (viewport.amplitudeRangeUv > 0 ? viewport.amplitudeRangeUv : 75.0);
+          ptpValue = deltaNorm * 30.0;
+        }
+        final leftText = formatChannelValue(channelLabel, ptpValue);
         final labelColor =
             TimelinePainter.channelColors[labelTarget.channel %
                 TimelinePainter.channelColors.length];

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ccs_sleep_studio/src/edf_loader.dart';
+import 'package:ccs_sleep_studio/src/edf_utilities_dialog.dart';
 
 void main() {
   test('loads a minimal EDF file', () {
@@ -27,6 +28,48 @@ void main() {
 
     expect(loaded.channelLabels, ['C3-M2']);
     expect(loaded.channelSamples, hasLength(1));
+  });
+
+  test('processEdfFile anonymizes patient header and streams data with progress', () async {
+    final tempDir = Directory.systemTemp.createTempSync('edf_anonymize_test_');
+    final inPath = '${tempDir.path}/original.edf';
+    final outPath = '${tempDir.path}/anonymized.edf';
+    File(inPath).writeAsBytesSync(_minimalEdf());
+
+    final progressReports = <double>[];
+    final statusMessages = <String>[];
+    final options = EdfTransformOptions()
+      ..anonymizeHeader = true
+      ..patientId = 'ANON_ID_123'
+      ..patientName = 'Subject_123';
+
+    await processEdfFile(
+      inPath,
+      outPath,
+      options,
+      onProgress: (p, msg) {
+        progressReports.add(p);
+        statusMessages.add(msg);
+      },
+    );
+
+    expect(File(outPath).existsSync(), isTrue);
+    expect(progressReports, isNotEmpty);
+    expect(progressReports.last, 1.0);
+
+    // Verify output EDF header anonymized
+    final outBytes = File(outPath).readAsBytesSync();
+    final patientIdInHeader = utf8.decode(outBytes.sublist(8, 88)).trim();
+    final patientNameInHeader = utf8.decode(outBytes.sublist(88, 168)).trim();
+    expect(patientIdInHeader, 'ANON_ID_123');
+    expect(patientNameInHeader, 'Subject_123');
+
+    // Verify readable by EdfLoader
+    final loaded = EdfLoader().load(outPath);
+    expect(loaded.channelLabels, ['C3-M2']);
+    expect(loaded.channelSamples.single, hasLength(2));
+
+    tempDir.deleteSync(recursive: true);
   });
 
   test('loads original ScoringHero night EDF example when available', () {

@@ -132,5 +132,26 @@ void main() {
       expect(find.text('0s / 3600s'), findsOneWidget);
       sync.dispose();
     });
+
+    test('channelUnitFor and formatChannelValue format units correctly', () {
+      // Units
+      expect(channelUnitFor('SpO2'), '%');
+      expect(channelUnitFor('SPO2'), '%');
+      expect(channelUnitFor('SaO2'), '%');
+      expect(channelUnitFor('Pulse'), 'bpm');
+      expect(channelUnitFor('HR'), 'bpm');
+      expect(channelUnitFor('CO2'), 'mmHg');
+      expect(channelUnitFor('Flow'), '');
+      expect(channelUnitFor('C3-A2'), 'µV');
+      expect(channelUnitFor('EEG F4-M1'), 'µV');
+
+      // Value formatting
+      expect(formatChannelValue('SpO2', 95.2), '95.2 %');
+      expect(formatChannelValue('SPO2', 0.94), '94.0 %'); // fractional scaled
+      expect(formatChannelValue('Pulse', 72.0), '72 bpm');
+      expect(formatChannelValue('CO2', 38.5), '38.5 mmHg');
+      expect(formatChannelValue('C3-A2', -15.4), '-15.4 µV');
+      expect(formatChannelValue('SpO2', 3.0), '3.0 %');
+    });
   });
 }

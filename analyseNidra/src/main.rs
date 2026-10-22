@@ -18,9 +18,10 @@ const USAGE: &str = "usage: analyse-nidra <recording.edf> <scoring.json> \
 [--lights-off-sec SEC] [--lights-on-sec SEC] [--per-channel] [--region-map <json_or_file>] \
 [--analyses core,pac,slow_waves,spindles,nlg | --skip <list>] [--nlg-out <nlg.json>] [--nlg-bands slow_wave,sigma[,alpha]] \
 [--nlg-smooth-rate 0.01666] [--nlg-undersample N] [--nlg-edf-dir DIR] [--config <config.json>] [--version]\n\
-   or: analyse-nidra --preprocess <recording.edf> [--out-dir <dir>] [--steps <stimartifact,filter,badchannel,interpolate,gedai,save>] \
+   or: analyse-nidra --preprocess <recording.edf> [--out-dir <dir>] [--steps <stimartifact,ecg,filter,badchannel,interpolate,gedai,save>] \
 [--downsample-hz <hz>] [--bandpass-lo <lo>] [--bandpass-hi <hi>] [--notch-hz <notch>] [--suffix <_clean>] \
-[--stim-f0 <hz>] [--stim-win <sec>] [--stim-max-combs <n>]\n\
+[--stim-f0 <hz>] [--stim-win <sec>] [--stim-max-combs <n>] [--ecg-channel <ch>]\n\
+   or: analyse-nidra --remove-ecg <recording.edf> [--ecg <ch>] [--eeg-channels <ch1,ch2>] [--out-dir <dir>] [--suffix <_noecg>]\n\
    or: analyse-nidra --stage <recording.edf> [--algorithm <yasa|luna|sleeptransformer|gssc|tinysleepnet|seqsleepnet|usleep|dreamento|sleepeegpy>] (default yasa + sleepgpt) \
 [--sequence-correction <none|sleepgpt>] [--eeg C4,C3] [--ref M1,M2] [--eog E1,E2] [--emg Chin1,Chin2] [--out <output.json>] [--out-dir <dir>] \
 [--sleepgpt-alpha <0.1>] [--sleepgpt-ngram <30>]\n\
@@ -449,6 +450,7 @@ fn handle_preprocess_cli(args: impl IntoIterator<Item = OsString>) -> Result<()>
     let mut eeg_channels = None;
     let mut suffix = "_clean".to_string();
     let mut stim = analyse_nidra::cleaning::stim_artifact::StimArtifactConfig::default();
+    let mut ecg = analyse_nidra::cleaning::ecg_artifact::EcgArtifactConfig::default();
 
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
@@ -510,6 +512,14 @@ fn handle_preprocess_cli(args: impl IntoIterator<Item = OsString>) -> Result<()>
             if let Some(val) = it.next() {
                 stim.max_families = val.to_string_lossy().parse().unwrap_or(3);
             }
+        } else if s == "--ecg-channel" || s == "--ecg" {
+            if let Some(val) = it.next() {
+                ecg.ecg_channel = Some(val.to_string_lossy().to_string());
+            }
+        } else if let Some(val) = s.strip_prefix("--ecg-channel=") {
+            ecg.ecg_channel = Some(val.to_string());
+        } else if let Some(val) = s.strip_prefix("--ecg=") {
+            ecg.ecg_channel = Some(val.to_string());
         } else if !s.starts_with("--") && edf_path.is_none() {
             edf_path = Some(PathBuf::from(arg));
         }
@@ -529,8 +539,69 @@ fn handle_preprocess_cli(args: impl IntoIterator<Item = OsString>) -> Result<()>
     cfg.eeg_channels = eeg_channels;
     cfg.suffix = suffix;
     cfg.stim = stim;
+    cfg.ecg = ecg;
 
     analyse_nidra::cleaning::run_preprocessing(&edf_path, &out_dir, &cfg)?;
+    Ok(())
+}
+
+fn handle_remove_ecg_cli(args: impl IntoIterator<Item = OsString>) -> Result<()> {
+    let mut edf_path: Option<PathBuf> = None;
+    let mut out_dir: Option<PathBuf> = None;
+    let mut ecg_channel: Option<String> = None;
+    let mut eeg_channels: Option<Vec<String>> = None;
+    let mut suffix: String = "_noecg".to_string();
+
+    let mut it = args.into_iter();
+    while let Some(arg) = it.next() {
+        let s = arg.to_string_lossy().to_string();
+        if s == "--remove-ecg" || s == "--ecg-artifact" || s == "--clean-ecg" {
+            if let Some(val) = it.next() {
+                let v = val.to_string_lossy().to_string();
+                if !v.starts_with("--") {
+                    edf_path = Some(PathBuf::from(v));
+                }
+            }
+        } else if let Some(val) = s.strip_prefix("--remove-ecg=") {
+            edf_path = Some(PathBuf::from(val));
+        } else if s == "--ecg" || s == "--ecg-channel" {
+            ecg_channel = it.next().map(|v| v.to_string_lossy().to_string());
+        } else if let Some(val) = s.strip_prefix("--ecg=") {
+            ecg_channel = Some(val.to_string());
+        } else if let Some(val) = s.strip_prefix("--ecg-channel=") {
+            ecg_channel = Some(val.to_string());
+        } else if s == "--eeg-channels" || s == "--channels" {
+            if let Some(val) = it.next() {
+                eeg_channels = Some(val.to_string_lossy().split(',').map(|x| x.trim().to_string()).collect());
+            }
+        } else if s == "--out-dir" {
+            out_dir = it.next().map(PathBuf::from);
+        } else if let Some(val) = s.strip_prefix("--out-dir=") {
+            out_dir = Some(PathBuf::from(val));
+        } else if s == "--suffix" {
+            if let Some(val) = it.next() {
+                suffix = val.to_string_lossy().to_string();
+            }
+        } else if !s.starts_with("--") && edf_path.is_none() {
+            edf_path = Some(PathBuf::from(arg));
+        }
+    }
+
+    let edf_path = edf_path.context("No input EDF file specified for --remove-ecg")?;
+    let out_dir = out_dir.unwrap_or_else(|| edf_path.parent().unwrap_or(Path::new(".")).to_path_buf());
+
+    let mut cfg = analyse_nidra::cleaning::ecg_artifact::EcgArtifactConfig::default();
+    cfg.ecg_channel = ecg_channel;
+
+    let (out_path, _report) = analyse_nidra::cleaning::ecg_artifact::run_ecg_cleaning(
+        &edf_path,
+        &out_dir,
+        &cfg,
+        eeg_channels.as_deref(),
+        &suffix,
+    )?;
+
+    println!("OUTPUT_EDF \"{}\"", out_path.display());
     Ok(())
 }
 
@@ -996,6 +1067,12 @@ fn main() -> Result<()> {
         s == "--preprocess" || s.starts_with("--preprocess=")
     }) {
         return handle_preprocess_cli(raw_args);
+    }
+    if raw_args.iter().any(|a| {
+        let s = a.to_string_lossy();
+        s == "--remove-ecg" || s.starts_with("--remove-ecg=") || s == "--ecg-artifact" || s == "--clean-ecg"
+    }) {
+        return handle_remove_ecg_cli(raw_args);
     }
     if raw_args.iter().any(|a| {
         let s = a.to_string_lossy();

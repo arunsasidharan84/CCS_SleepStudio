@@ -10,12 +10,14 @@ class PreprocessDialog extends StatefulWidget {
     required this.inputFilePath,
     this.initialChannels = const [],
     this.initialStimArtifactOnly = false,
+    this.initialEcgArtifactOnly = false,
     this.onCompleted,
   });
 
   final String inputFilePath;
   final List<String> initialChannels;
   final bool initialStimArtifactOnly;
+  final bool initialEcgArtifactOnly;
   final void Function(String cleanedFilePath)? onCompleted;
 
   @override
@@ -34,7 +36,9 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
   late TextEditingController _stimWinController;
   late TextEditingController _stimMaxCombsController;
   late TextEditingController _badChannelThreshController;
+  late TextEditingController _ecgChannelController;
 
+  bool _stepEcgArtifact = false;
   bool _stepStimArtifact = false;
   bool _stepDownsample = false;
   bool _stepFilter = true;
@@ -61,8 +65,23 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
     _stimWinController = TextEditingController(text: '10.0');
     _stimMaxCombsController = TextEditingController(text: '4');
     _badChannelThreshController = TextEditingController(text: '0.75');
+    final ecgCandidate = widget.initialChannels.firstWhere(
+      (c) => c.toUpperCase().contains('ECG') || c.toUpperCase().contains('EKG'),
+      orElse: () => '',
+    );
+    _ecgChannelController = TextEditingController(text: ecgCandidate);
 
-    if (widget.initialStimArtifactOnly) {
+    if (widget.initialEcgArtifactOnly) {
+      _stepEcgArtifact = true;
+      _stepStimArtifact = false;
+      _stepDownsample = false;
+      _stepFilter = false;
+      _stepBadChannel = false;
+      _stepGedai = false;
+      _stepInterpolate = false;
+      _suffixController = TextEditingController(text: '_noecg');
+    } else if (widget.initialStimArtifactOnly) {
+      _stepEcgArtifact = false;
       _stepStimArtifact = true;
       _stepDownsample = false;
       _stepFilter = false;
@@ -71,6 +90,7 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
       _stepInterpolate = false;
       _suffixController = TextEditingController(text: '_stimclean');
     } else {
+      _stepEcgArtifact = false;
       _stepStimArtifact = false;
       _stepDownsample = false;
       _stepFilter = true;
@@ -94,6 +114,7 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
     _stimWinController.dispose();
     _stimMaxCombsController.dispose();
     _badChannelThreshController.dispose();
+    _ecgChannelController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -136,6 +157,7 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
     // Stimulation artefact removal runs first, on the raw signal, so that filtering and
     // RANSAC bad-channel detection are not driven by the periodic DBS artefact.
     if (_stepStimArtifact) steps.add('stimartifact');
+    if (_stepEcgArtifact) steps.add('ecg');
     if (_stepDownsample) steps.add('downsample');
     if (_stepFilter) steps.add('filter');
     if (_stepBadChannel) steps.add('badchannel');
@@ -167,6 +189,11 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
         .toList();
     if (chans.isNotEmpty) {
       rawArgs.addAll(['--eeg-channels', chans.join(',')]);
+    }
+
+    if (_stepEcgArtifact) {
+      final ecg = _ecgChannelController.text.trim();
+      if (ecg.isNotEmpty) rawArgs.addAll(['--ecg-channel', ecg]);
     }
 
     if (_stepDownsample) {
@@ -237,19 +264,31 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
   Widget build(BuildContext context) {
     final fileName = File(widget.inputFilePath).path.split(Platform.isWindows ? r'\' : '/').last;
 
+    IconData titleIcon = Icons.auto_fix_high;
+    Color titleColor = Colors.purple;
+    String titleText = 'EEG Preprocessing Pipeline — $fileName';
+    String actionBtnText = 'Run Preprocessing';
+
+    if (widget.initialEcgArtifactOnly) {
+      titleIcon = Icons.monitor_heart;
+      titleColor = Colors.red.shade700;
+      titleText = 'Remove ECG Artefacts (Cardiac QRS Subtraction) — $fileName';
+      actionBtnText = 'Remove ECG Artefact';
+    } else if (widget.initialStimArtifactOnly) {
+      titleIcon = Icons.electric_bolt;
+      titleColor = Colors.amber.shade800;
+      titleText = 'Auto Electric Stim Artefact Removal (DBS) — $fileName';
+      actionBtnText = 'Remove Stim Artefact';
+    }
+
     return AlertDialog(
       title: Row(
         children: [
-          Icon(
-            widget.initialStimArtifactOnly ? Icons.electric_bolt : Icons.auto_fix_high,
-            color: widget.initialStimArtifactOnly ? Colors.amber.shade800 : Colors.purple,
-          ),
+          Icon(titleIcon, color: titleColor),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              widget.initialStimArtifactOnly
-                  ? 'Auto Electric Stim Artefact Removal (DBS) — $fileName'
-                  : 'EEG Preprocessing Pipeline — $fileName',
+              titleText,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
@@ -269,6 +308,29 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    if (widget.initialEcgArtifactOnly)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.red.shade200),
+                        ),
+                        child: const Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.info_outline, size: 18, color: Colors.red),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'QRS-synchronous cardiac template subtraction: detects R-peaks on ECG, extracts the cardiac artifact waveform conducted to sleep EEG derivations, and cleanly subtracts it without affecting sleep spindles or slow waves.',
+                                style: TextStyle(fontSize: 11.5, color: Colors.black87),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     if (widget.initialStimArtifactOnly)
                       Container(
                         margin: const EdgeInsets.only(bottom: 12),
@@ -325,6 +387,32 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
                     const SizedBox(height: 12),
                     const Text('Pipeline Steps (ccstools / GEDAI):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                     const SizedBox(height: 4),
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('ECG Artefact Removal (Cardiac QRS Subtraction)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                      subtitle: const Text(
+                        'Pan-Tompkins R-peak detection & QRS template subtraction on EEG',
+                        style: TextStyle(fontSize: 10),
+                      ),
+                      value: _stepEcgArtifact,
+                      onChanged: _isProcessing ? null : (v) => setState(() => _stepEcgArtifact = v ?? false),
+                    ),
+                    if (_stepEcgArtifact)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 32, bottom: 6),
+                        child: TextFormField(
+                          controller: _ecgChannelController,
+                          enabled: !_isProcessing,
+                          decoration: const InputDecoration(
+                            labelText: 'ECG Channel (e.g. ECG, ECG I, EKG)',
+                            hintText: 'blank = auto-detect',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
                     CheckboxListTile(
                       dense: true,
                       contentPadding: EdgeInsets.zero,
@@ -541,9 +629,9 @@ class _PreprocessDialogState extends State<PreprocessDialog> {
         ),
         ElevatedButton.icon(
           icon: const Icon(Icons.play_arrow),
-          label: Text(_isProcessing ? 'Processing...' : 'Run Preprocessing'),
+          label: Text(_isProcessing ? 'Processing...' : actionBtnText),
           style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.purple,
+            backgroundColor: widget.initialEcgArtifactOnly ? Colors.red.shade700 : Colors.purple,
             foregroundColor: Colors.white,
           ),
           onPressed: _isProcessing ? null : _runPreprocessing,

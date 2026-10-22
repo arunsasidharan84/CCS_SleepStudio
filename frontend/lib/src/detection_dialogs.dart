@@ -1124,14 +1124,128 @@ class _AnalyseNidraDetectionDialogState
   );
 }
 
+/// Checks whether a channel label is an AASM EEG derivation (e.g. C4-M1, C4-A1, C3-M2, F4-M1, F3-M2, O2-M1, O1-M2).
+bool isAasmEegDerivation(String label) {
+  final upper = label.trim().toUpperCase().replaceFirst(RegExp(r'^(EEG|POL)[\s\-_]+'), '');
+  final parts = upper.split(RegExp(r'[-_:]'));
+  if (parts.length < 2) return false;
+  final active = parts[0].trim();
+  final ref = parts[1].trim();
+  final isAasmEegRoot = const ['C4', 'C3', 'CZ', 'F4', 'F3', 'FZ', 'O2', 'O1', 'OZ'].contains(active);
+  final isAasmRef = const ['M1', 'M2', 'A1', 'A2'].contains(ref);
+  return isAasmEegRoot && isAasmRef;
+}
+
+/// Checks whether a channel label is an AASM EOG derivation (e.g. E1-M2, E2-M1, LOC-A2, ROC-A1, LOC1-A2, ROC1-A1).
+bool isAasmEogDerivation(String label) {
+  final upper = label.trim().toUpperCase().replaceFirst(RegExp(r'^(EEG|POL|EOG)[\s\-_]+'), '');
+  final parts = upper.split(RegExp(r'[-_:]'));
+  if (parts.length < 2) {
+    return upper.contains('LOC') || upper.contains('ROC') || upper == 'E1' || upper == 'E2' || upper == 'EOG1' || upper == 'EOG2';
+  }
+  final active = parts[0].trim();
+  final ref = parts[1].trim();
+  final isEogActive = const ['E1', 'E2', 'LOC', 'ROC', 'LOC1', 'ROC1', 'EOG1', 'EOG2', 'EOGL', 'EOGR'].contains(active);
+  final isRef = const ['M1', 'M2', 'A1', 'A2', 'ROC', 'LOC', 'E1', 'E2'].contains(ref);
+  return isEogActive && isRef;
+}
+
+/// Checks whether a channel label is an AASM EMG derivation (e.g. CHIN1-CHIN2, CHIN1-CHIN3, CHIN, EMG Chin).
+bool isAasmEmgDerivation(String label) {
+  final upper = label.trim().toUpperCase().replaceFirst(RegExp(r'^(EEG|POL)[\s\-_]+'), '');
+  if (upper.contains('CHIN') || upper.contains('SUBMENTAL') || upper.contains('MYO')) return true;
+  final parts = upper.split(RegExp(r'[-_:]'));
+  if (parts.length >= 2) {
+    final a = parts[0].trim();
+    final b = parts[1].trim();
+    if ((a.contains('EMG') || a.contains('CHIN')) && (b.contains('EMG') || b.contains('CHIN'))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void populateScoringChannelDefaults({
+  required List<String> channelLabels,
+  List<String>? visibleChannelLabels,
+  required Map<String, bool> eegMap,
+  required Map<String, bool> refMap,
+  required Map<String, bool> eogMap,
+  required Map<String, bool> emgMap,
+}) {
+  eegMap.clear();
+  refMap.clear();
+  eogMap.clear();
+  emgMap.clear();
+
+  final pool = visibleChannelLabels != null && visibleChannelLabels.isNotEmpty
+      ? visibleChannelLabels
+      : channelLabels;
+
+  // 1. Check if AASM derivations are present
+  final hasAasmEeg = pool.any(isAasmEegDerivation);
+  final hasAasmEog = pool.any(isAasmEogDerivation);
+  final hasAasmEmg = pool.any(isAasmEmgDerivation);
+
+  for (final ch in channelLabels) {
+    final group = _classifyScoringChannel(ch);
+
+    if (hasAasmEeg) {
+      // If AASM EEG derivations are available, select ONLY the visible/pool AASM EEG channels by default
+      eegMap[ch] = pool.contains(ch) && isAasmEegDerivation(ch);
+      refMap[ch] = group.ref;
+    } else {
+      // If only raw channels are available, prioritize standard AASM channels (C4, F4, O2 or C3, F3, O1)
+      final upper = ch.trim().toUpperCase().replaceFirst(RegExp(r'^(EEG|POL)[\s\-_]+'), '');
+      final root = upper.split(RegExp(r'[-_:\s]')).first;
+      final isStandardAasmRawEeg = const ['C4', 'F4', 'O2', 'C3', 'F3', 'O1', 'CZ', 'FZ', 'OZ'].contains(root);
+      eegMap[ch] = group.eeg && isStandardAasmRawEeg;
+      refMap[ch] = group.ref;
+    }
+
+    if (hasAasmEog) {
+      // If AASM EOG derivations exist, select only those
+      eogMap[ch] = pool.contains(ch) && isAasmEogDerivation(ch);
+    } else {
+      eogMap[ch] = group.eog;
+    }
+
+    if (hasAasmEmg) {
+      // If AASM EMG derivations exist, select only those
+      emgMap[ch] = pool.contains(ch) && isAasmEmgDerivation(ch);
+    } else {
+      emgMap[ch] = group.emg;
+    }
+  }
+
+  // Fallback: If no EEG was selected, select any detected EEG or single channel
+  if (!eegMap.values.any((v) => v)) {
+    for (final ch in channelLabels) {
+      if (_classifyScoringChannel(ch).eeg) {
+        eegMap[ch] = true;
+        break;
+      }
+    }
+  }
+  if (channelLabels.length == 1 &&
+      !eegMap.values.any((v) => v) &&
+      !refMap.values.any((v) => v) &&
+      !eogMap.values.any((v) => v) &&
+      !emgMap.values.any((v) => v)) {
+    eegMap[channelLabels.single] = true;
+  }
+}
+
 class AutoScoringDialog extends StatefulWidget {
   const AutoScoringDialog({
     super.key,
     required this.channelLabels,
+    this.visibleChannelLabels,
     required this.onRun,
   });
 
   final List<String> channelLabels;
+  final List<String>? visibleChannelLabels;
   final void Function(Map<String, dynamic> settings) onRun;
 
   @override
@@ -1152,20 +1266,14 @@ class _AutoScoringDialogState extends State<AutoScoringDialog> {
   @override
   void initState() {
     super.initState();
-    for (final ch in widget.channelLabels) {
-      final group = _classifyScoringChannel(ch);
-      _eegChannels[ch] = group.eeg;
-      _refChannels[ch] = group.ref;
-      _eogChannels[ch] = group.eog;
-      _emgChannels[ch] = group.emg;
-    }
-    if (widget.channelLabels.length == 1 &&
-        !_eegChannels.values.any((selected) => selected) &&
-        !_refChannels.values.any((selected) => selected) &&
-        !_eogChannels.values.any((selected) => selected) &&
-        !_emgChannels.values.any((selected) => selected)) {
-      _eegChannels[widget.channelLabels.single] = true;
-    }
+    populateScoringChannelDefaults(
+      channelLabels: widget.channelLabels,
+      visibleChannelLabels: widget.visibleChannelLabels,
+      eegMap: _eegChannels,
+      refMap: _refChannels,
+      eogMap: _eogChannels,
+      emgMap: _emgChannels,
+    );
   }
 
   @override
@@ -2057,20 +2165,13 @@ class _BatchAutoScoringDialogState extends State<BatchAutoScoringDialog> {
     _eogChannels = {};
     _emgChannels = {};
 
-    for (final channel in widget.channelLabels) {
-      final group = _classifyScoringChannel(channel);
-      _eegChannels[channel] = group.eeg;
-      _refChannels[channel] = group.ref;
-      _eogChannels[channel] = group.eog;
-      _emgChannels[channel] = group.emg;
-    }
-    if (widget.channelLabels.length == 1 &&
-        !_eegChannels.values.any((selected) => selected) &&
-        !_refChannels.values.any((selected) => selected) &&
-        !_eogChannels.values.any((selected) => selected) &&
-        !_emgChannels.values.any((selected) => selected)) {
-      _eegChannels[widget.channelLabels.single] = true;
-    }
+    populateScoringChannelDefaults(
+      channelLabels: widget.channelLabels,
+      eegMap: _eegChannels,
+      refMap: _refChannels,
+      eogMap: _eogChannels,
+      emgMap: _emgChannels,
+    );
   }
 
   @override

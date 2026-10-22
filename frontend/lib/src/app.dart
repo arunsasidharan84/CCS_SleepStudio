@@ -1645,12 +1645,18 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
       return;
     }
 
+    final visibleLabels = _config.channels
+        .where((c) => c.displayOnScreen)
+        .map((c) => c.name)
+        .toList();
+
     showDialog(
       context: context,
       builder: (_) => AutoScoringDialog(
         channelLabels: _config.channels.isNotEmpty
             ? _config.channels.map((c) => c.name).toList()
             : eeg.channelLabels,
+        visibleChannelLabels: visibleLabels,
         onRun: (settings) async {
           List<String> mapBack(List<String> list) {
             return list.map((selName) {
@@ -1658,10 +1664,19 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 (c) => c.name == selName,
                 orElse: () => ChannelConfig(name: selName),
               );
+              if (matchingConfig.derived &&
+                  matchingConfig.reReference != 'None' &&
+                  matchingConfig.reReference.isNotEmpty) {
+                final source = (matchingConfig.sourceIndex != null &&
+                        matchingConfig.sourceIndex! < eeg.channelLabels.length)
+                    ? eeg.channelLabels[matchingConfig.sourceIndex!]
+                    : (matchingConfig.sourceChannel ?? selName.split('-').first);
+                return '$source-${matchingConfig.reReference}';
+              }
               return (matchingConfig.sourceIndex != null &&
                       matchingConfig.sourceIndex! < eeg.channelLabels.length)
                   ? eeg.channelLabels[matchingConfig.sourceIndex!]
-                  : selName;
+                  : (matchingConfig.sourceChannel ?? selName);
             }).toList();
           }
 
@@ -3489,14 +3504,16 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   }
 
 
-  Future<void> _openPreprocessDialog({bool stimArtifactOnly = false}) async {
+  Future<void> _openPreprocessDialog({bool stimArtifactOnly = false, bool ecgArtifactOnly = false}) async {
     String? targetPath = _activePath;
     List<String> chans = [];
     if (targetPath == null || !File(targetPath).existsSync()) {
       final res = await FilePicker.pickFiles(
-        dialogTitle: stimArtifactOnly
-            ? 'Select EEG File for Auto Electric Stim Artefact Removal (DBS)'
-            : 'Select EEG File for Preprocessing',
+        dialogTitle: ecgArtifactOnly
+            ? 'Select EEG File for ECG Artefact Removal (Cardiac QRS Subtraction)'
+            : (stimArtifactOnly
+                ? 'Select EEG File for Auto Electric Stim Artefact Removal (DBS)'
+                : 'Select EEG File for Preprocessing'),
         type: FileType.custom,
         allowedExtensions: ['edf', 'EDF', 'bdf', 'fif', 'set'],
       );
@@ -3520,17 +3537,20 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         inputFilePath: targetPath!,
         initialChannels: chans,
         initialStimArtifactOnly: stimArtifactOnly,
+        initialEcgArtifactOnly: ecgArtifactOnly,
         onCompleted: (cleanedPath) {
           _setStatus(
-            stimArtifactOnly
-                ? 'DBS stim artefact removal completed: ${_basename(cleanedPath)}'
-                : 'Preprocessing completed: ${_basename(cleanedPath)}',
+            ecgArtifactOnly
+                ? 'ECG artefact removal completed: ${_basename(cleanedPath)}'
+                : (stimArtifactOnly
+                    ? 'DBS stim artefact removal completed: ${_basename(cleanedPath)}'
+                    : 'Preprocessing completed: ${_basename(cleanedPath)}'),
           );
           // Offer to open the cleaned file
           showDialog(
             context: context,
             builder: (ctx2) => AlertDialog(
-              title: const Text('Preprocessing Complete'),
+              title: const Text('Processing Complete'),
               content: Text(
                 'Cleaned EEG saved to:\n$cleanedPath\n\n'
                 'Would you like to open this cleaned recording now?',
@@ -3559,6 +3579,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   }
 
   void _openStimArtifactRemovalDialog() => _openPreprocessDialog(stimArtifactOnly: true);
+  void _openEcgArtifactRemovalDialog() => _openPreprocessDialog(ecgArtifactOnly: true);
 
   void _openFeatureSelectionAndConfigDialog() {
     _openConfigDialog(initialTabIndex: 8);
@@ -8382,6 +8403,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 onSelected: _openStimArtifactRemovalDialog,
               ),
               PlatformMenuItem(
+                label: 'Remove ECG Artefacts (Cardiac QRS Subtraction)…',
+                onSelected: _openEcgArtifactRemovalDialog,
+              ),
+              PlatformMenuItem(
                 label: 'EEG Utilities Module (Reduce, Crop, Rename, Anonymize & Batch)…',
                 onSelected: _openEdfUtilitiesDialog,
               ),
@@ -8823,6 +8848,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 leadingIcon: const Icon(Icons.flash_off, size: 18),
                 onPressed: _openStimArtifactRemovalDialog,
                 child: const Text('Auto electric stim artefact removal (DBS)…'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.monitor_heart, size: 18),
+                onPressed: _openEcgArtifactRemovalDialog,
+                child: const Text('Remove ECG Artefacts (Cardiac QRS Subtraction)…'),
               ),
               MenuItemButton(
                 leadingIcon: const Icon(Icons.transform, size: 18),

@@ -4,6 +4,18 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.45.0]
+*   **AASM Montage Default Selection in Automated Sleep Scoring:**
+    - Auto sleep scoring setup dialogs (`AutoScoringDialog` and `BatchAutoScoringDialog`) now prioritize applied/visible AASM derivations (`C4-M1`, `C4-A1`, `F4-M1`, `O2-M1`, `LOC-A2`, `ROC-A1`, `CHIN1-CHIN2`, etc.) by default instead of selecting all available raw channels.
+    - If only unreferenced raw channels exist in the recording, auto-scoring selects standard AASM central/lateral channels (`C4, F4, O2`), references (`M1, M2` / `A1, A2`), EOG (`E1, E2` / `LOC, ROC`), and submental EMG (`CHIN1, CHIN2`), leaving extraneous channels unchecked.
+    - Added contralateral ear-lobe reference (`A1`, `A2`) recognition and automatic on-the-fly derivation computation to the native `analyseNidra` backend scoring loader.
+*   **ECG Artefact Removal (Cardiac QRS Subtraction):**
+    - Implemented high-performance native Rust QRS-synchronous cardiac template subtraction (`analyseNidra/src/cleaning/ecg_artifact.rs`).
+    - Employs Pan-Tompkins R-peak detection, refractory lockout, robust median template extraction, and adaptive beat scaling to cleanly subtract volume-conducted cardiac artifacts from sleep EEG derivations without attenuating sleep spindles or delta waves.
+    - Added full GUI integration via **Utilities > Remove ECG Artefacts (Cardiac QRS Subtraction)…** and the EEG preprocessing dialog, as well as native CLI execution via `--remove-ecg`.
+*   **Obstructive Sleep Apnea (OSA) Clinical Validation:**
+    - Validated automated respiratory event scoring against manual polysomnography (`S2.edf`), demonstrating 92.7% event parity (253 sleep events vs 273 clinical annotations) and tight AHI concordance (Automated AHI 56.3/hr vs manual AHI 61.0/hr, Severe OSA).
+
 ## [1.44.1]
 *   **AASM Montage EOG Channel Detection for LOC/ROC Variants:**
     - Expanded EOG electrode matching to recognize `LOC`, `LOC1`, `ROC`, `ROC1`, `ROC2`, `EOGLOC`, `EOGROC`, and prefixed variants (`EOG LOC1`, `EOG-ROC1`, `POL LOC`).

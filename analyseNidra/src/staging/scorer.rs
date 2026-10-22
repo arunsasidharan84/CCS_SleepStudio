@@ -106,23 +106,20 @@ fn referenced_suffix(label: &str) -> Option<String> {
 
 /// True for derivations that already carry a mastoid reference (`C4-M1`, `C4:A1`).
 pub fn is_prereferenced_channel(label: &str) -> bool {
-    matches!(referenced_suffix(label).as_deref(), Some("M1" | "M2"))
+    matches!(referenced_suffix(label).as_deref(), Some("M1" | "M2" | "A1" | "A2"))
 }
 
-/// AASM-style contralateral mastoid choice (C4 -> M1, C3 -> M2, midline -> M1).
+/// AASM-style contralateral mastoid choice (C4 -> M1/A1, C3 -> M2/A2, midline -> M1/A1).
 pub fn clinical_reference_for(eeg: &str, refs: &[String]) -> Option<String> {
     if refs.is_empty() || is_prereferenced_channel(eeg) {
         return None;
     }
     let root = channel_root(eeg);
-    let contralateral = if root.ends_with(['2', '4', '6', '8', 'Z']) || root.ends_with("10") {
-        "M1"
-    } else {
-        "M2"
-    };
-    let order = [contralateral, if contralateral == "M1" { "M2" } else { "M1" }];
-    for target in order {
-        if let Some(r) = refs.iter().find(|r| channel_root(r) == target) {
+    let is_even_or_midline = root.ends_with(['2', '4', '6', '8', 'Z']) || root.ends_with("10");
+    let (contra1, contra2) = if is_even_or_midline { ("M1", "A1") } else { ("M2", "A2") };
+    let (ipsi1, ipsi2) = if is_even_or_midline { ("M2", "A2") } else { ("M1", "A1") };
+    for target in [contra1, contra2, ipsi1, ipsi2] {
+        if let Some(r) = refs.iter().find(|r| channel_root(r).eq_ignore_ascii_case(target)) {
             return Some(r.clone());
         }
     }
@@ -187,9 +184,25 @@ struct Montage {
 }
 
 fn load_derivation(path: &Path, anode: &str, cathode: Option<&str>) -> Result<Montage> {
-    let mut wanted = vec![anode.to_string()];
-    if let Some(c) = cathode {
-        wanted.push(c.to_string());
+    let (actual_anode, actual_cathode) = match cathode {
+        Some(c) => (anode.to_string(), Some(c.to_string())),
+        None => {
+            if let Some((a, b)) = anode.split_once(['-', ':']) {
+                let labels = recording_labels(path);
+                let exact_match = labels.iter().any(|l| crate::edf::channel_match_key(l) == crate::edf::channel_match_key(anode));
+                if !exact_match {
+                    (a.trim().to_string(), Some(b.trim().to_string()))
+                } else {
+                    (anode.to_string(), None)
+                }
+            } else {
+                (anode.to_string(), None)
+            }
+        }
+    };
+    let mut wanted = vec![actual_anode.clone()];
+    if let Some(ref c) = actual_cathode {
+        wanted.push(c.clone());
     }
     let data = read_selected(path, &wanted)?;
     let mut signal = data.data_uv[0].clone();
@@ -198,9 +211,9 @@ fn load_derivation(path: &Path, anode: &str, cathode: Option<&str>) -> Result<Mo
             *s -= *r;
         }
     }
-    let name = match cathode {
-        Some(c) => format!("{anode}-{c}"),
-        None => anode.to_string(),
+    let name = match actual_cathode {
+        Some(ref c) => format!("{actual_anode}-{c}"),
+        None => actual_anode,
     };
     Ok(Montage {
         name,

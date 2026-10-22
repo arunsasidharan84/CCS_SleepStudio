@@ -1,3 +1,4 @@
+pub mod ecg_artifact;
 pub mod export;
 pub mod gedai;
 pub mod montage;
@@ -10,6 +11,7 @@ use export::write_edf_file_with_prefilter;
 use gedai::{gedai_denoise, GedaiConfig};
 use ransac::{detect_bad_channels, interpolate_bad_channels, RansacConfig};
 use stim_artifact::{remove_stimulation_artifact, StimArtifactConfig, StimArtifactReport};
+use ecg_artifact::{EcgArtifactConfig, EcgArtifactReport};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -26,6 +28,8 @@ pub struct PreprocessingPipelineConfig {
     pub suffix: String,
     /// Settings for the "stimartifact" step (stimulation artefact removal).
     pub stim: StimArtifactConfig,
+    /// Settings for the "ecg" step (cardiac QRS template subtraction).
+    pub ecg: EcgArtifactConfig,
 }
 
 impl Default for PreprocessingPipelineConfig {
@@ -45,6 +49,7 @@ impl Default for PreprocessingPipelineConfig {
             eeg_channels: None,
             suffix: "_clean".to_string(),
             stim: StimArtifactConfig::default(),
+            ecg: EcgArtifactConfig::default(),
         }
     }
 }
@@ -55,6 +60,15 @@ pub struct PreprocessingReport {
     pub bad_channels: Vec<String>,
     pub duration_seconds: f64,
     pub stim_artifact: Option<StimArtifactReport>,
+    pub ecg_artifact: Option<EcgArtifactReport>,
+}
+
+/// Returns true for any accepted spelling of the ECG artefact step name.
+pub fn is_ecg_artifact_step(step: &str) -> bool {
+    matches!(
+        step.to_ascii_lowercase().as_str(),
+        "ecg" | "ecgartifact" | "ecg_artifact" | "ecg_cleaning" | "cardiac" | "qrs"
+    )
 }
 
 /// Returns true for any accepted spelling of the stimulation-artefact step name.
@@ -94,6 +108,7 @@ pub fn run_preprocessing(
     let mut detected_bads = Vec::new();
     let mut bad_indices = Vec::new();
     let mut stim_report: Option<StimArtifactReport> = None;
+    let mut ecg_report: Option<EcgArtifactReport> = None;
     let mut ran_mne_filter = false;
 
     for step in &config.steps {
@@ -111,6 +126,25 @@ pub fn run_preprocessing(
                 );
             }
             stim_report = Some(report);
+            continue;
+        }
+        if is_ecg_artifact_step(step) {
+            println!("PROGRESS 0.28 ECG artefact removal (QRS template subtraction)...");
+            match ecg_artifact::clean_ecg_artifact(&channel_names, &mut signals, sfreq, &config.ecg) {
+                Ok(rep) => {
+                    println!(
+                        "  Removed ECG artifact from {} channel(s) using ECG channel '{}' ({} beats, {:.1} bpm)",
+                        rep.cleaned_channels.len(),
+                        rep.ecg_channel,
+                        rep.total_r_peaks,
+                        rep.heart_rate_bpm
+                    );
+                    ecg_report = Some(rep);
+                }
+                Err(err) => {
+                    println!("  Skipping ECG artefact removal: {}", err);
+                }
+            }
             continue;
         }
         match step.as_str() {
@@ -210,5 +244,6 @@ pub fn run_preprocessing(
         bad_channels: detected_bads,
         duration_seconds: start_time.elapsed().as_secs_f64(),
         stim_artifact: stim_report,
+        ecg_artifact: ecg_report,
     })
 }

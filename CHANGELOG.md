@@ -4,7 +4,7 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
-## [1.45.0]
+## [1.46.0]
 *   **AASM Montage Default Selection in Automated Sleep Scoring:**
     - Auto sleep scoring setup dialogs (`AutoScoringDialog` and `BatchAutoScoringDialog`) now prioritize applied/visible AASM derivations (`C4-M1`, `C4-A1`, `F4-M1`, `O2-M1`, `LOC-A2`, `ROC-A1`, `CHIN1-CHIN2`, etc.) by default instead of selecting all available raw channels.
     - If only unreferenced raw channels exist in the recording, auto-scoring selects standard AASM central/lateral channels (`C4, F4, O2`), references (`M1, M2` / `A1, A2`), EOG (`E1, E2` / `LOC, ROC`), and submental EMG (`CHIN1, CHIN2`), leaving extraneous channels unchecked.

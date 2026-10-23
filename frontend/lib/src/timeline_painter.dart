@@ -1871,6 +1871,139 @@ class TimelinePainter extends CustomPainter {
 
   void _drawBackground(Canvas canvas, Size size, int n) {
     canvas.drawRect(Offset.zero & size, Paint()..color = Colors.white);
+
+    final fontScale = viewport.displayFontScale;
+    final drawWidth = size.width - leftPad;
+    final displayTotalSec = viewport.visibleDurationSeconds > 0
+        ? viewport.visibleDurationSeconds
+        : 40.0;
+    final epochLen = viewport.epochSeconds.toDouble();
+    final epochStart = viewport.currentEpoch * epochLen;
+    double xAt(double sec) =>
+        leftPad + ((sec - viewport.visibleStartSeconds) / displayTotalSec) * drawWidth;
+
+    // 1. Sleep Stage Watermark (Item 7)
+    if (viewport.showStageWatermark && viewport.currentStage != SleepStage.unknown) {
+      final stage = viewport.currentStage;
+      final stageName = switch (stage) {
+        SleepStage.wake => 'WAKE',
+        SleepStage.rem => 'REM',
+        SleepStage.n1 => 'N1',
+        SleepStage.n2 => 'N2',
+        SleepStage.n3 => 'N3',
+        SleepStage.inconclusive => 'INCONCLUSIVE',
+        _ => '',
+      };
+      if (stageName.isNotEmpty) {
+        final stageColor = _stageColors[stage] ?? Colors.black26;
+        final watermarkPainter = TextPainter(
+          text: TextSpan(
+            text: stageName,
+            style: TextStyle(
+              fontSize: 64 * fontScale,
+              fontWeight: FontWeight.w900,
+              color: stageColor.withOpacity(0.06),
+              letterSpacing: 4.0,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        final wx = leftPad + (drawWidth - watermarkPainter.width) / 2;
+        final wy = (size.height - watermarkPainter.height) / 2;
+        watermarkPainter.paint(canvas, Offset(wx, wy));
+      }
+    }
+
+    // 2. Sleep Stage Ribbon Banner along top of epoch (Item 7)
+    if (viewport.showStageRibbon && viewport.currentStage != SleepStage.unknown) {
+      final stage = viewport.currentStage;
+      final stageName = switch (stage) {
+        SleepStage.wake => 'Stage W (Wake)',
+        SleepStage.rem => 'Stage REM',
+        SleepStage.n1 => 'Stage N1 (Light NREM)',
+        SleepStage.n2 => 'Stage N2',
+        SleepStage.n3 => 'Stage N3 (Deep / SWS)',
+        _ => '',
+      };
+      if (stageName.isNotEmpty) {
+        final stageColor = _stageColors[stage] ?? Colors.indigo;
+        final l = xAt(epochStart).clamp(leftPad, size.width).toDouble();
+        final r = xAt(epochStart + epochLen).clamp(leftPad, size.width).toDouble();
+        if (r > l + 20) {
+          canvas.drawRect(
+            Rect.fromLTRB(l, 0, r, 3.5),
+            Paint()..color = stageColor.withOpacity(0.85),
+          );
+          final badgePainter = TextPainter(
+            text: TextSpan(
+              text: ' $stageName ',
+              style: TextStyle(
+                fontSize: 9.5 * fontScale,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+            textDirection: TextDirection.ltr,
+          )..layout();
+          final badgeRect = RRect.fromRectAndRadius(
+            Rect.fromLTWH(l + 4, 3.5, badgePainter.width + 4, badgePainter.height + 2),
+            const Radius.circular(3),
+          );
+          canvas.drawRRect(badgeRect, Paint()..color = stageColor.withOpacity(0.85));
+          badgePainter.paint(canvas, Offset(l + 6, 4.5));
+        }
+      }
+    }
+
+    // 3. Time Grid inside the Epoch (Item 4)
+    if (viewport.showTimeGrid) {
+      final grid1s = Paint()
+        ..color = Colors.black.withOpacity(0.04)
+        ..strokeWidth = 0.5;
+      final grid5s = Paint()
+        ..color = Colors.black.withOpacity(0.10)
+        ..strokeWidth = 0.8;
+
+      final startSec = viewport.visibleStartSeconds;
+      final endSec = startSec + displayTotalSec;
+      final firstSecond = startSec.floor();
+
+      for (var s = firstSecond; s <= endSec; s++) {
+        if (s < startSec) continue;
+        final x = xAt(s.toDouble());
+        if (x < leftPad || x > size.width) continue;
+
+        final is5s = (s % 5) == 0;
+        final isEpochBoundary = (s % epochLen.toInt()) == 0;
+        if (isEpochBoundary && displayTotalSec > 40.5) continue;
+
+        if (is5s) {
+          _drawDashedLine(
+            canvas,
+            Offset(x, 0),
+            Offset(x, size.height),
+            grid5s,
+            dashLen: 4.0,
+            gapLen: 3.0,
+          );
+          final secInEpoch = s % epochLen.toInt();
+          _drawText(
+            canvas,
+            '${secInEpoch}s',
+            Offset(x, size.height - 10),
+            style: TextStyle(
+              fontSize: 8.5 * fontScale,
+              color: Colors.black38,
+              fontWeight: FontWeight.bold,
+            ),
+            align: TextAlign.center,
+          );
+        } else {
+          canvas.drawLine(Offset(x, 0), Offset(x, size.height), grid1s);
+        }
+      }
+    }
+
     // Horizontal grid lines between channels
     final channelHeight = size.height / n;
     final gridPaint = Paint()
@@ -1884,6 +2017,10 @@ class TimelinePainter extends CustomPainter {
 
   void _drawChannels(Canvas canvas, Size size, List<Float32List> waves, int n) {
     final drawWidth = size.width - leftPad;
+    final displayTotalSec = viewport.visibleDurationSeconds > 0
+        ? viewport.visibleDurationSeconds
+        : 40.0;
+    final fontScale = viewport.displayFontScale;
     canvas.save();
     canvas.clipRect(Rect.fromLTWH(leftPad, 0, drawWidth, size.height));
     for (var ch = 0; ch < n; ch++) {
@@ -1914,15 +2051,53 @@ class TimelinePainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round,
       );
+
+      // Item 9: SpO2 numeric values printed on the wave at fixed 5s intervals
+      final labels = viewport.signalChannelLabels;
+      final chLabel = ch < labels.length ? labels[ch] : '';
+      if (levelSignalKind(chLabel) == LevelSignalKind.spo2) {
+        final channelHeight = size.height / n;
+        final baseline = channelHeight * (ch + 0.5);
+        const intervalSec = 5.0;
+        final startSec = viewport.visibleStartSeconds;
+        final endSec = startSec + displayTotalSec;
+        final firstMark = ((startSec / intervalSec).ceil() * intervalSec);
+
+        for (var t = firstMark; t < endSec; t += intervalSec) {
+          final frac = (t - startSec) / displayTotalSec;
+          final sampleIdx = (frac * (len - 1)).round().clamp(0, len - 1);
+          final x = leftPad + frac * drawWidth;
+          final y = yValues[sampleIdx] * size.height;
+
+          final dy = (baseline - y) / (channelHeight * 0.45);
+          final val = (85.0 + dy * 15.0).clamp(50.0, 100.0);
+
+          canvas.drawCircle(Offset(x, y), 2.5, Paint()..color = const Color(0xFF0284C7));
+          final text = '${val.round()}%';
+          final tp = TextPainter(
+            text: TextSpan(
+              text: text,
+              style: TextStyle(
+                fontSize: 8.5 * fontScale,
+                fontWeight: FontWeight.bold,
+                color: const Color(0xFF0369A1),
+              ),
+            ),
+            textDirection: TextDirection.ltr,
+          )..layout();
+          tp.paint(canvas, Offset(x - tp.width / 2, math.max(2.0, y - 13)));
+        }
+      }
     }
     canvas.restore();
   }
 
   void _drawChannelLabels(Canvas canvas, Size size, List<String> labels) {
+    final fontScale = viewport.displayFontScale;
     final channelHeight = size.height / labels.length;
     final labelStyle = TextStyle(
-      color: Colors.black87, // Legible dark color
-      fontSize: 12, // Professional compact size
+      color: Colors.black87,
+      fontSize: 12 * fontScale,
       fontWeight: FontWeight.bold,
       fontFamily: 'sans-serif',
     );
@@ -1931,7 +2106,7 @@ class TimelinePainter extends CustomPainter {
       _drawText(
         canvas,
         labels[i],
-        Offset(8.0, cy), // Aligned inside the 90px left margin
+        Offset(8.0, cy),
         style: labelStyle,
         align: TextAlign.left,
       );
@@ -2041,7 +2216,11 @@ class TimelinePainter extends CustomPainter {
       old.viewport.signalChannelLabels != viewport.signalChannelLabels ||
       old.viewport.signalChannelColors != viewport.signalChannelColors ||
       old.viewport.stages != viewport.stages ||
-      old.viewport.stagesUncertain != viewport.stagesUncertain;
+      old.viewport.stagesUncertain != viewport.stagesUncertain ||
+      old.viewport.showTimeGrid != viewport.showTimeGrid ||
+      old.viewport.showStageWatermark != viewport.showStageWatermark ||
+      old.viewport.showStageRibbon != viewport.showStageRibbon ||
+      old.viewport.displayFontScale != viewport.displayFontScale;
 }
 
 Color _channelColorForName(String name, {required int fallbackIndex}) {
@@ -2110,6 +2289,86 @@ void _drawDashedLine(
 // ─────────────────────────────────────────────────────────────────────────────
 // 6.  SELECTION OVERLAY PAINTER  (drawn on top of signal panel)
 // ─────────────────────────────────────────────────────────────────────────────
+
+String? _getClinicalDataTip(
+  String chName,
+  double durSec,
+  double ptpUv, {
+  double? meanVal,
+}) {
+  final upper = chName.toUpperCase();
+  final isEeg = isEegLabel(chName);
+  final isEog = detectChannelModality(chName) == ChannelModality.eog;
+  final isEmg = detectChannelModality(chName) == ChannelModality.emg;
+  final isResp = detectChannelModality(chName) == ChannelModality.respiratory;
+  final isSpo2 = levelSignalKind(chName) == LevelSignalKind.spo2;
+
+  // 1. SpO2 Desaturation
+  if (isSpo2) {
+    if (ptpUv >= 3.0) {
+      return '💡 Desat candidate: ΔSpO₂ ≥ ${ptpUv.toStringAsFixed(1)}%';
+    }
+  }
+
+  // 2. Respiratory (Flow / Effort)
+  if (isResp ||
+      upper.contains('FLOW') ||
+      upper.contains('CANN') ||
+      upper.contains('THOR') ||
+      upper.contains('ABDO')) {
+    if (durSec >= 10.0) {
+      if (ptpUv <= 15.0) {
+        return '💡 Apnea candidate: dur ≥ 10s (flow cessation ≥ 90%)';
+      } else {
+        return '💡 Hypopnea candidate: dur ≥ 10s (flow reduction ≥ 30%)';
+      }
+    }
+  }
+
+  // 3. EOG Eye Movements
+  if (isEog ||
+      upper.contains('LOC') ||
+      upper.contains('ROC') ||
+      upper.startsWith('E1') ||
+      upper.startsWith('E2')) {
+    if (durSec >= 0.2 && durSec <= 1.5 && ptpUv >= 20.0) {
+      return '💡 REM candidate: ocular saccade (dur 0.2–1.5s)';
+    }
+  }
+
+  // 4. Leg EMG / PLM
+  if (isEmg &&
+      (upper.contains('LAT') ||
+          upper.contains('RAT') ||
+          upper.contains('LEG') ||
+          upper.contains('TIB'))) {
+    if (durSec >= 0.5 && durSec <= 10.0 && ptpUv >= 8.0) {
+      return '💡 PLM/LM candidate: dur 0.5–10s, burst ≥ 8µV';
+    }
+  }
+
+  // 5. EEG events (Spindle, K-Complex, Slow Wave, Alpha)
+  if (isEeg) {
+    // K-Complex: prominent sharp biphasic wave >= 75 µV, dur >= 0.5s
+    if (ptpUv >= 75.0 && durSec >= 0.5 && durSec <= 1.8) {
+      return '💡 K-Complex / Slow Wave candidate (PTP ≥ 75 µV, dur ≥ 0.5s)';
+    }
+    // Sleep Spindle: duration 0.5 - 2.0s, amplitude 15-60 µV
+    if (durSec >= 0.5 && durSec <= 2.0 && ptpUv >= 15.0 && ptpUv < 75.0) {
+      return '💡 Spindle candidate: dur 0.5–2.0s, sigma 11–16 Hz';
+    }
+    // Alpha rhythm: 8-12 Hz
+    if (durSec >= 1.0 &&
+        ptpUv >= 10.0 &&
+        (upper.contains('O1') ||
+            upper.contains('O2') ||
+            upper.contains('OZ'))) {
+      return '💡 Alpha rhythm candidate (8–12 Hz posterior)';
+    }
+  }
+
+  return null;
+}
 
 class SelectionOverlayPainter extends CustomPainter {
   SelectionOverlayPainter(
@@ -2314,6 +2573,12 @@ class SelectionOverlayPainter extends CustomPainter {
       final x1 = leftPad + ((s - visibleStart) / displayTotalSec) * drawWidth;
       final x2 = leftPad + ((e - visibleStart) / displayTotalSec) * drawWidth;
 
+      // Item 1: If single-point marker, do not draw box labels (height, duration, or rotated peak-to-peak)
+      final isPoint = labelTarget.isPoint || (x2 - x1).abs() < 2.0;
+      if (isPoint) {
+        return;
+      }
+
       final n = viewport.channelCount;
       final baselineFraction = (labelTarget.channel + 0.5) / n;
       final y1 =
@@ -2349,63 +2614,13 @@ class SelectionOverlayPainter extends CustomPainter {
       final channelLabel = (ch >= 0 && ch < viewport.signalChannelLabels.length)
           ? viewport.signalChannelLabels[ch]
           : '';
-
-      // Top label: Height of the box
-      final double boxHeightValue;
-      if (levelSignalKind(channelLabel) == LevelSignalKind.spo2) {
-        final deltaNorm = (labelTarget.endUv - labelTarget.startUv).abs() /
-            (viewport.amplitudeRangeUv > 0 ? viewport.amplitudeRangeUv : 75.0);
-        boxHeightValue = deltaNorm * 30.0;
-      } else {
-        boxHeightValue = (labelTarget.endUv - labelTarget.startUv).abs();
-      }
-      final topText = formatChannelValue(channelLabel, boxHeightValue);
-      _drawText(
-        canvas,
-        topText,
-        Offset((x1 + x2) / 2, math.min(y1, y2) - 8),
-        style: const TextStyle(
-          color: Color(0xFF0A640A),
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
-        ),
-        align: TextAlign.center,
-      );
-
-      // Bottom label: Width of the box in seconds, and with several boxes
-      // the cumulative duration of all of them on a second line.
+      final fontScale = viewport.displayFontScale;
       final widthSec = (labelTarget.endSec - labelTarget.startSec).abs();
-      final bottomText = "${widthSec.toStringAsFixed(2)} s";
-      _drawText(
-        canvas,
-        bottomText,
-        Offset((x1 + x2) / 2, math.max(y1, y2) + 8),
-        style: const TextStyle(
-          color: Color(0xFF0A640A),
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
-        ),
-        align: TextAlign.center,
-      );
-      if (boxCount > 1) {
-        _drawText(
-          canvas,
-          "Σ ${totalSec.toStringAsFixed(2)} s ($boxCount boxes)",
-          Offset((x1 + x2) / 2, math.max(y1, y2) + 22),
-          style: const TextStyle(
-            color: Color(0xFF7C2D12),
-            fontSize: 11,
-            fontWeight: FontWeight.bold,
-          ),
-          align: TextAlign.center,
-        );
-      }
 
-      // Left label: Peak-to-peak amplitude of the signal inside the box, rotated 270 degrees
-      double? peakToPeak;
-      if (hasActiveDrag) {
-        // Estimate from display points in real-time drag
-        final ch = labelTarget.channel;
+      // Estimate peak-to-peak and mean from display points or committed selection
+      double? peakToPeak = labelTarget.peakToPeakUv > 0 ? labelTarget.peakToPeakUv : null;
+      double? meanVal = labelTarget.meanUv;
+      if (hasActiveDrag || peakToPeak == null || meanVal == null) {
         if (ch >= 0 && ch < viewport.points.length) {
           final yVals = viewport.points[ch];
           final len = yVals.length;
@@ -2418,23 +2633,99 @@ class SelectionOverlayPainter extends CustomPainter {
           if (i2 > i1) {
             var minY = yVals[i1];
             var maxY = yVals[i1];
-            for (var i = i1 + 1; i <= i2; i++) {
+            var sumY = 0.0;
+            var cnt = 0;
+            for (var i = i1; i <= i2; i++) {
               final y = yVals[i];
               if (y < minY) minY = y;
               if (y > maxY) maxY = y;
+              sumY += y;
+              cnt++;
             }
             final channelHeight = 1.0 / n;
             final deltaNorm = (maxY - minY) / (channelHeight * 0.42);
-            peakToPeak = deltaNorm * viewport.amplitudeRangeUv;
+            peakToPeak ??= deltaNorm * viewport.amplitudeRangeUv;
+            final baselineY = (ch + 0.5) / n;
+            final meanNorm = (baselineY - (sumY / cnt)) / (channelHeight * 0.42);
+            meanVal ??= meanNorm * viewport.amplitudeRangeUv;
           }
         }
-      } else {
-        peakToPeak = labelTarget.peakToPeakUv;
       }
 
+      // Item 2: Top label: Mean and Range (peak-to-peak amplitude)
+      final isSpo2 = levelSignalKind(channelLabel) == LevelSignalKind.spo2;
+      String topText;
+      if (isSpo2) {
+        final ptp = peakToPeak ?? (labelTarget.endUv - labelTarget.startUv).abs();
+        final mStr = meanVal != null ? 'Mean: ${meanVal.clamp(50.0, 100.0).toStringAsFixed(1)}% | ' : '';
+        topText = '$mStrΔ: ${ptp.toStringAsFixed(1)}%';
+      } else {
+        final ptp = peakToPeak ?? (labelTarget.endUv - labelTarget.startUv).abs();
+        final ptpStr = formatChannelValue(channelLabel, ptp);
+        final mStr = meanVal != null ? 'Mean: ${formatChannelValue(channelLabel, meanVal)} | ' : '';
+        topText = '${mStr}Range: $ptpStr';
+      }
+
+      _drawText(
+        canvas,
+        topText,
+        Offset((x1 + x2) / 2, math.min(y1, y2) - 8),
+        style: TextStyle(
+          color: const Color(0xFF0A640A),
+          fontSize: 11 * fontScale,
+          fontWeight: FontWeight.bold,
+        ),
+        align: TextAlign.center,
+      );
+
+      // Bottom label: Width of the box in seconds, and with several boxes
+      // the cumulative duration of all of them on a second line.
+      final bottomText = "${widthSec.toStringAsFixed(2)} s";
+      _drawText(
+        canvas,
+        bottomText,
+        Offset((x1 + x2) / 2, math.max(y1, y2) + 8),
+        style: TextStyle(
+          color: const Color(0xFF0A640A),
+          fontSize: 11 * fontScale,
+          fontWeight: FontWeight.bold,
+        ),
+        align: TextAlign.center,
+      );
+      if (boxCount > 1) {
+        _drawText(
+          canvas,
+          "Σ ${totalSec.toStringAsFixed(2)} s ($boxCount boxes)",
+          Offset((x1 + x2) / 2, math.max(y1, y2) + 22),
+          style: TextStyle(
+            color: const Color(0xFF7C2D12),
+            fontSize: 11 * fontScale,
+            fontWeight: FontWeight.bold,
+          ),
+          align: TextAlign.center,
+        );
+      }
+
+      // Item 10: Clinical decision aid data tip (hypopnea/apnea/desat/plm/spindle/k-complex/alpha/REM)
+      final tip = _getClinicalDataTip(channelLabel, widthSec, peakToPeak ?? 0.0, meanVal: meanVal);
+      if (tip != null) {
+        _drawText(
+          canvas,
+          tip,
+          Offset((x1 + x2) / 2, math.max(y1, y2) + (boxCount > 1 ? 38 : 24)),
+          style: TextStyle(
+            color: const Color(0xFF0284C7),
+            fontSize: 10 * fontScale,
+            fontWeight: FontWeight.bold,
+          ),
+          align: TextAlign.center,
+        );
+      }
+
+      // Left label: Peak-to-peak amplitude of the signal inside the box, rotated 270 degrees
       if (peakToPeak != null) {
         double ptpValue = peakToPeak;
-        if (hasActiveDrag && levelSignalKind(channelLabel) == LevelSignalKind.spo2) {
+        if (hasActiveDrag && isSpo2) {
           final deltaNorm = ptpValue /
               (viewport.amplitudeRangeUv > 0 ? viewport.amplitudeRangeUv : 75.0);
           ptpValue = deltaNorm * 30.0;
@@ -2445,7 +2736,7 @@ class SelectionOverlayPainter extends CustomPainter {
                 TimelinePainter.channelColors.length];
         final leftStyle = TextStyle(
           color: labelColor,
-          fontSize: 11,
+          fontSize: 11 * fontScale,
           fontWeight: FontWeight.bold,
         );
         _drawRotatedText(
@@ -2573,7 +2864,8 @@ class SelectionOverlayPainter extends CustomPainter {
       old.activeDragEndSec != activeDragEndSec ||
       old.activeDragChannel != activeDragChannel ||
       old.activeDragStartUv != activeDragStartUv ||
-      old.activeDragEndUv != activeDragEndUv;
+      old.activeDragEndUv != activeDragEndUv ||
+      old.viewport.displayFontScale != viewport.displayFontScale;
 }
 
 Color _eventColor(int digit) {

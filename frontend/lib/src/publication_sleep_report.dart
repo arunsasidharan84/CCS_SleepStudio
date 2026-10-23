@@ -484,7 +484,7 @@ String _buildAperiodicPage(
     color: _slate,
   );
 
-  p.section('Stage-wise aperiodic trajectory (regional mean)', 50, 675);
+  p.section('Stage-wise spectral & aperiodic trajectories (regional mean)', 50, 675);
   final stages = ['W', 'N1', 'N2', 'N3', 'REM'];
   final fooofExponent = [
     for (final stage in stages) _regionalMean(rows, '${stage}_exponent_FOOOF'),
@@ -492,139 +492,208 @@ String _buildAperiodicPage(
   final irasaSlope = [
     for (final stage in stages) _regionalMean(rows, '${stage}_slope_Irasa'),
   ];
+  final fooofOffset = [
+    for (final stage in stages) _regionalMean(rows, '${stage}_offset_FOOOF'),
+  ];
+  final irasaIntercept = [
+    for (final stage in stages) _regionalMean(rows, '${stage}_intercept_Irasa'),
+  ];
+
+  double? getBandPower(String stage, List<String> aliases) {
+    final keys = <String>[];
+    for (final b in aliases) {
+      keys.add('${stage}_${b}_PSD');
+      keys.add('${stage}_$b');
+      if (stage == 'W') {
+        keys.add('Wake_${b}_PSD');
+        keys.add('Wake_$b');
+      } else if (stage == 'REM') {
+        keys.add('R_${b}_PSD');
+        keys.add('R_$b');
+      }
+    }
+    return _regionalMeanAny(rows, keys);
+  }
+
+  final deltaSeries = [for (final s in stages) getBandPower(s, ['Delta', 'delta'])];
+  final thetaSeries = [for (final s in stages) getBandPower(s, ['Theta', 'theta'])];
+  final alphaSeries = [for (final s in stages) getBandPower(s, ['Alpha', 'alpha'])];
+  final sigmaSeries = [for (final s in stages) getBandPower(s, ['Sigma', 'sigma', 'ThetaAlpha'])];
+  final betaSeries = [for (final s in stages) getBandPower(s, ['Beta', 'Beta1', 'Beta2', 'beta', 'beta1', 'beta2'])];
+  final gammaSeries = [for (final s in stages) getBandPower(s, ['Gamma', 'Gamma1', 'Gamma2', 'gamma', 'gamma1', 'gamma2'])];
+
   _lineChart(
     p,
-    x: 70,
-    y: 505,
-    width: 460,
-    height: 130,
+    x: 52,
+    y: 535,
+    width: 145,
+    height: 105,
     labels: stages,
     series: [
-      ('FOOOF exponent', fooofExponent, _blue),
+      ('FOOOF exp', fooofExponent, _blue),
       ('IRASA slope', irasaSlope, _orange),
     ],
   );
+  _lineChart(
+    p,
+    x: 212,
+    y: 535,
+    width: 145,
+    height: 105,
+    labels: stages,
+    series: [
+      ('FOOOF offset', fooofOffset, _teal),
+      ('IRASA intercept', irasaIntercept, _purple),
+    ],
+  );
+  _lineChart(
+    p,
+    x: 372,
+    y: 535,
+    width: 168,
+    height: 105,
+    labels: stages,
+    series: [
+      ('Delta', deltaSeries, _blue),
+      ('Theta', thetaSeries, _teal),
+      ('Alpha', alphaSeries, _green),
+      ('Sigma', sigmaSeries, _orange),
+      ('Beta', betaSeries, _red),
+      ('Gamma', gammaSeries, _purple),
+    ],
+  );
 
-  p.section('Aperiodic parameterization and model validation', 50, 470);
-  p.text('Stage', 52, 447, bold: true, size: 6.5);
-  p.text('FOOOF offset', 92, 447, bold: true, size: 6.5);
-  p.text('FOOOF exponent', 165, 447, bold: true, size: 6.5);
-  p.text('FOOOF error', 245, 447, bold: true, size: 6.5);
-  p.text('IRASA intercept', 310, 447, bold: true, size: 6.5);
-  p.text('IRASA slope', 385, 447, bold: true, size: 6.5);
-  p.text('IRASA R2', 452, 447, bold: true, size: 6.5);
-  p.text('IRASA AUC', 510, 447, bold: true, size: 6.5);
-  var y = 426.0;
+  p.section('Aperiodic parameterization and model validation', 50, 502);
+  p.text('Stage', 52, 484, bold: true, size: 6.5);
+  p.text('FOOOF offset', 92, 484, bold: true, size: 6.5);
+  p.text('FOOOF exponent', 165, 484, bold: true, size: 6.5);
+  p.text('FOOOF error', 245, 484, bold: true, size: 6.5);
+  p.text('IRASA intercept', 310, 484, bold: true, size: 6.5);
+  p.text('IRASA slope', 385, 484, bold: true, size: 6.5);
+  p.text('IRASA R2', 452, 484, bold: true, size: 6.5);
+  p.text('IRASA AUC', 510, 484, bold: true, size: 6.5);
+  var y = 466.0;
   for (final stage in stages) {
-    p.text(stage, 52, y, bold: true, size: 7.5);
+    p.text(stage, 52, y, bold: true, size: 7.2);
     p.text(
       _format(_regionalMean(rows, '${stage}_offset_FOOOF')),
       92,
       y,
-      size: 7.5,
+      size: 7.2,
     );
     p.text(
       _format(_regionalMean(rows, '${stage}_exponent_FOOOF')),
       165,
       y,
-      size: 7.5,
+      size: 7.2,
     );
     p.text(
       _format(_regionalMean(rows, '${stage}_error_FOOOF')),
       245,
       y,
-      size: 7.5,
+      size: 7.2,
     );
     p.text(
       _format(_regionalMean(rows, '${stage}_intercept_Irasa')),
       310,
       y,
-      size: 7.5,
+      size: 7.2,
     );
     p.text(
       _format(_regionalMean(rows, '${stage}_slope_Irasa')),
       385,
       y,
-      size: 7.5,
+      size: 7.2,
     );
     p.text(
       _format(_regionalMean(rows, '${stage}_rsquared_Irasa')),
       452,
       y,
-      size: 7.2,
+      size: 7.0,
     );
     p.text(
       _format(_regionalMean(rows, '${stage}_auc_Irasa')),
       510,
       y,
-      size: 7.2,
+      size: 7.0,
     );
-    y -= 20;
+    y -= 14;
   }
 
   p.section(
     'True oscillatory peaks after 1/f removal (regional mean)',
     50,
-    330,
+    392,
   );
-  p.text('Stage', 52, 307, bold: true, size: 7);
-  p.text('Peak 1 CF', 105, 307, bold: true, size: 7);
-  p.text('Peak 1 power', 175, 307, bold: true, size: 7);
-  p.text('Peak 1 BW', 255, 307, bold: true, size: 7);
-  p.text('Peak 2 CF', 325, 307, bold: true, size: 7);
-  p.text('Peak 2 power', 395, 307, bold: true, size: 7);
-  p.text('Peak 2 BW', 480, 307, bold: true, size: 7);
-  y = 285;
+  p.text('Stage', 52, 372, bold: true, size: 6.8);
+  p.text('Peak 1 CF', 105, 372, bold: true, size: 6.8);
+  p.text('Peak 1 power', 175, 372, bold: true, size: 6.8);
+  p.text('Peak 1 BW', 255, 372, bold: true, size: 6.8);
+  p.text('Peak 2 CF', 325, 372, bold: true, size: 6.8);
+  p.text('Peak 2 power', 395, 372, bold: true, size: 6.8);
+  p.text('Peak 2 BW', 480, 372, bold: true, size: 6.8);
+  y = 354;
   for (final stage in stages) {
-    p.text(stage, 52, y, bold: true, size: 7.5);
+    p.text(stage, 52, y, bold: true, size: 7.2);
     for (var peak = 0; peak < 2; peak++) {
       final x = peak == 0 ? 105.0 : 325.0;
       p.text(
         _format(_regionalMean(rows, '${stage}_cf_${peak}_FOOOF')),
         x,
         y,
-        size: 7.5,
+        size: 7.2,
       );
       p.text(
         _format(_regionalMean(rows, '${stage}_pw_${peak}_FOOOF')),
         x + 70,
         y,
-        size: 7.5,
+        size: 7.2,
       );
       p.text(
         _format(_regionalMean(rows, '${stage}_bw_${peak}_FOOOF')),
         x + 150,
         y,
-        size: 7.5,
+        size: 7.2,
       );
     }
-    y -= 20;
+    y -= 14;
   }
 
-  p.section('Frequency-band relative PSD (regional mean)', 50, 185);
-  const bands = [
-    ('Delta', ['Delta']),
-    ('Theta', ['Theta']),
-    ('Sigma', ['Sigma', 'ThetaAlpha']),
-    ('Alpha', ['Alpha']),
-    ('Beta1', ['Beta1']),
-    ('Beta2', ['Beta2']),
-    ('Gamma1', ['Gamma1']),
+  final n3SlopeValues = _extractChannelValues(rows, 'N3_slope_Irasa');
+  final n3OffsetValues = _extractChannelValues(rows, 'N3_offset_FOOOF');
+  final n2SigmaValues = _extractChannelValues(rows, 'N2_Sigma_PSD');
+
+  p.section('Frequency-band relative PSD (regional mean)', 50, 276);
+  const bandList = [
+    ('Delta', ['Delta', 'delta']),
+    ('Theta', ['Theta', 'theta']),
+    ('Alpha', ['Alpha', 'alpha']),
+    ('Sigma', ['Sigma', 'sigma', 'ThetaAlpha']),
+    ('Beta', ['Beta', 'Beta1', 'Beta2', 'beta', 'beta1', 'beta2']),
+    ('Gamma', ['Gamma', 'Gamma1', 'Gamma2', 'gamma', 'gamma1', 'gamma2']),
   ];
-  p.text('Stage', 52, 162, bold: true, size: 6.5);
-  for (var i = 0; i < bands.length; i++) {
-    p.text(bands[i].$1, 98 + i * 64, 162, bold: true, size: 6.5);
+  p.text('Stage', 52, 258, bold: true, size: 6.5);
+  for (var i = 0; i < bandList.length; i++) {
+    p.text(bandList[i].$1, 98 + i * 68, 258, bold: true, size: 6.5);
   }
-  y = 143;
-  for (final stage in stages.where((stage) => stage != 'W')) {
-    p.text(stage, 52, y, bold: true, size: 7.2);
-    for (var i = 0; i < bands.length; i++) {
-      final value = _regionalMeanAny(rows, [
-        for (final band in bands[i].$2) '${stage}_${band}_PSD',
-      ]);
-      p.text(_format(value), 98 + i * 64, y, size: 7.2);
+  y = 242;
+  for (final stage in stages) {
+    p.text(stage, 52, y, bold: true, size: 7.0);
+    for (var i = 0; i < bandList.length; i++) {
+      final val = getBandPower(stage, bandList[i].$2);
+      p.text(_format(val), 98 + i * 68, y, size: 7.0);
     }
-    y -= 18;
+    y -= 12;
+  }
+
+  if (n3SlopeValues.length >= 5) {
+    _topoplot(p, title: 'N3 IRASA Slope', cx: 120, cy: 108, radius: 36, channelValues: n3SlopeValues);
+    if (n3OffsetValues.isNotEmpty) {
+      _topoplot(p, title: 'N3 FOOOF Offset', cx: 285, cy: 108, radius: 36, channelValues: n3OffsetValues);
+    }
+    if (n2SigmaValues.isNotEmpty) {
+      _topoplot(p, title: 'N2 Sigma PSD', cx: 450, cy: 108, radius: 36, channelValues: n2SigmaValues);
+    }
   }
   _footer(
     p,
@@ -1508,7 +1577,7 @@ void _lineChart(
   for (var i = 0; i < labels.length; i++) {
     final px = labels.length == 1 ? x : x + width * i / (labels.length - 1);
     p.line(px, y, px, y + height, color: _lightGray, width: 0.25);
-    p.text(labels[i], px - 8, y - 13, size: 7);
+    p.text(labels[i], px - 6, y - 11, size: 6.5);
   }
   for (var s = 0; s < series.length; s++) {
     final points = <(double, double)>[];
@@ -1518,22 +1587,31 @@ void _lineChart(
       final px = x + width * i / math.max(1, labels.length - 1);
       final py = y + (value - minValue) / range * height;
       points.add((px, py));
-      p.circle(px, py, 2.6, fill: series[s].$3);
+      p.circle(px, py, 2.2, fill: series[s].$3);
     }
-    p.polyline(points, color: series[s].$3, width: 1.5);
-    final legendX = x + s * 145;
+    p.polyline(points, color: series[s].$3, width: 1.3);
+
+    // Compact legend fitting side-by-side or wrapped neatly across 2 rows
+    final itemsPerRow = series.length <= 2 ? series.length : 3;
+    final col = s % itemsPerRow;
+    final row = s ~/ itemsPerRow;
+    final slotW = width / itemsPerRow;
+    final legendX = x + col * slotW;
+    final legendY = (series.length > 2)
+        ? (y + height + 16 - (row * 9))
+        : (y + height + 11);
     p.line(
       legendX,
-      y + height + 14,
-      legendX + 18,
-      y + height + 14,
+      legendY,
+      legendX + 8,
+      legendY,
       color: series[s].$3,
-      width: 2,
+      width: 1.8,
     );
-    p.text(series[s].$1, legendX + 23, y + height + 11, size: 7);
+    p.text(series[s].$1, legendX + 11, legendY - 2.5, size: 6.2);
   }
-  p.text(maxValue.toStringAsFixed(2), x - 34, y + height - 3, size: 6.5);
-  p.text(minValue.toStringAsFixed(2), x - 34, y - 2, size: 6.5);
+  p.text(maxValue.toStringAsFixed(2), x - 26, y + height - 3, size: 5.8);
+  p.text(minValue.toStringAsFixed(2), x - 26, y - 2, size: 5.8);
 }
 
 void _heatmap(
@@ -1645,6 +1723,115 @@ void _heatmap(
       color: _slate,
     );
   }
+}
+
+List<(String, double)> _extractChannelValues(
+  List<Map<String, String>> rows,
+  String metricKey,
+) {
+  final result = <(String, double)>[];
+  for (final row in rows) {
+    final ch = row['Chan'] ?? '';
+    final val = _number(row, metricKey);
+    if (ch.isNotEmpty && val != null && val.isFinite) {
+      result.add((ch, val));
+    }
+  }
+  return result;
+}
+
+const Map<String, (double, double)> _standard1020 = {
+  'FP1': (-0.31, 0.75), 'FP2': (0.31, 0.75), 'FPZ': (0.0, 0.78),
+  'AF3': (-0.28, 0.60), 'AF4': (0.28, 0.60), 'AFZ': (0.0, 0.62),
+  'F7': (-0.72, 0.44),  'F3': (-0.38, 0.44),  'FZ': (0.0, 0.46),
+  'F4': (0.38, 0.44),   'F8': (0.72, 0.44),
+  'FC5': (-0.68, 0.22), 'FC3': (-0.36, 0.22), 'FC1': (-0.18, 0.23),
+  'FCZ': (0.0, 0.24),   'FC2': (0.18, 0.23),  'FC4': (0.36, 0.22), 'FC6': (0.68, 0.22),
+  'T7': (-0.85, 0.0),   'T3': (-0.85, 0.0),
+  'C5': (-0.66, 0.0),   'C3': (-0.42, 0.0),   'C1': (-0.21, 0.0),
+  'CZ': (0.0, 0.0),     'C2': (0.21, 0.0),    'C4': (0.42, 0.0),   'C6': (0.66, 0.0),
+  'T8': (0.85, 0.0),    'T4': (0.85, 0.0),
+  'CP5': (-0.68, -0.22),'CP3': (-0.36, -0.22),'CP1': (-0.18, -0.23),
+  'CPZ': (0.0, -0.24),  'CP2': (0.18, -0.23), 'CP4': (0.36, -0.22),'CP6': (0.68, -0.22),
+  'P7': (-0.72, -0.44), 'P3': (-0.38, -0.44), 'PZ': (0.0, -0.46),
+  'P4': (0.38, -0.44),  'P8': (0.72, -0.44),  'T5': (-0.72, -0.44), 'T6': (0.72, -0.44),
+  'PO3': (-0.28, -0.60),'PO4': (0.28, -0.60),'POZ': (0.0, -0.62),
+  'O1': (-0.31, -0.75), 'OZ': (0.0, -0.78),   'O2': (0.31, -0.75),
+};
+
+void _topoplot(
+  _PdfPage p, {
+  required String title,
+  required double cx,
+  required double cy,
+  required double radius,
+  required List<(String, double)> channelValues,
+}) {
+  p.text(title, cx - 36, cy + radius + 14, bold: true, size: 7.2, color: _navy);
+
+  // Outer head perimeter
+  p.circle(cx, cy, radius, stroke: _charcoal);
+
+  // Nose triangle
+  p.polyline([
+    (cx - 5.5, cy + radius),
+    (cx, cy + radius + 7),
+    (cx + 5.5, cy + radius),
+  ], color: _charcoal, width: 0.8);
+
+  // Left ear
+  p.polyline([
+    (cx - radius - 1, cy + 7),
+    (cx - radius - 4.5, cy),
+    (cx - radius - 1, cy - 7),
+  ], color: _charcoal, width: 0.8);
+
+  // Right ear
+  p.polyline([
+    (cx + radius + 1, cy + 7),
+    (cx + radius + 4.5, cy),
+    (cx + radius + 1, cy - 7),
+  ], color: _charcoal, width: 0.8);
+
+  if (channelValues.isEmpty) return;
+  final vals = channelValues.map((e) => e.$2).where((v) => v.isFinite).toList();
+  if (vals.isEmpty) return;
+  final minV = vals.reduce(math.min);
+  final maxV = vals.reduce(math.max);
+  final range = math.max(maxV - minV, 1e-6);
+
+  // Electrode markers & values
+  for (final item in channelValues) {
+    final rawName = item.$1.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+    var coords = _standard1020[rawName];
+    if (coords == null) {
+      for (final k in _standard1020.keys) {
+        if (rawName == k || rawName.startsWith(k)) {
+          coords = _standard1020[k];
+          break;
+        }
+      }
+    }
+    if (coords == null) continue;
+    final ex = cx + coords.$1 * radius * 0.82;
+    final ey = cy + coords.$2 * radius * 0.82;
+    final t = ((item.$2 - minV) / range).clamp(0.0, 1.0);
+    final col = _heatColor(t);
+    p.circle(ex, ey, 4.0, fill: col, stroke: _charcoal);
+    p.text(item.$1, ex + 5.0, ey - 2.5, size: 5.5, bold: true, color: _charcoal);
+  }
+
+  // Mini colorbar on side
+  final cbX = cx + radius + 12;
+  final cbY = cy - radius * 0.55;
+  final cbH = radius * 1.1;
+  const cbW = 3.5;
+  for (var i = 0; i < 12; i++) {
+    final frac = i / 11.0;
+    p.rect(cbX, cbY + frac * (cbH - 1.5), cbW, cbH / 11.0, fill: _heatColor(frac));
+  }
+  p.text(maxV.toStringAsFixed(1), cbX + 5, cbY + cbH - 3, size: 5);
+  p.text(minV.toStringAsFixed(1), cbX + 5, cbY - 2, size: 5);
 }
 
 double _sleepMinutes(EegViewport viewport) {
@@ -1789,6 +1976,17 @@ double? _regionalMeanAny(List<Map<String, String>> rows, List<String> keys) {
 
 double? _number(Map<String, String> row, String key) {
   var raw = row[key]?.trim();
+  if (raw == null || raw.isEmpty) {
+    if (key.startsWith('W_')) {
+      raw = row['Wake_${key.substring(2)}']?.trim();
+    } else if (key.startsWith('Wake_')) {
+      raw = row['W_${key.substring(5)}']?.trim();
+    } else if (key.startsWith('REM_')) {
+      raw = row['R_${key.substring(4)}']?.trim();
+    } else if (key.startsWith('R_')) {
+      raw = row['REM_${key.substring(2)}']?.trim();
+    }
+  }
   if ((raw == null || raw.isEmpty) && key.startsWith('sp_')) {
     raw = row['sp_all_${key.substring(3)}']?.trim();
   } else if ((raw == null || raw.isEmpty) && key.startsWith('sp_all_')) {
@@ -1797,6 +1995,14 @@ double? _number(Map<String, String> row, String key) {
     raw = row[key.substring(5)]?.trim();
   } else if ((raw == null || raw.isEmpty) && !key.startsWith('accs_')) {
     raw = row['accs_$key']?.trim();
+  }
+  if (raw == null || raw.isEmpty) {
+    for (final entry in row.entries) {
+      if (entry.key.toLowerCase() == key.toLowerCase()) {
+        raw = entry.value.trim();
+        break;
+      }
+    }
   }
   if (raw == null || raw.isEmpty || raw.toLowerCase() == 'nan') return null;
   final value = double.tryParse(raw);

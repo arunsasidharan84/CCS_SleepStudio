@@ -90,6 +90,9 @@ class EventSelection {
     required this.startUv,
     required this.endUv,
     required this.peakToPeakUv,
+    this.meanUv,
+    this.minUv,
+    this.maxUv,
   });
 
   final double startSec;
@@ -98,8 +101,12 @@ class EventSelection {
   final double startUv;
   final double endUv;
   final double peakToPeakUv;
+  final double? meanUv;
+  final double? minUv;
+  final double? maxUv;
 
   double get durationSeconds => (endSec - startSec).abs();
+  bool get isPoint => (endSec - startSec).abs() < 0.05;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -357,6 +364,11 @@ class EegViewport {
     this.stagesConfidence = const [],
     this.stageProbabilities = const [],
     this.recordingStartTime,
+    this.showTimeGrid = true,
+    this.timeGridIntervalSeconds = 1.0,
+    this.showStageWatermark = true,
+    this.showStageRibbon = true,
+    this.displayFontScale = 1.0,
   });
 
   final double sampleRateHz;
@@ -424,6 +436,11 @@ class EegViewport {
   final List<double?> stagesConfidence;
   final List<Map<SleepStage, double>> stageProbabilities;
   final DateTime? recordingStartTime;
+  final bool showTimeGrid;
+  final double timeGridIntervalSeconds;
+  final bool showStageWatermark;
+  final bool showStageRibbon;
+  final double displayFontScale;
 
   // Selection
   final double? selectionStartSec;
@@ -530,6 +547,11 @@ class EegViewport {
     DateTime? recordingStartTime,
     double? lightsOffSeconds,
     double? lightsOnSeconds,
+    bool? showTimeGrid,
+    double? timeGridIntervalSeconds,
+    bool? showStageWatermark,
+    bool? showStageRibbon,
+    double? displayFontScale,
   }) {
     return EegViewport(
       sampleRateHz: sampleRateHz,
@@ -635,6 +657,12 @@ class EegViewport {
       stagesConfidence: stagesConfidence ?? this.stagesConfidence,
       stageProbabilities: stageProbabilities ?? this.stageProbabilities,
       recordingStartTime: recordingStartTime ?? this.recordingStartTime,
+      showTimeGrid: showTimeGrid ?? this.showTimeGrid,
+      timeGridIntervalSeconds:
+          timeGridIntervalSeconds ?? this.timeGridIntervalSeconds,
+      showStageWatermark: showStageWatermark ?? this.showStageWatermark,
+      showStageRibbon: showStageRibbon ?? this.showStageRibbon,
+      displayFontScale: displayFontScale ?? this.displayFontScale,
     );
   }
 }
@@ -950,6 +978,52 @@ class ChannelConfig {
       filterNotchCutoff: filterNotchCutoff,
       filterNotchOrder: filterNotchOrder,
       displayMode: displayMode,
+    );
+  }
+
+  ChannelConfig copyWith({
+    String? name,
+    int? sourceIndex,
+    bool? derived,
+    String? sourceChannel,
+    String? color,
+    bool? displayOnScreen,
+    double? scalingFactor,
+    double? verticalShift,
+    String? reReference,
+    bool? flipPolarity,
+    bool? filterHpEnabled,
+    double? filterHpCutoff,
+    int? filterHpOrder,
+    bool? filterLpEnabled,
+    double? filterLpCutoff,
+    int? filterLpOrder,
+    bool? filterNotchEnabled,
+    double? filterNotchCutoff,
+    int? filterNotchOrder,
+    String? displayMode,
+  }) {
+    return ChannelConfig(
+      name: name ?? this.name,
+      sourceIndex: sourceIndex ?? this.sourceIndex,
+      derived: derived ?? this.derived,
+      sourceChannel: sourceChannel ?? this.sourceChannel,
+      color: color ?? this.color,
+      displayOnScreen: displayOnScreen ?? this.displayOnScreen,
+      scalingFactor: scalingFactor ?? this.scalingFactor,
+      verticalShift: verticalShift ?? this.verticalShift,
+      reReference: reReference ?? this.reReference,
+      flipPolarity: flipPolarity ?? this.flipPolarity,
+      filterHpEnabled: filterHpEnabled ?? this.filterHpEnabled,
+      filterHpCutoff: filterHpCutoff ?? this.filterHpCutoff,
+      filterHpOrder: filterHpOrder ?? this.filterHpOrder,
+      filterLpEnabled: filterLpEnabled ?? this.filterLpEnabled,
+      filterLpCutoff: filterLpCutoff ?? this.filterLpCutoff,
+      filterLpOrder: filterLpOrder ?? this.filterLpOrder,
+      filterNotchEnabled: filterNotchEnabled ?? this.filterNotchEnabled,
+      filterNotchCutoff: filterNotchCutoff ?? this.filterNotchCutoff,
+      filterNotchOrder: filterNotchOrder ?? this.filterNotchOrder,
+      displayMode: displayMode ?? this.displayMode,
     );
   }
 

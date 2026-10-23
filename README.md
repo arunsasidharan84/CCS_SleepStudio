@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <b>Current version: 1.45.0</b> ·
+  <b>Current version: 1.48.0</b> ·
   <a href="CHANGELOG.md">Detailed changelog</a> ·
   <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/issues">Report a problem</a>
 </p>
@@ -90,13 +90,18 @@ Built from the ground up using **Flutter** for a lightweight, fluid UI and a nat
 
 ---
 
-## 🌟 What's New in Version 1.37.4
+## 🌟 What's New in Version 1.48.0
 
-* **Unified PSG Batch Analysis Pipeline with Substep Toggles:** Unified the previously separate "EEG Analysis Pipeline" and "Polygraphy: OSA & PLM" workflows into a single cohesive **PSG Analysis** pipeline. All stages (`[✓ Autoscore] -> [✓ Preprocess] -> [✓ EEG Features] -> [✓ Respiratory / OSA] -> [✓ Limb / PLM] -> [✓ Compile]`) are toggleable substeps that can be freely combined in any sequence. Master sheet compilation automatically incorporates companion polygraphy metrics (`_respiratory.json` - AHI, ODI, hypoxic burden, SpO2 min; `_plm.json` - PLMS index, severity) alongside spectral and micro-event metrics.
-* **Restructured Utilities Menu:** Reorganized the flat 15-item menu into 6 intuitive categories with styled headers, leading icons, and dividers across macOS native and in-app menus (Signal Preprocessing & Cleaning, Micro-Events & Transient Detection, Polygraphy: Respiratory & PLM, Advanced Sleep EEG Pipeline, Interactive Viewer Tools, Reporting & Export).
-* **100% Zero-Python Architecture (Pure Dart Statistical Engine):** Group statistical analysis runs entirely in native Dart (LMM, GLM/ANOVA Type II, FDR, Tukey HSD, Bonferroni, effect sizes) with native Flutter CustomPainter plotting, eliminating all external Python dependencies.
-* **Multi-Row Post-Hoc Scalp Topoplots:** Group statistics scalp topoplots now display multi-row pairwise difference contrasts for all cohort pairs (`OLD − MID`, `YNG − MID`, `YNG − OLD`) with empirical spatial significance markers (`*` for $p < 0.05$).
-* **Cross-Platform Reliability & UI Polish:** Fixed Windows and Linux file path resolution in batch statistical workflows, added interactive factor filtering, robust outlier scaling (winsorization), sample size counts, and removed redundant Group Analysis action bar buttons.
+* **Automated AASM Cardiac and Arrhythmia Event Analysis:** High-performance ECG analysis adhering strictly to AASM Scoring Rules (Section VIII). Features automated Pan-Tompkins QRS detection, refractory lockout, and automated event scoring for **Asystole** ($\ge 3.0\text{ s}$ pause), **Sinus Bradycardia** ($< 40\text{ bpm}$), **Sinus Tachycardia** ($> 90\text{ bpm}$), **Premature Ventricular Contractions (PVCs)**, **Premature Atrial Contractions (PACs)**, **Ventricular Couplets & Non-Sustained VT (NSVT)**, **Supraventricular Tachycardia (SVT)**, **Ventricular Bigeminy/Trigeminy**, and sustained **Atrial Fibrillation (AFib)**, with stage-wise heart rate metrics and one-click timeline addition.
+* **Interactive Zoom Caliper & Waveform Intermediate Ticks:** The zoomed signal inspection dialog provides sub-second time ticks ($0.1\text{ s} / 0.5\text{ s}$) and microvolt grids, along with an interactive drag-to-measure caliper calculating $\Delta t$, frequency ($f = 1/\Delta t$), $\Delta V$, range, and slice mean.
+* **Relative Spectral Multi-Line Trajectory Charts & 2D Scalp Topoplots:** PDF publication reports now render compact 3-chart side-by-side spectral landscapes (Aperiodic Exponent/Slope, Broadband Offset/Intercept, and multi-line Relative Band Power across Delta, Theta, Alpha, Sigma, Beta, Gamma for Wake, N1, N2, N3, REM). Automatic 2D scalp topoplots (head outline, nose, ears, 10–20 electrodes, spatial interpolation, colorbar) are rendered for high-density setups ($\ge 5$ channels).
+* **Single-Point Click Markers & Typable Custom Shortcuts:** Replaced crowded selection overlays with clean pinpoint markers. Top selection headers display both **Mean** and **Range** (Peak-to-Peak: $\Delta V = V_{\max} - V_{\min}$) in $\mu\text{V}$. Added shortcuts <kbd>T</kbd> and <kbd>Shift</kbd>+<kbd>M</kbd> for custom named markers, and right-click marker creation directly on selection areas.
+* **Configurable Epoch Time Grid & Sleep Stage Watermark:** Toggleable vertical time grid (1s dashed / 5s solid lines with timestamps) across epochs via toolbar, View menu, or <kbd>G</kbd>. Dynamic sleep stage background tint and watermark ribbon across scored epochs.
+* **Channel Solo / Montage Subselection Mode:** Double-click any channel scale tile to isolate/solo that channel; double-click again or press <kbd>Esc</kbd> to restore full montage.
+* **Decoupled Waveform Hover (Zero CPU Spikes):** Mouse hover updates are decoupled from full-screen `setState()` re-renders using Flutter `ValueNotifier` hooks, eliminating CPU spikes and dynamically updating hover values across epoch scrolling.
+* **Clinical Decision Aid Tooltips:** Selection windows provide real-time pattern suggestions for Spindles, Slow Waves, K-Complexes, Alpha Rhythm, Apnea, Hypopnea, Desaturations, PLM, and Phasic REM.
+* **AASM Montage EOG Standardization:** EOG derivation presets now adhere to standardized common-reference montages (`LOC1-A2` / `ROC1-A2`), eliminating contralateral mastoid mixing.
+* **Dynamic Display Font Scaling:** Scalable font multiplier across all markers, labels, values, and tooltips via View menu and <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>=</kbd> / <kbd>-</kbd> / <kbd>0</kbd>.
 
 > 📜 For older release highlights and detailed historical changes, see the complete **[CHANGELOG.md](CHANGELOG.md)**.
 

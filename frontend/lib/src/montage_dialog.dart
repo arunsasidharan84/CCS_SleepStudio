@@ -28,7 +28,7 @@ const List<MontagePreset> builtInMontagePresets = [
     description: 'Standard AASM clinical PSG sequence: EOG (E1-M2, E2-M1), Frontal (F4-M1, F3-M2), Central (C4-M1, C3-M2), Occipital (O2-M1, O1-M2), Chin EMG',
     derivations: [
       ('E1', 'M2'),
-      ('E2', 'M1'),
+      ('E2', 'M2'),
       ('F4', 'M1'),
       ('F3', 'M2'),
       ('C4', 'M1'),
@@ -43,7 +43,7 @@ const List<MontagePreset> builtInMontagePresets = [
     description: 'Standard AASM derivations with complete respiratory channels (Flow, Thorax, Abdomen, SpO2, Snore)',
     derivations: [
       ('E1', 'M2'),
-      ('E2', 'M1'),
+      ('E2', 'M2'),
       ('F4', 'M1'),
       ('F3', 'M2'),
       ('C4', 'M1'),
@@ -58,7 +58,7 @@ const List<MontagePreset> builtInMontagePresets = [
     description: 'Standard AASM derivations with bilateral leg EMG (LAT, RAT) and body position',
     derivations: [
       ('E1', 'M2'),
-      ('E2', 'M1'),
+      ('E2', 'M2'),
       ('F4', 'M1'),
       ('F3', 'M2'),
       ('C4', 'M1'),
@@ -73,7 +73,7 @@ const List<MontagePreset> builtInMontagePresets = [
     description: 'Comprehensive AASM clinical PSG: standard derivations plus bilateral leg movements (LAT, RAT, PLM) and complete respiratory channels (Flow, Thorax, Abdomen, SpO2, Snore, Body Position)',
     derivations: [
       ('E1', 'M2'),
-      ('E2', 'M1'),
+      ('E2', 'M2'),
       ('F4', 'M1'),
       ('F3', 'M2'),
       ('C4', 'M1'),
@@ -1057,7 +1057,7 @@ List<ChannelConfig> generateMontagePresetChannels({
         );
       }
       if (e2 != null) {
-        final ref = m1 ?? m2;
+        final ref = m2 ?? m1;
         final existing = baseList.firstWhere(
           (c) => c.name.equalsIgnoreCase(e2),
           orElse: () => ChannelConfig(name: e2),

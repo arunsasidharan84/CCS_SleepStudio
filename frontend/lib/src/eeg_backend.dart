@@ -213,6 +213,11 @@ class AppConfig {
     this.recordingDate = '',
     this.showWorkflowBar = true,
     Map<String, bool>? workflowSteps,
+    this.showTimeGrid = true,
+    this.timeGridIntervalSeconds = 1.0,
+    this.showStageWatermark = true,
+    this.showStageRibbon = true,
+    this.displayFontScale = 1.0,
     this.channels = const [],
     Map<int, String>? customEventNames,
     // Preprocessing configuration
@@ -429,6 +434,11 @@ class AppConfig {
   String recordingDate;
   bool showWorkflowBar;
   Map<String, bool> workflowSteps;
+  bool showTimeGrid;
+  double timeGridIntervalSeconds;
+  bool showStageWatermark;
+  bool showStageRibbon;
+  double displayFontScale;
   List<ChannelConfig> channels;
   Map<int, String> customEventNames;
 
@@ -483,6 +493,11 @@ class AppConfig {
       'recordingDate': recordingDate,
       'showWorkflowBar': showWorkflowBar,
       'workflowSteps': workflowSteps,
+      'showTimeGrid': showTimeGrid,
+      'timeGridIntervalSeconds': timeGridIntervalSeconds,
+      'showStageWatermark': showStageWatermark,
+      'showStageRibbon': showStageRibbon,
+      'displayFontScale': displayFontScale,
       'channels': channels.map((c) => c.toJson()).toList(),
       'customEventNames':
           customEventNames.map((k, v) => MapEntry(k.toString(), v)),
@@ -657,6 +672,13 @@ class AppConfig {
               (k, v) => MapEntry(k.toString(), safeBool(v, true)),
             )
           : null,
+      showTimeGrid: safeBool(json['showTimeGrid'], true),
+      timeGridIntervalSeconds:
+          (json['timeGridIntervalSeconds'] as num?)?.toDouble() ?? 1.0,
+      showStageWatermark: safeBool(json['showStageWatermark'], true),
+      showStageRibbon: safeBool(json['showStageRibbon'], true),
+      displayFontScale:
+          (json['displayFontScale'] as num?)?.toDouble() ?? 1.0,
       customEventNames: parsedEventNames,
       channels:
           (json['channels'] as List<dynamic>?)
@@ -2185,6 +2207,11 @@ class EegBackend {
       stageProbabilities:
           existingStageProbabilities ?? const <Map<SleepStage, double>>[],
       recordingStartTime: eeg.recordingStartTime,
+      showTimeGrid: cfg.showTimeGrid,
+      timeGridIntervalSeconds: cfg.timeGridIntervalSeconds,
+      showStageWatermark: cfg.showStageWatermark,
+      showStageRibbon: cfg.showStageRibbon,
+      displayFontScale: cfg.displayFontScale,
     );
   }
 
@@ -2811,15 +2838,18 @@ class EegBackend {
     // We can do this synchronously since it's just a subset of an epoch
     final (psd, freqs) = sp.welchPsd(slice, srate);
 
-    // Calculate peak-to-peak amplitude
+    // Calculate peak-to-peak amplitude and mean
     double minVal = slice[0];
     double maxVal = slice[0];
-    for (var i = 1; i < slice.length; i++) {
+    double sumVal = 0.0;
+    for (var i = 0; i < slice.length; i++) {
       final v = slice[i];
       if (v < minVal) minVal = v;
       if (v > maxVal) maxVal = v;
+      sumVal += v;
     }
     final peakToPeak = maxVal - minVal;
+    final meanVal = slice.isNotEmpty ? sumVal / slice.length : 0.0;
 
     final selection = EventSelection(
       startSec: startSec,
@@ -2828,6 +2858,9 @@ class EegBackend {
       startUv: startUv ?? 0.0,
       endUv: endUv ?? 0.0,
       peakToPeakUv: peakToPeak,
+      meanUv: meanVal,
+      minUv: minVal,
+      maxUv: maxVal,
     );
 
     return old.copyWith(

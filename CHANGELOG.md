@@ -4,6 +4,49 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.48.0]
+*   **Automated AASM Cardiac and Arrhythmia Event Analysis:**
+    - Integrated automated clinical ECG analysis following AASM Scoring Manual (Section VIII: Cardiac Rules).
+    - Pan-Tompkins QRS energy detector with adaptive thresholding, refractory lockout, and sub-sample R-peak snapping.
+    - Automated detection and scoring for:
+      - **Asystole**: cardiac pause (R-R interval) $\ge 3.0\text{ s}$ in adults.
+      - **Sinus Bradycardia**: sustained heart rate $< 40\text{ bpm}$ ($\ge 30\text{ s}$).
+      - **Sinus Tachycardia**: sustained heart rate $> 90\text{ bpm}$ ($\ge 30\text{ s}$).
+      - **Premature Ventricular Contractions (PVC / VPB)**: premature wide QRS with compensatory pause.
+      - **Premature Atrial Contractions (PAC / APB)**: premature narrow QRS without full compensatory pause.
+      - **Ventricular Couplets & Non-Sustained Ventricular Tachycardia (NSVT)**: 2 or $\ge 3$ consecutive PVCs at rate $> 100\text{ bpm}$.
+      - **Supraventricular Tachycardia (SVT)**: run of $\ge 3$ consecutive PACs at rate $> 100\text{ bpm}$.
+      - **Ventricular Bigeminy & Trigeminy**: alternating normal and ectopic beat patterns.
+      - **Atrial Fibrillation (AFib)**: sustained irregularly irregular ventricular rhythm ($CV_{RR} \ge 0.19$, $nRMSSD \ge 0.16$).
+    - Interactive parameter dialog with ECG channel selector, configurable thresholds, sleep stage heart rate breakdown (Wake, N1, N2, N3, REM), and one-click event commit.
+*   **Zoomed Waveform Inspection with Interactive Measurement Caliper:**
+    - High-precision time and voltage grid ticks (0.1s / 0.5s intervals and microvolt steps) inside the zoomed signal window.
+    - Interactive drag-to-measure caliper: click and drag across the zoomed waveform trace to measure $\Delta t$ (ms), instantaneous frequency ($f = 1/\Delta t$), $\Delta V$, range, and slice mean.
+*   **Relative Spectral Multi-Line Trajectory Charts & 2D Scalp Topoplots in PDF Reports:**
+    - Integrated multi-line trajectories for canonical frequency bands (Delta, Theta, Alpha, Sigma, Beta, Gamma) across all sleep stages (Wake, N1, N2, N3, REM).
+    - Side-by-side compact 3-chart layout: Aperiodic Exponent/Slope, Broadband Offset/Intercept, and Relative Spectral Trajectories.
+    - Resolved missing Wake state, Beta, and Gamma power values through unified alias resolution (`W_`, `Wake_`, `R_`, `REM_`, `Beta1`/`Beta2`, `Gamma1`/`Gamma2`).
+    - Automated 2D scalp topoplot generator for high-density recordings ($\ge 5$ scalp electrodes): head outline, ears, nose, 10–20 electrode coordinates, spatial gradient interpolation, and microvolt colorbar.
+*   **Timeline Single-Point Markers & Typable Custom Shortcuts:**
+    - Single-click point markers now render cleanly as dedicated pinpoint indicators without compressed selection boxes or text crowding.
+    - Top selection header displays both **Mean** and **Range** (Peak-to-Peak: $\Delta V = V_{\max} - V_{\min}$) in $\mu\text{V}$.
+    - Added keyboard shortcuts `T` and `Shift+M` to open instant custom typed marker prompts.
+    - Added right-click selection context menu options to add custom markers directly to active regions.
+*   **Configurable Epoch Time Grid & Sleep Stage Watermark:**
+    - Configurable time grid across epochs (1s dashed / 5s solid lines with subtle timestamps), toggled via toolbar button, View menu, or `G` shortcut.
+    - Subtle sleep stage background tint and watermark badge across the epoch canvas.
+*   **Channel Solo / Montage Subselection Mode:**
+    - Double-click any channel scale tile to isolate/solo that channel for focused inspection; double-click again or press `Esc` to restore full montage.
+*   **Waveform Hover & Scroll Performance Optimization:**
+    - Decoupled cursor hover coordinate tracking from full-screen `setState()` re-renders using Flutter `ValueNotifier` hooks.
+    - Eliminates CPU spikes during mouse moves and dynamically recalculates hover amplitudes across epoch scrolling.
+*   **Clinical Smart Decision Aid Tooltips:**
+    - Selection windows provide real-time pattern suggestions based on signal properties: Sleep Spindles, Slow Wave / Delta, K-Complexes, Alpha Rhythm, Apnea / Hypopnea, Desaturations, PLM, and Phasic REM.
+*   **AASM Montage EOG Mastoid Derivation Standardization:**
+    - Aligned EOG derivation presets to common reference standards (`LOC1-A2`, `ROC1-A2` / `E1-M2`, `E2-M2`), preventing contralateral reference mixing.
+*   **Dynamic Display Font Scaling:**
+    - Adjustable font multiplier across markers, labels, values, and tooltips via View menu and `Ctrl+Alt+=`, `Ctrl+Alt+-`, `Ctrl+Alt+0`.
+
 ## [1.46.0]
 *   **AASM Montage Default Selection in Automated Sleep Scoring:**
     - Auto sleep scoring setup dialogs (`AutoScoringDialog` and `BatchAutoScoringDialog`) now prioritize applied/visible AASM derivations (`C4-M1`, `C4-A1`, `F4-M1`, `O2-M1`, `LOC-A2`, `ROC-A1`, `CHIN1-CHIN2`, etc.) by default instead of selecting all available raw channels.

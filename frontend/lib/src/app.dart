@@ -43,6 +43,7 @@ import 'group_statistics.dart';
 import 'montage_dialog.dart';
 import 'legacy_file_migration.dart';
 import 'rem_detection.dart';
+import 'cardiac_analysis.dart';
 import 'pattern_search.dart';
 
 const double _plotLeftPadding = 90.0;
@@ -92,7 +93,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   AnalyseNidraOptions _batchAnalyseOptions = AnalyseNidraOptions();
   String? _activePath;
   String _status = 'Ready — load an EDF file to begin scoring';
-  String? _hoverStatus;
+  final ValueNotifier<String?> _hoverStatusNotifier = ValueNotifier<String?>(null);
+  List<ChannelConfig>? _preSoloChannels;
   String _appVersion = '';
   int _navigationSerial = 0;
   Timer? _tfRefreshTimer;
@@ -1410,6 +1412,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
   }
 
   void _clearSelection() {
+    if (_preSoloChannels != null) {
+      _toggleSoloChannel(0);
+      return;
+    }
     final v = _viewport;
     if (v == null) return;
     setState(() {
@@ -6851,18 +6857,43 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         ('Alpha', 0.31, 0.69, 0.55),
         ('Sigma', 0.89, 0.55, 0.18),
         ('Beta', 0.78, 0.30, 0.26),
+        ('Gamma', 0.48, 0.20, 0.67),
       ];
-      var sy = 272.0;
-      for (final stage in ['N1', 'N2', 'N3', 'REM']) {
+      var sy = 280.0;
+      for (final stage in ['W', 'N1', 'N2', 'N3', 'REM']) {
         p.drawText(stage, 52, sy + 3, bold: true, size: 8);
         var x = 82.0;
         final means = <double>[];
-        for (final band in ['Delta', 'Theta', 'Alpha', 'Sigma', 'Beta1']) {
-          final values = regionalRows
-              .map((row) => double.tryParse(row['${stage}_${band}_PSD'] ?? ''))
-              .whereType<double>()
-              .where((value) => value.isFinite)
-              .toList();
+        for (final band in ['Delta', 'Theta', 'Alpha', 'Sigma', 'Beta', 'Gamma']) {
+          final candidateKeys = [
+            '${stage}_${band}_PSD',
+            '${stage}_$band',
+            if (stage == 'W') ...['Wake_${band}_PSD', 'Wake_$band'],
+            if (stage == 'REM') ...['R_${band}_PSD', 'R_$band'],
+            if (band == 'Beta') ...[
+              '${stage}_Beta1_PSD',
+              '${stage}_Beta2_PSD',
+              if (stage == 'W') ...['Wake_Beta1_PSD', 'Wake_Beta2_PSD'],
+            ],
+            if (band == 'Gamma') ...[
+              '${stage}_Gamma1_PSD',
+              '${stage}_Gamma2_PSD',
+              if (stage == 'W') ...['Wake_Gamma1_PSD', 'Wake_Gamma2_PSD'],
+            ],
+          ];
+          final values = <double>[];
+          for (final row in regionalRows) {
+            for (final k in candidateKeys) {
+              final raw = row[k]?.trim();
+              if (raw != null && raw.isNotEmpty && raw.toLowerCase() != 'nan') {
+                final d = double.tryParse(raw);
+                if (d != null && d.isFinite) {
+                  values.add(d);
+                  break;
+                }
+              }
+            }
+          }
           means.add(
             values.isEmpty ? 0 : values.reduce((a, b) => a + b) / values.length,
           );
@@ -6874,20 +6905,20 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             x,
             sy - 3,
             width,
-            15,
+            13,
             bands[i].$2,
             bands[i].$3,
             bands[i].$4,
           );
           x += width;
         }
-        sy -= 30;
+        sy -= 23;
       }
-      var lx = 90.0;
+      var lx = 60.0;
       for (final band in bands) {
-        p.drawRgbRect(lx, 135, 9, 9, band.$2, band.$3, band.$4);
-        p.drawText(band.$1, lx + 13, 136, size: 7.5);
-        lx += 88;
+        p.drawRgbRect(lx, 138, 9, 9, band.$2, band.$3, band.$4);
+        p.drawText(band.$1, lx + 13, 139, size: 7.5);
+        lx += 78;
       }
       p.drawText(
         'PSD segments are normalized within each displayed stage to emphasize spectral composition.',
@@ -6951,34 +6982,153 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         : (isEeg ? 'Selected EEG: $label' : 'Selected Signal: $label');
     showDialog(
       context: context,
-      builder: (context) => Dialog(
-        child: SizedBox(
-          width: 760,
-          height: 420,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(8),
-                child: Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-              Expanded(
-                child: CustomPaint(
-                  painter: _ZoomSignalPainter(samples, srate, channelLabel: label),
-                  child: const SizedBox.expand(),
-                ),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Close'),
-              ),
-            ],
-          ),
-        ),
+      builder: (context) => _ZoomSignalDialog(
+        samples: samples,
+        sampleRate: srate,
+        channelLabel: label,
+        title: title,
       ),
     );
+  }
+
+  void _toggleTimeGrid() {
+    final v = _viewport;
+    if (v == null) return;
+    final next = !v.showTimeGrid;
+    setState(() {
+      _config.showTimeGrid = next;
+      _viewport = v.copyWith(showTimeGrid: next);
+      _status = next ? 'Time grid enabled (1s & 5s lines)' : 'Time grid disabled';
+    });
+    if (_activePath != null) {
+      saveAutoConfig(_activePath!, _config);
+    }
+  }
+
+  void _adjustFontScale(double multiplier) {
+    final v = _viewport;
+    if (v == null) return;
+    final next = (v.displayFontScale * multiplier).clamp(0.7, 2.0);
+    setState(() {
+      _config.displayFontScale = next;
+      _viewport = v.copyWith(displayFontScale: next);
+      _status = 'Display font scale: ${(next * 100).toStringAsFixed(0)}%';
+    });
+    if (_activePath != null) {
+      saveAutoConfig(_activePath!, _config);
+    }
+  }
+
+  void _resetFontScale() {
+    final v = _viewport;
+    if (v == null) return;
+    setState(() {
+      _config.displayFontScale = 1.0;
+      _viewport = v.copyWith(displayFontScale: 1.0);
+      _status = 'Display font scale reset to 100%';
+    });
+    if (_activePath != null) {
+      saveAutoConfig(_activePath!, _config);
+    }
+  }
+
+  void _toggleSoloChannel(int channelIndex) {
+    final v = _viewport;
+    final eeg = _loadedEeg;
+    if (v == null || eeg == null) return;
+    final labels = v.signalChannelLabels;
+    if (channelIndex < 0 || channelIndex >= labels.length) return;
+    final targetLabel = labels[channelIndex];
+
+    if (_preSoloChannels != null) {
+      _config.channels = [
+        for (final c in _preSoloChannels!) c.copyWith(),
+      ];
+      _preSoloChannels = null;
+      _previewDisplayConfig(_config);
+      _setStatus('Restored full channel montage');
+    } else {
+      _preSoloChannels = [
+        for (final c in _config.channels) c.copyWith(),
+      ];
+      for (final c in _config.channels) {
+        c.displayOnScreen =
+            (c.name.trim().toLowerCase() == targetLabel.trim().toLowerCase());
+      }
+      _previewDisplayConfig(_config);
+      _setStatus('Solo channel: $targetLabel (Double-click or press Esc to revert)');
+    }
+  }
+
+  Future<void> _runAasmCardiacAnalysis() async {
+    final v = _viewport;
+    final eeg = _loadedEeg;
+    if (v == null || eeg == null) {
+      _setStatus('Load an EDF file first');
+      return;
+    }
+    await showDialog(
+      context: context,
+      builder: (ctx) => AasmCardiacDialog(
+        channelLabels: v.signalChannelLabels,
+        onRunAnalysis: (ecgChannel, asystoleSec, bradycardiaBpm, tachycardiaBpm, {bool includeArrhythmias = true}) async {
+          final chIdx = v.signalChannelLabels.indexOf(ecgChannel);
+          final rawIdx = (chIdx >= 0 && chIdx < v.signalChannelSourceIndices.length)
+              ? v.signalChannelSourceIndices[chIdx]
+              : chIdx;
+          if (rawIdx < 0 || rawIdx >= eeg.channelSamples.length) return null;
+          final samples = eeg.channelSamples[rawIdx];
+          final result = AasmCardiacAnalyzer.analyze(
+            ecgSamples: samples,
+            sampleRate: eeg.sampleRateHz,
+            stages: v.stages,
+            epochSeconds: v.epochSeconds,
+            asystoleThresholdSec: asystoleSec,
+            bradycardiaThresholdBpm: bradycardiaBpm,
+            tachycardiaThresholdBpm: tachycardiaBpm,
+            includeArrhythmias: includeArrhythmias,
+            channelName: ecgChannel,
+          );
+          final allEvents = result.allEvents;
+          if (allEvents.isNotEmpty) {
+            final updated = _mergeScoredEvents([...v.scoredEvents, ...allEvents]);
+            setState(() {
+              _viewport = v.copyWith(scoredEvents: updated);
+              _status =
+                  'Detected ${allEvents.length} AASM cardiac events (Asystole: ${result.asystoleEvents.length}, Brady: ${result.bradycardiaEvents.length}, Tachy: ${result.tachycardiaEvents.length}, PVC: ${result.pvcEvents.length}, PAC: ${result.pacEvents.length}, Arrhythmias: ${result.arrhythmiaEvents.length})';
+            });
+            autoSaveScoring(
+              _activePath,
+              v.stages,
+              v.epochSeconds,
+              events: updated,
+              stagesUncertain: v.stagesUncertain,
+              stagesConfidence: v.stagesConfidence,
+              stageProbabilities: v.stageProbabilities,
+            );
+          }
+          return result;
+        },
+      ),
+    );
+  }
+
+  void _openCustomMarkerDialog() {
+    final v = _viewport;
+    if (v == null) return;
+    if (v.eventSelections.isNotEmpty) {
+      final sel = v.eventSelections.last;
+      final selStart = math.min(sel.startSec, sel.endSec);
+      final selDur = (sel.endSec - sel.startSec).abs();
+      final chLabel =
+          (sel.channel >= 0 && sel.channel < v.signalChannelLabels.length)
+              ? v.signalChannelLabels[sel.channel]
+              : null;
+      _showAddMarkerDialog(selStart, channel: chLabel, initialDuration: selDur);
+    } else {
+      final startSec = v.currentEpoch * v.epochSeconds.toDouble();
+      _showAddMarkerDialog(startSec);
+    }
   }
 
   int _disagreementCount(List<SleepStage> a, List<SleepStage> b) {
@@ -7608,14 +7758,22 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     );
   }
 
-  Future<void> _showAddMarkerDialog(double clickSec, {String? channel}) async {
+  Future<void> _showAddMarkerDialog(
+    double clickSec, {
+    String? channel,
+    double? initialDuration,
+  }) async {
     final v = _viewport;
     if (v == null) return;
     final timeStr = _formatTimeForDisplay(clickSec);
     final textCtrl = TextEditingController(text: _eventLabel(0));
     int selectedDigit = 0;
-    bool isPoint = true;
-    final durCtrl = TextEditingController(text: '1.0');
+    bool isPoint = (initialDuration == null || initialDuration <= 0.05);
+    final durCtrl = TextEditingController(
+      text: initialDuration != null && initialDuration > 0.05
+          ? initialDuration.toStringAsFixed(2)
+          : '1.0',
+    );
     String? selectedChannel = channel;
 
     final availableLabels = <(int, String)>[
@@ -7830,27 +7988,74 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           const PopupMenuDivider(),
         ],
         if (v.eventSelections.isNotEmpty) ...[
-          PopupMenuItem(
-            value: 'pattern:search',
-            child: Row(
-              children: [
-                const Icon(Icons.saved_search, size: 16, color: Color(0xFF0284C7)),
-                const SizedBox(width: 8),
-                Text('Search selected pattern in $label…'),
-              ],
-            ),
-          ),
-          PopupMenuItem(
-            value: 'selection:clear',
-            child: Row(
-              children: [
-                const Icon(Icons.deselect, size: 16, color: Colors.blueGrey),
-                const SizedBox(width: 8),
-                const Text('Clear selection box'),
-              ],
-            ),
-          ),
-          const PopupMenuDivider(),
+          ...() {
+            final sel = v.eventSelections.last;
+            final selDur = (sel.endSec - sel.startSec).abs();
+            final durStr = '${selDur.toStringAsFixed(2)}s';
+            return <PopupMenuEntry<String>>[
+              PopupMenuItem(
+                value: 'marker:selection:dialog',
+                child: Row(
+                  children: [
+                    const Icon(Icons.bookmark_add, size: 16, color: Color(0xFF0284C7)),
+                    const SizedBox(width: 8),
+                    Text('Add marker for selection ($durStr)…', style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'marker:selection:quick:0:${_eventLabel(0)}',
+                child: Row(
+                  children: [
+                    Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFFE53935), shape: BoxShape.circle)),
+                    const SizedBox(width: 8),
+                    Text('Mark selection as ${_eventLabel(0)} [A] ($durStr)'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'marker:selection:quick:1:${_eventLabel(1)}',
+                child: Row(
+                  children: [
+                    Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFFFFB300), shape: BoxShape.circle)),
+                    const SizedBox(width: 8),
+                    Text('Mark selection as ${_eventLabel(1)} [F1] ($durStr)'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'marker:selection:quick:2:${_eventLabel(2)}',
+                child: Row(
+                  children: [
+                    Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFF0284C7), shape: BoxShape.circle)),
+                    const SizedBox(width: 8),
+                    Text('Mark selection as ${_eventLabel(2)} [F2] ($durStr)'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'pattern:search',
+                child: Row(
+                  children: [
+                    const Icon(Icons.saved_search, size: 16, color: Color(0xFF0284C7)),
+                    const SizedBox(width: 8),
+                    Text('Search selected pattern in $label…'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'selection:clear',
+                child: Row(
+                  children: [
+                    const Icon(Icons.deselect, size: 16, color: Colors.blueGrey),
+                    const SizedBox(width: 8),
+                    const Text('Clear selection box'),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
+            ];
+          }(),
         ],
         if (clickSec != null) ...[
           PopupMenuItem(
@@ -7976,6 +8181,25 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     if (choice == null || !mounted) return;
     if (choice == 'selection:clear') {
       _clearSelection();
+      return;
+    }
+    if (choice == 'marker:selection:dialog' && v.eventSelections.isNotEmpty) {
+      final sel = v.eventSelections.last;
+      final selStart = math.min(sel.startSec, sel.endSec);
+      final selDur = (sel.endSec - sel.startSec).abs();
+      _clearSelection();
+      unawaited(_showAddMarkerDialog(selStart, channel: label, initialDuration: selDur));
+      return;
+    }
+    if (choice.startsWith('marker:selection:quick:') && v.eventSelections.isNotEmpty) {
+      final sel = v.eventSelections.last;
+      final selStart = math.min(sel.startSec, sel.endSec);
+      final selDur = (sel.endSec - sel.startSec).abs();
+      final parts = choice.split(':');
+      final digit = int.tryParse(parts[3]) ?? 0;
+      final evLabel = parts.length > 4 ? parts[4] : _eventLabel(digit);
+      _clearSelection();
+      _addMarkerAtTime(selStart, digit: digit, label: evLabel, duration: selDur, channel: label);
       return;
     }
     if (choice == 'pattern:search') {
@@ -8367,6 +8591,15 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             onSelected: _managePsgMarkers,
           ),
           PlatformMenuItem(
+            label: 'Automated AASM Cardiac Event Detection…',
+            onSelected: _runAasmCardiacAnalysis,
+          ),
+          PlatformMenuItem(
+            label: 'Add Custom Typable Marker… [T / Shift+M]',
+            shortcut: const SingleActivator(LogicalKeyboardKey.keyT),
+            onSelected: _openCustomMarkerDialog,
+          ),
+          PlatformMenuItem(
             label: 'Erase events in drawn selection [Backspace]',
             onSelected: _eraseEventsInSelections,
           ),
@@ -8388,6 +8621,34 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           PlatformMenuItem(label: 'Next Disagreement [D]', onSelected: _jumpNextDisagreement),
         ],
       ),
+      // ─── View ──────────────────────────────────────────────────────────
+      PlatformMenu(
+        label: 'View',
+        menus: [
+          PlatformMenuItem(
+            label: 'Toggle Time Grid (1s & 5s lines) [G]',
+            shortcut: const SingleActivator(LogicalKeyboardKey.keyG),
+            onSelected: _toggleTimeGrid,
+          ),
+          PlatformMenuItem(
+            label: 'Increase Font Size [Ctrl+Alt+=]',
+            onSelected: () => _adjustFontScale(1.15),
+          ),
+          PlatformMenuItem(
+            label: 'Decrease Font Size [Ctrl+Alt+-]',
+            onSelected: () => _adjustFontScale(0.85),
+          ),
+          PlatformMenuItem(
+            label: 'Reset Font Size to 100% [Ctrl+Alt+0]',
+            onSelected: _resetFontScale,
+          ),
+          PlatformMenuItem(
+            label: 'Toggle Maximize Waveform [F]',
+            shortcut: const SingleActivator(LogicalKeyboardKey.keyF),
+            onSelected: () => setState(() => _waveformMaximized = !_waveformMaximized),
+          ),
+        ],
+      ),
       // ─── Utilities ────────────────────────────────────────────────────
       PlatformMenu(
         label: 'Utilities',
@@ -8405,6 +8666,10 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               PlatformMenuItem(
                 label: 'Remove ECG Artefacts (Cardiac QRS Subtraction)…',
                 onSelected: _openEcgArtifactRemovalDialog,
+              ),
+              PlatformMenuItem(
+                label: 'Cardiac Event Analysis (AASM Asystole, Bradycardia, Tachycardia)…',
+                onSelected: _runAasmCardiacAnalysis,
               ),
               PlatformMenuItem(
                 label: 'EEG Utilities Module (Reduce, Crop, Rename, Anonymize & Batch)…',
@@ -8822,6 +9087,16 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 onPressed: _managePsgMarkers,
                 child: const Text('Show / Remove Markers & Polygraphy Events…'),
               ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.favorite_border, size: 18),
+                onPressed: _runAasmCardiacAnalysis,
+                child: const Text('Automated AASM Cardiac Event Detection…'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.edit_note, size: 18),
+                onPressed: _openCustomMarkerDialog,
+                child: const Text('Add Custom Typable Marker… [T / Shift+M]'),
+              ),
               const Divider(height: 1),
               MenuItemButton(
                 onPressed: _eraseEventsInSelections,
@@ -8835,6 +9110,38 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
               ),
             ],
             child: const Text('Events'),
+          ),
+          SubmenuButton(
+            menuChildren: [
+              MenuItemButton(
+                leadingIcon: Icon((_viewport?.showTimeGrid ?? false) ? Icons.grid_on : Icons.grid_off, size: 18),
+                onPressed: _toggleTimeGrid,
+                child: const Text('Toggle Time Grid (1s & 5s lines) [G]'),
+              ),
+              const Divider(height: 1),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.zoom_in, size: 18),
+                onPressed: () => _adjustFontScale(1.15),
+                child: const Text('Increase Font Size (Labels, Tooltips, Markers) [Ctrl+Alt+=]'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.zoom_out, size: 18),
+                onPressed: () => _adjustFontScale(0.85),
+                child: const Text('Decrease Font Size [Ctrl+Alt+-]'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.restart_alt, size: 18),
+                onPressed: _resetFontScale,
+                child: const Text('Reset Font Size to 100% [Ctrl+Alt+0]'),
+              ),
+              const Divider(height: 1),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.fullscreen, size: 18),
+                onPressed: () => setState(() => _waveformMaximized = !_waveformMaximized),
+                child: const Text('Toggle Maximize Waveform [F]'),
+              ),
+            ],
+            child: const Text('View'),
           ),
           SubmenuButton(
             menuChildren: [
@@ -8897,6 +9204,16 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                 leadingIcon: const Icon(Icons.checklist_rtl, size: 18),
                 onPressed: _managePsgMarkers,
                 child: const Text('Show / Remove Markers & Polygraphy Events…'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.favorite_border, size: 18),
+                onPressed: _runAasmCardiacAnalysis,
+                child: const Text('Automated AASM Cardiac Event Detection…'),
+              ),
+              MenuItemButton(
+                leadingIcon: const Icon(Icons.edit_note, size: 18),
+                onPressed: _openCustomMarkerDialog,
+                child: const Text('Add Custom Typable Marker… [T / Shift+M]'),
               ),
               const Divider(height: 8),
               _menuSectionHeader('ADVANCED SLEEP EEG PIPELINE'),
@@ -11842,6 +12159,36 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
             _ScaleDownWaveformIntent: CallbackAction<_ScaleDownWaveformIntent>(
               onInvoke: (_) => _adjustAllChannelsScale(0.8),
             ),
+            _CustomMarkerIntent: CallbackAction<_CustomMarkerIntent>(
+              onInvoke: (_) {
+                _openCustomMarkerDialog();
+                return null;
+              },
+            ),
+            _ToggleTimeGridIntent: CallbackAction<_ToggleTimeGridIntent>(
+              onInvoke: (_) {
+                _toggleTimeGrid();
+                return null;
+              },
+            ),
+            _ScaleFontUpIntent: CallbackAction<_ScaleFontUpIntent>(
+              onInvoke: (_) {
+                _adjustFontScale(1.15);
+                return null;
+              },
+            ),
+            _ScaleFontDownIntent: CallbackAction<_ScaleFontDownIntent>(
+              onInvoke: (_) {
+                _adjustFontScale(0.85);
+                return null;
+              },
+            ),
+            _ResetFontScaleIntent: CallbackAction<_ResetFontScaleIntent>(
+              onInvoke: (_) {
+                _resetFontScale();
+                return null;
+              },
+            ),
             _HelpShortcutsIntent: CallbackAction<_HelpShortcutsIntent>(
               onInvoke: (_) {
                 _showShortcutsHelp();
@@ -11933,6 +12280,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                         viewWindowSeconds: _viewWindowSeconds,
                         onViewWindowChanged: _setViewWindow,
                         onOpenTimeline: _openOvernightTimeline,
+                        onToggleTimeGrid: _toggleTimeGrid,
                         onUnscored: _jumpNextUnscored,
                         onUncertain: _jumpNextUncertain,
                         onTransition: _jumpNextTransition,
@@ -11971,8 +12319,8 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                                     onVideoCursorDrag: _handleVideoCursorDrag,
                                     viewport: viewport,
                                     loadedEeg: _loadedEeg,
-                                    onHoverStatus: (s) =>
-                                        setState(() => _hoverStatus = s),
+                                    onHoverStatus: (s) => _hoverStatusNotifier.value = s,
+                                    onChannelDoubleTap: _toggleSoloChannel,
                                     onJump: _jumpToEpochCoalesced,
                                     swaSlider: _swaSlider,
                                     onSwaSlider: (v) =>
@@ -12027,7 +12375,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                         viewport: viewport,
                         comparisonStages: _comparisonStages,
                         onTimeUnitChanged: _setEegPanelTimeUnit,
-                        hoverStatus: _hoverStatus,
+                        hoverStatusNotifier: _hoverStatusNotifier,
                       ),
                     ],
                   ),
@@ -12228,12 +12576,14 @@ class _Toolbar extends StatefulWidget {
     this.viewWindowSeconds = 30,
     this.onViewWindowChanged,
     this.onOpenTimeline,
+    this.onToggleTimeGrid,
   });
 
   final EegViewport? viewport;
   final double viewWindowSeconds;
   final ValueChanged<double>? onViewWindowChanged;
   final VoidCallback? onOpenTimeline;
+  final VoidCallback? onToggleTimeGrid;
   final VoidCallback? onPreprocess;
   final VoidCallback? onFeatureConfig;
   final void Function(int, [bool]) onJump;
@@ -12687,6 +13037,12 @@ class _ToolbarState extends State<_Toolbar> {
                 onPressed: widget.onToggleUncertainty,
               ),
               _ToolButton(
+                label: (widget.viewport?.showTimeGrid ?? false) ? 'grid [ON]' : 'grid [OFF]',
+                tooltip: 'Toggle 1s & 5s vertical time grid lines across epochs [G]',
+                enabled: enabled && widget.onToggleTimeGrid != null,
+                onPressed: widget.onToggleTimeGrid ?? () {},
+              ),
+              _ToolButton(
                 label: 'montage',
                 tooltip: 'Channel Montage & Referencing Manager (AASM sleep, bipolar double banana, CAR, custom derivations)',
                 enabled: enabled && widget.onMontage != null,
@@ -12793,6 +13149,7 @@ class _ScoringHeroSurface extends StatefulWidget {
     this.spectrogramEnabled = false,
     this.onOpenTimeline,
     this.onAddMarkerAt,
+    this.onChannelDoubleTap,
   });
 
   final EegViewport viewport;
@@ -12842,9 +13199,25 @@ class _ScoringHeroSurface extends StatefulWidget {
   final void Function(double clickSec, int channelIndex)? onAddMarkerAt;
   final LoadedEeg? loadedEeg;
   final ValueChanged<String?>? onHoverStatus;
+  final void Function(int channelIndex)? onChannelDoubleTap;
 
   @override
   State<_ScoringHeroSurface> createState() => _ScoringHeroSurfaceState();
+}
+
+class _HoverInfo {
+  const _HoverInfo({
+    required this.pos,
+    required this.channel,
+    required this.sec,
+    required this.val,
+    required this.channelName,
+  });
+  final Offset pos;
+  final int channel;
+  final double sec;
+  final double val;
+  final String channelName;
 }
 
 class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
@@ -12854,11 +13227,7 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
   double? _dragStartUv;
   double? _dragEndUv;
 
-  Offset? _hoverPos;
-  int? _hoverChannel;
-  double? _hoverSec;
-  double? _hoverVal;
-  String? _hoverChannelName;
+  final ValueNotifier<_HoverInfo?> _hoverNotifier = ValueNotifier<_HoverInfo?>(null);
 
   double _cumulativeDx = 0.0;
   int _dragSpecStartFlex = 0;
@@ -12998,12 +13367,8 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
       _dragChannel = ch;
       _dragStartUv = uv;
       _dragEndUv = uv;
-      _hoverPos = null;
-      _hoverChannel = null;
-      _hoverSec = null;
-      _hoverVal = null;
-      _hoverChannelName = null;
     });
+    _hoverNotifier.value = null;
     widget.onHoverStatus?.call(null);
   }
 
@@ -13059,14 +13424,27 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
     });
   }
 
-  void _handleWaveformHover(PointerHoverEvent event, BoxConstraints constraints) {
-    if (_dragStartSec != null) {
-      if (_hoverPos != null) _clearHover();
-      return;
+  @override
+  void didUpdateWidget(covariant _ScoringHeroSurface oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.viewport.currentEpoch != oldWidget.viewport.currentEpoch ||
+        widget.viewport.visibleStartSeconds != oldWidget.viewport.visibleStartSeconds) {
+      final current = _hoverNotifier.value;
+      if (current != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _hoverNotifier.value != null) {
+            _recomputeHoverAtPos(current.pos);
+          }
+        });
+      }
     }
-    final pos = event.localPosition;
-    if (pos.dx >= _waveformPlotLeftPad && constraints.maxWidth > _waveformPlotLeftPad) {
-      final drawWidth = (constraints.maxWidth - _waveformPlotLeftPad).clamp(
+  }
+
+  void _recomputeHoverAtPos(Offset pos, [BoxConstraints? constraints]) {
+    final maxW = constraints?.maxWidth ?? context.size?.width ?? 0.0;
+    final maxH = constraints?.maxHeight ?? context.size?.height ?? 0.0;
+    if (pos.dx >= _waveformPlotLeftPad && maxW > _waveformPlotLeftPad) {
+      final drawWidth = (maxW - _waveformPlotLeftPad).clamp(
         1.0,
         double.infinity,
       );
@@ -13074,8 +13452,8 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
       final sec = widget.viewport.visibleStartSeconds +
           fx * widget.viewport.visibleDurationSeconds;
       final n = widget.viewport.channelCount;
-      if (n > 0 && constraints.maxHeight > 0) {
-        final ch = (pos.dy / constraints.maxHeight * n).floor().clamp(0, n - 1);
+      if (n > 0 && maxH > 0) {
+        final ch = (pos.dy / maxH * n).floor().clamp(0, n - 1);
         final chName = ch < widget.viewport.signalChannelLabels.length
             ? widget.viewport.signalChannelLabels[ch]
             : 'Ch $ch';
@@ -13095,40 +13473,42 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
         }
         if (val != null) {
           final formatted = formatChannelValue(chName, val);
-          setState(() {
-            _hoverPos = pos;
-            _hoverChannel = ch;
-            _hoverSec = sec;
-            _hoverVal = val;
-            _hoverChannelName = chName;
-          });
+          _hoverNotifier.value = _HoverInfo(
+            pos: pos,
+            channel: ch,
+            sec: sec,
+            val: val,
+            channelName: chName,
+          );
           widget.onHoverStatus?.call('$chName: $formatted');
           return;
         }
       }
     }
-    if (_hoverPos != null) {
+    if (_hoverNotifier.value != null) {
       _clearHover();
     }
   }
 
+  void _handleWaveformHover(PointerHoverEvent event, BoxConstraints constraints) {
+    if (_dragStartSec != null) {
+      if (_hoverNotifier.value != null) _clearHover();
+      return;
+    }
+    _recomputeHoverAtPos(event.localPosition, constraints);
+  }
+
   void _clearHover() {
-    if (_hoverPos != null) {
-      setState(() {
-        _hoverPos = null;
-        _hoverChannel = null;
-        _hoverSec = null;
-        _hoverVal = null;
-        _hoverChannelName = null;
-      });
+    if (_hoverNotifier.value != null) {
+      _hoverNotifier.value = null;
       widget.onHoverStatus?.call(null);
     }
   }
 
-  Widget _buildHoverPill(BoxConstraints constraints) {
-    final pos = _hoverPos!;
-    final name = _hoverChannelName!;
-    final val = _hoverVal!;
+  Widget _buildHoverPill(BoxConstraints constraints, _HoverInfo hover) {
+    final pos = hover.pos;
+    final name = hover.channelName;
+    final val = hover.val;
     final formatted = formatChannelValue(name, val);
     final isSpo2 = levelSignalKind(name) == LevelSignalKind.spo2;
 
@@ -13537,11 +13917,15 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                         ),
                       ),
                     ),
-                    if (_hoverPos != null &&
-                        _hoverChannelName != null &&
-                        _hoverVal != null &&
-                        _dragStartSec == null)
-                      _buildHoverPill(constraints),
+                    ValueListenableBuilder<_HoverInfo?>(
+                      valueListenable: _hoverNotifier,
+                      builder: (context, hover, _) {
+                        if (hover == null || _dragStartSec != null) {
+                          return const SizedBox.shrink();
+                        }
+                        return _buildHoverPill(constraints, hover);
+                      },
+                    ),
                     // Maximize / Restore floating pill in top right corner
                     Positioned(
                       top: 4,
@@ -13613,6 +13997,7 @@ class _ScoringHeroSurfaceState extends State<_ScoringHeroSurface> {
                           onSetScale: widget.onChannelScaleSet,
                           onApplyAll: widget.onChannelScaleApplyAll,
                           onApplySameType: widget.onChannelScaleApplySameType,
+                          onChannelDoubleTap: widget.onChannelDoubleTap,
                           onContextMenu: widget.onChannelContextMenu != null
                               ? (ch, pos) => widget.onChannelContextMenu!(ch, pos)
                               : null,
@@ -13675,6 +14060,7 @@ class _StatusBar extends StatelessWidget {
     this.comparisonStages,
     this.onTimeUnitChanged,
     this.hoverStatus,
+    this.hoverStatusNotifier,
   });
 
   final String status;
@@ -13683,6 +14069,7 @@ class _StatusBar extends StatelessWidget {
   final List<SleepStage>? comparisonStages;
   final ValueChanged<String>? onTimeUnitChanged;
   final String? hoverStatus;
+  final ValueListenable<String?>? hoverStatusNotifier;
 
   @override
   Widget build(BuildContext context) {
@@ -13867,37 +14254,34 @@ class _StatusBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Row(
         children: [
-          if (hoverStatus != null && hoverStatus!.isNotEmpty) ...[
-            Container(
-              margin: const EdgeInsets.only(right: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-              decoration: BoxDecoration(
-                color: hoverStatus!.toUpperCase().contains('SPO2') ||
-                        hoverStatus!.toUpperCase().contains('SPO₂')
-                    ? const Color(0xFFE0F2FE)
-                    : const Color(0xFFF1F5F9),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(
-                  color: hoverStatus!.toUpperCase().contains('SPO2') ||
-                          hoverStatus!.toUpperCase().contains('SPO₂')
-                      ? const Color(0xFF0284C7)
-                      : const Color(0xFF94A3B8),
-                  width: 0.8,
+          ValueListenableBuilder<String?>(
+            valueListenable: hoverStatusNotifier ?? ValueNotifier<String?>(hoverStatus),
+            builder: (context, activeHover, _) {
+              if (activeHover == null || activeHover.isEmpty) return const SizedBox.shrink();
+              final isSpo2 = activeHover.toUpperCase().contains('SPO2') ||
+                  activeHover.toUpperCase().contains('SPO₂');
+              return Container(
+                margin: const EdgeInsets.only(right: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                decoration: BoxDecoration(
+                  color: isSpo2 ? const Color(0xFFE0F2FE) : const Color(0xFFF1F5F9),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: isSpo2 ? const Color(0xFF0284C7) : const Color(0xFF94A3B8),
+                    width: 0.8,
+                  ),
                 ),
-              ),
-              child: Text(
-                hoverStatus!,
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.bold,
-                  color: hoverStatus!.toUpperCase().contains('SPO2') ||
-                          hoverStatus!.toUpperCase().contains('SPO₂')
-                      ? const Color(0xFF0369A1)
-                      : const Color(0xFF1E293B),
+                child: Text(
+                  activeHover,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.bold,
+                    color: isSpo2 ? const Color(0xFF0369A1) : const Color(0xFF1E293B),
+                  ),
                 ),
-              ),
-            ),
-          ],
+              );
+            },
+          ),
           Expanded(
             child: Text(
               cleanStatus,
@@ -14529,6 +14913,7 @@ class _ElectrodeScaleColumn extends StatelessWidget {
     required this.onSetScale,
     required this.onApplyAll,
     this.onApplySameType,
+    this.onChannelDoubleTap,
     this.onContextMenu,
   });
 
@@ -14539,6 +14924,7 @@ class _ElectrodeScaleColumn extends StatelessWidget {
   final void Function(int channelIndex, double newScale)? onSetScale;
   final void Function(double newScale)? onApplyAll;
   final void Function(int channelIndex, double newScale)? onApplySameType;
+  final void Function(int channelIndex)? onChannelDoubleTap;
 
   @override
   Widget build(BuildContext context) {
@@ -14566,6 +14952,7 @@ class _ElectrodeScaleColumn extends StatelessWidget {
               onSetScale: onSetScale,
               onApplyAll: onApplyAll,
               onApplySameType: onApplySameType,
+              onChannelDoubleTap: onChannelDoubleTap,
               onContextMenu: onContextMenu,
             ),
           ),
@@ -14586,11 +14973,13 @@ class _ChannelScaleTile extends StatefulWidget {
     required this.onSetScale,
     required this.onApplyAll,
     this.onApplySameType,
+    this.onChannelDoubleTap,
     this.onContextMenu,
   });
 
   final int channelIndex;
   final void Function(int channelIndex, Offset globalPosition)? onContextMenu;
+  final void Function(int channelIndex)? onChannelDoubleTap;
   final String channelName;
   final String? sourceChannelName;
   final double scalePercent;
@@ -14627,6 +15016,7 @@ class _ChannelScaleTileState extends State<_ChannelScaleTile> {
       },
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
+        onDoubleTap: () => widget.onChannelDoubleTap?.call(widget.channelIndex),
         onSecondaryTapDown: widget.onContextMenu == null
             ? null
             : (d) => widget.onContextMenu!(widget.channelIndex, d.globalPosition),
@@ -14864,12 +15254,192 @@ class _ToolButton extends StatelessWidget {
   }
 }
 
-class _ZoomSignalPainter extends CustomPainter {
-  const _ZoomSignalPainter(this.samples, this.sampleRate, {this.channelLabel = ''});
+class _ZoomSignalDialog extends StatefulWidget {
+  const _ZoomSignalDialog({
+    required this.samples,
+    required this.sampleRate,
+    required this.channelLabel,
+    required this.title,
+  });
 
   final List<double> samples;
   final double sampleRate;
   final String channelLabel;
+  final String title;
+
+  @override
+  State<_ZoomSignalDialog> createState() => _ZoomSignalDialogState();
+}
+
+class _ZoomSignalDialogState extends State<_ZoomSignalDialog> {
+  double? _caliperStartSec;
+  double? _caliperEndSec;
+
+  void _resetCaliper() {
+    setState(() {
+      _caliperStartSec = null;
+      _caliperEndSec = null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final srate = widget.sampleRate;
+    final totalDuration = widget.samples.length / (srate > 0 ? srate : 1.0);
+
+    String? measurementInfo;
+    if (_caliperStartSec != null && _caliperEndSec != null && widget.samples.isNotEmpty) {
+      final t1 = math.min(_caliperStartSec!, _caliperEndSec!);
+      final t2 = math.max(_caliperStartSec!, _caliperEndSec!);
+      final dt = t2 - t1;
+      final freq = dt > 1e-4 ? (1.0 / dt) : 0.0;
+      final i1 = ((t1 / totalDuration) * (widget.samples.length - 1)).round().clamp(0, widget.samples.length - 1);
+      final i2 = ((t2 / totalDuration) * (widget.samples.length - 1)).round().clamp(0, widget.samples.length - 1);
+      final v1 = widget.samples[i1];
+      final v2 = widget.samples[i2];
+      final dv = (v2 - v1).abs();
+
+      final subSamples = widget.samples.sublist(math.min(i1, i2), math.max(i1, i2) + 1);
+      final meanV = subSamples.isEmpty ? 0.0 : subSamples.reduce((a, b) => a + b) / subSamples.length;
+      final minSub = subSamples.isEmpty ? 0.0 : subSamples.reduce(math.min);
+      final maxSub = subSamples.isEmpty ? 0.0 : subSamples.reduce(math.max);
+      final ptp = maxSub - minSub;
+
+      final isSpo2 = levelSignalKind(widget.channelLabel) == LevelSignalKind.spo2;
+      final vUnit = isSpo2 ? '%' : 'µV';
+
+      measurementInfo =
+          'Δt: ${dt.toStringAsFixed(3)} s  |  f: ${freq.toStringAsFixed(1)} Hz  |  ΔV: ${dv.toStringAsFixed(1)} $vUnit  |  Range: ${ptp.toStringAsFixed(1)} $vUnit  |  Mean: ${meanV.toStringAsFixed(1)} $vUnit';
+    }
+
+    return Dialog(
+      child: SizedBox(
+        width: 840,
+        height: 500,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+              child: Row(
+                children: [
+                  const Icon(Icons.zoom_in, color: Color(0xFF0284C7), size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    widget.title,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                  ),
+                  const Spacer(),
+                  if (_caliperStartSec != null) ...[
+                    TextButton.icon(
+                      icon: const Icon(Icons.refresh, size: 16),
+                      label: const Text('Reset Caliper'),
+                      onPressed: _resetCaliper,
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Close'),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: measurementInfo != null ? const Color(0xFFEFF6FF) : const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: measurementInfo != null ? const Color(0xFF93C5FD) : const Color(0xFFE2E8F0),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.straighten,
+                    size: 14,
+                    color: measurementInfo != null ? const Color(0xFF1D4ED8) : Colors.blueGrey,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    measurementInfo ??
+                        'Interactive Caliper: Click and drag across the signal to measure interval (Δt), frequency (f) and amplitude (ΔV).',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: measurementInfo != null ? FontWeight.bold : FontWeight.normal,
+                      color: measurementInfo != null ? const Color(0xFF1E40AF) : Colors.black54,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  const pad = EdgeInsets.fromLTRB(64, 14, 20, 32);
+                  final plotW = (constraints.maxWidth - pad.left - pad.right).clamp(1.0, double.infinity);
+
+                  return GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onPanStart: (d) {
+                      final dx = (d.localPosition.dx - pad.left).clamp(0.0, plotW);
+                      final t = (dx / plotW) * totalDuration;
+                      setState(() {
+                        _caliperStartSec = t;
+                        _caliperEndSec = t;
+                      });
+                    },
+                    onPanUpdate: (d) {
+                      final dx = (d.localPosition.dx - pad.left).clamp(0.0, plotW);
+                      final t = (dx / plotW) * totalDuration;
+                      setState(() {
+                        _caliperEndSec = t;
+                      });
+                    },
+                    onTapUp: (d) {
+                      final dx = (d.localPosition.dx - pad.left).clamp(0.0, plotW);
+                      final t = (dx / plotW) * totalDuration;
+                      setState(() {
+                        _caliperStartSec = (t - totalDuration * 0.05).clamp(0.0, totalDuration);
+                        _caliperEndSec = (t + totalDuration * 0.05).clamp(0.0, totalDuration);
+                      });
+                    },
+                    child: CustomPaint(
+                      painter: _ZoomSignalPainter(
+                        widget.samples,
+                        widget.sampleRate,
+                        channelLabel: widget.channelLabel,
+                        caliperStartSec: _caliperStartSec,
+                        caliperEndSec: _caliperEndSec,
+                      ),
+                      child: const SizedBox.expand(),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ZoomSignalPainter extends CustomPainter {
+  const _ZoomSignalPainter(
+    this.samples,
+    this.sampleRate, {
+    this.channelLabel = '',
+    this.caliperStartSec,
+    this.caliperEndSec,
+  });
+
+  final List<double> samples;
+  final double sampleRate;
+  final String channelLabel;
+  final double? caliperStartSec;
+  final double? caliperEndSec;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -14878,19 +15448,30 @@ class _ZoomSignalPainter extends CustomPainter {
     final minV = samples.reduce(math.min);
     final maxV = samples.reduce(math.max);
     final range = math.max(maxV - minV, 1e-6);
-    const pad = EdgeInsets.fromLTRB(56, 12, 12, 28);
+    const pad = EdgeInsets.fromLTRB(64, 14, 20, 32);
     final plotW = size.width - pad.left - pad.right;
     final plotH = size.height - pad.top - pad.bottom;
+    final duration = samples.length / (sampleRate > 0 ? sampleRate : 1.0);
+
     final axisPaint = Paint()
-      ..color = Colors.black38
+      ..color = Colors.black26
       ..strokeWidth = 0.8;
-    canvas.drawRect(
-      Rect.fromLTWH(pad.left, pad.top, plotW, plotH),
-      Paint()
-        ..color = Colors.black12
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 0.6,
-    );
+    final gridPaint = Paint()
+      ..color = const Color(0xFFF1F5F9)
+      ..strokeWidth = 0.8;
+
+    // Intermediate horizontal grid lines (5 levels: 0%, 25%, 50%, 75%, 100%)
+    for (final frac in [0.0, 0.25, 0.5, 0.75, 1.0]) {
+      final y = pad.top + (1.0 - frac) * plotH;
+      canvas.drawLine(Offset(pad.left, y), Offset(pad.left + plotW, y), gridPaint);
+      final v = minV + frac * range;
+      final lbl = channelLabel.isNotEmpty
+          ? formatChannelValue(channelLabel, v)
+          : '${v.toStringAsFixed(1)} µV';
+      _paintText(canvas, lbl, Offset(4, y), TextAlign.left, fontSize: 10);
+    }
+
+    // Zero-crossing line
     final zeroY = pad.top + (1.0 - (0.0 - minV) / range) * plotH;
     if (zeroY >= pad.top && zeroY <= pad.top + plotH) {
       canvas.drawLine(
@@ -14899,6 +15480,49 @@ class _ZoomSignalPainter extends CustomPainter {
         axisPaint,
       );
     }
+
+    // Intermediate vertical time grid lines
+    double tStep = 1.0;
+    if (duration <= 0.3) {
+      tStep = 0.05;
+    } else if (duration <= 0.8) {
+      tStep = 0.1;
+    } else if (duration <= 2.0) {
+      tStep = 0.25;
+    } else if (duration <= 5.0) {
+      tStep = 0.5;
+    } else if (duration <= 12.0) {
+      tStep = 1.0;
+    } else if (duration <= 30.0) {
+      tStep = 5.0;
+    } else {
+      tStep = 10.0;
+    }
+
+    final dashPaint = Paint()
+      ..color = const Color(0xFFE2E8F0)
+      ..strokeWidth = 0.8;
+
+    for (var t = 0.0; t <= duration + 1e-4; t += tStep) {
+      final fx = (t / duration).clamp(0.0, 1.0);
+      final x = pad.left + fx * plotW;
+      canvas.drawLine(Offset(x, pad.top), Offset(x, pad.top + plotH), dashPaint);
+      final tLabel = tStep < 0.1
+          ? '${t.toStringAsFixed(2)}s'
+          : (tStep < 1.0 ? '${t.toStringAsFixed(1)}s' : '${t.toStringAsFixed(0)}s');
+      _paintText(canvas, tLabel, Offset(x, size.height - 14), TextAlign.center, fontSize: 10.5);
+    }
+
+    // Outer border
+    canvas.drawRect(
+      Rect.fromLTWH(pad.left, pad.top, plotW, plotH),
+      Paint()
+        ..color = Colors.black26
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.8,
+    );
+
+    // Waveform
     final path = Path();
     for (var i = 0; i < samples.length; i++) {
       final x = pad.left + (i / (samples.length - 1)) * plotW;
@@ -14912,54 +15536,78 @@ class _ZoomSignalPainter extends CustomPainter {
     canvas.drawPath(
       path,
       Paint()
-        ..color = Colors.black
-        ..strokeWidth = 1.2
+        ..color = const Color(0xFF0F172A)
+        ..strokeWidth = 1.3
         ..style = PaintingStyle.stroke,
     );
-    final duration = samples.length / sampleRate;
-    _paintText(
-      canvas,
-      '0 s',
-      Offset(pad.left, size.height - 12),
-      TextAlign.left,
-    );
-    _paintText(
-      canvas,
-      '${duration.toStringAsFixed(2)} s',
-      Offset(pad.left + plotW, size.height - 12),
-      TextAlign.right,
-    );
-    final maxLabel = channelLabel.isNotEmpty
-        ? formatChannelValue(channelLabel, maxV)
-        : '${maxV.toStringAsFixed(1)} µV';
-    final minLabel = channelLabel.isNotEmpty
-        ? formatChannelValue(channelLabel, minV)
-        : '${minV.toStringAsFixed(1)} µV';
-    _paintText(
-      canvas,
-      maxLabel,
-      Offset(4, pad.top + 6),
-      TextAlign.left,
-    );
-    _paintText(
-      canvas,
-      minLabel,
-      Offset(4, pad.top + plotH - 6),
-      TextAlign.left,
-    );
+
+    // Caliper measurement overlay
+    if (caliperStartSec != null && caliperEndSec != null) {
+      final t1 = math.min(caliperStartSec!, caliperEndSec!).clamp(0.0, duration);
+      final t2 = math.max(caliperStartSec!, caliperEndSec!).clamp(0.0, duration);
+      final x1 = pad.left + (t1 / duration) * plotW;
+      final x2 = pad.left + (t2 / duration) * plotW;
+
+      // Span shaded area
+      canvas.drawRect(
+        Rect.fromLTRB(x1, pad.top, x2, pad.top + plotH),
+        Paint()..color = const Color(0x220284C7),
+      );
+
+      final caliperPaint = Paint()
+        ..color = const Color(0xFF0284C7)
+        ..strokeWidth = 1.5;
+
+      canvas.drawLine(Offset(x1, pad.top), Offset(x1, pad.top + plotH), caliperPaint);
+      canvas.drawLine(Offset(x2, pad.top), Offset(x2, pad.top + plotH), caliperPaint);
+
+      // Caliper top bar and arrow heads
+      final barY = pad.top + 16;
+      canvas.drawLine(Offset(x1, barY), Offset(x2, barY), caliperPaint);
+      canvas.drawCircle(Offset(x1, barY), 3.0, Paint()..color = const Color(0xFF0284C7));
+      canvas.drawCircle(Offset(x2, barY), 3.0, Paint()..color = const Color(0xFF0284C7));
+
+      final dt = t2 - t1;
+      final freq = dt > 1e-4 ? (1.0 / dt) : 0.0;
+      final midX = (x1 + x2) / 2;
+      final caliperText = '${dt.toStringAsFixed(3)} s (${freq.toStringAsFixed(1)} Hz)';
+
+      _paintText(
+        canvas,
+        caliperText,
+        Offset(midX, barY - 10),
+        TextAlign.center,
+        fontSize: 10,
+        fontWeight: FontWeight.bold,
+        color: const Color(0xFF0369A1),
+      );
+    }
   }
 
-  void _paintText(Canvas canvas, String text, Offset offset, TextAlign align) {
+  void _paintText(
+    Canvas canvas,
+    String text,
+    Offset offset,
+    TextAlign align, {
+    double fontSize = 11,
+    FontWeight fontWeight = FontWeight.normal,
+    Color color = Colors.black87,
+  }) {
     final painter = TextPainter(
       text: TextSpan(
         text: text,
-        style: const TextStyle(fontSize: 11, color: Colors.black87),
+        style: TextStyle(
+          fontSize: fontSize,
+          fontWeight: fontWeight,
+          color: color,
+        ),
       ),
       textDirection: TextDirection.ltr,
       textAlign: align,
     )..layout(maxWidth: 140);
     var dx = offset.dx;
     if (align == TextAlign.right) dx -= painter.width;
+    if (align == TextAlign.center) dx -= painter.width / 2;
     painter.paint(canvas, Offset(dx, offset.dy - painter.height / 2));
   }
 
@@ -14967,7 +15615,9 @@ class _ZoomSignalPainter extends CustomPainter {
   bool shouldRepaint(_ZoomSignalPainter oldDelegate) =>
       oldDelegate.samples != samples ||
       oldDelegate.sampleRate != sampleRate ||
-      oldDelegate.channelLabel != channelLabel;
+      oldDelegate.channelLabel != channelLabel ||
+      oldDelegate.caliperStartSec != caliperStartSec ||
+      oldDelegate.caliperEndSec != caliperEndSec;
 }
 
 class _Divider extends StatelessWidget {
@@ -15057,11 +15707,52 @@ class _ScaleDownWaveformIntent extends Intent {
   const _ScaleDownWaveformIntent();
 }
 
+class _CustomMarkerIntent extends Intent {
+  const _CustomMarkerIntent();
+}
+
+class _ToggleTimeGridIntent extends Intent {
+  const _ToggleTimeGridIntent();
+}
+
+class _ScaleFontUpIntent extends Intent {
+  const _ScaleFontUpIntent();
+}
+
+class _ScaleFontDownIntent extends Intent {
+  const _ScaleFontDownIntent();
+}
+
+class _ResetFontScaleIntent extends Intent {
+  const _ResetFontScaleIntent();
+}
+
 class _HelpShortcutsIntent extends Intent {
   const _HelpShortcutsIntent();
 }
 
 final _shortcuts = <ShortcutActivator, Intent>{
+  // Custom typable marker shortcut (T or Shift+M)
+  const SingleActivator(LogicalKeyboardKey.keyT):
+      const _CustomMarkerIntent(),
+  const SingleActivator(LogicalKeyboardKey.keyM, shift: true):
+      const _CustomMarkerIntent(),
+  // Time grid toggle (G)
+  const SingleActivator(LogicalKeyboardKey.keyG):
+      const _ToggleTimeGridIntent(),
+  // Font scaling shortcuts (Ctrl+Alt+= / Ctrl+Alt+- / Ctrl+Alt+0)
+  const SingleActivator(LogicalKeyboardKey.equal, control: true, alt: true):
+      const _ScaleFontUpIntent(),
+  const SingleActivator(LogicalKeyboardKey.equal, meta: true, alt: true):
+      const _ScaleFontUpIntent(),
+  const SingleActivator(LogicalKeyboardKey.minus, control: true, alt: true):
+      const _ScaleFontDownIntent(),
+  const SingleActivator(LogicalKeyboardKey.minus, meta: true, alt: true):
+      const _ScaleFontDownIntent(),
+  const SingleActivator(LogicalKeyboardKey.digit0, control: true, alt: true):
+      const _ResetFontScaleIntent(),
+  const SingleActivator(LogicalKeyboardKey.digit0, meta: true, alt: true):
+      const _ResetFontScaleIntent(),
   // Waveform maximize toggle
   const SingleActivator(LogicalKeyboardKey.keyF):
       const _ToggleWaveformMaximizeIntent(),

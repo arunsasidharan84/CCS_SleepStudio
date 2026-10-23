@@ -89,11 +89,11 @@ void main() {
       expect(visibleNames, contains('C4-A1'));
       expect(visibleNames, contains('O2-A1'));
 
-      // EOG derivations
+      // EOG derivations (both referenced to common mastoid A2/M2 per AASM standard)
       final eog1 = visible.firstWhere((c) => c.name.startsWith('E1') || c.name.startsWith('EOG1'));
       final eog2 = visible.firstWhere((c) => c.name.startsWith('E2') || c.name.startsWith('EOG2'));
       expect(eog1.reReference, equals('A2'));
-      expect(eog2.reReference, equals('A1'));
+      expect(eog2.reReference, equals('A2'));
 
       // EMG derivations
       final emg = visible.firstWhere((c) => c.name.contains('CHIN') || c.name.contains('EMG'));
@@ -121,11 +121,11 @@ void main() {
       final visibleNames = visible.map((c) => c.name).toList();
 
       expect(visibleNames, contains('LOC1-A2'));
-      expect(visibleNames, contains('ROC1-A1'));
+      expect(visibleNames, contains('ROC1-A2'));
       expect(visible.firstWhere((c) => c.name == 'LOC1-A2').reReference, 'A2');
-      expect(visible.firstWhere((c) => c.name == 'ROC1-A1').reReference, 'A1');
+      expect(visible.firstWhere((c) => c.name == 'ROC1-A2').reReference, 'A2');
       expect(detectChannelModality('LOC1-A2'), ChannelModality.eog);
-      expect(detectChannelModality('ROC1-A1'), ChannelModality.eog);
+      expect(detectChannelModality('ROC1-A2'), ChannelModality.eog);
     });
 
     test('AASM preset preserves actual limb movement channel names PLMl and PLMr', () {
@@ -334,7 +334,7 @@ void main() {
       expect(o2.sourceIndex, equals(4), reason: 'EEG O2-Ref must bind to raw index 4');
 
       expect(eog1.reReference, equals('EEG A2-Ref'));
-      expect(eog2.reReference, equals('EEG A1-Ref'));
+      expect(eog2.reReference, equals('EEG A2-Ref'));
     });
 
     test('findPreReferencedChannel finds pre-referenced channels with colon, hyphen, or space', () {

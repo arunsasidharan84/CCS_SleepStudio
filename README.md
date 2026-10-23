@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <b>Current version: 1.48.0</b> ·
+  <b>Current version: 1.49.0</b> ·
   <a href="CHANGELOG.md">Detailed changelog</a> ·
   <a href="https://github.com/arunsasidharan84/CCS_SleepStudio/issues">Report a problem</a>
 </p>
@@ -90,7 +90,7 @@ Built from the ground up using **Flutter** for a lightweight, fluid UI and a nat
 
 ---
 
-## 🌟 What's New in Version 1.48.0
+## 🌟 What's New in Version 1.49.0
 
 * **Automated AASM Cardiac and Arrhythmia Event Analysis:** High-performance ECG analysis adhering strictly to AASM Scoring Rules (Section VIII). Features automated Pan-Tompkins QRS detection, refractory lockout, and automated event scoring for **Asystole** ($\ge 3.0\text{ s}$ pause), **Sinus Bradycardia** ($< 40\text{ bpm}$), **Sinus Tachycardia** ($> 90\text{ bpm}$), **Premature Ventricular Contractions (PVCs)**, **Premature Atrial Contractions (PACs)**, **Ventricular Couplets & Non-Sustained VT (NSVT)**, **Supraventricular Tachycardia (SVT)**, **Ventricular Bigeminy/Trigeminy**, and sustained **Atrial Fibrillation (AFib)**, with stage-wise heart rate metrics and one-click timeline addition.
 * **Interactive Zoom Caliper & Waveform Intermediate Ticks:** The zoomed signal inspection dialog provides sub-second time ticks ($0.1\text{ s} / 0.5\text{ s}$) and microvolt grids, along with an interactive drag-to-measure caliper calculating $\Delta t$, frequency ($f = 1/\Delta t$), $\Delta V$, range, and slice mean.

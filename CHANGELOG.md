@@ -4,7 +4,7 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
-## [1.48.0]
+## [1.49.0]
 *   **Automated AASM Cardiac and Arrhythmia Event Analysis:**
     - Integrated automated clinical ECG analysis following AASM Scoring Manual (Section VIII: Cardiac Rules).
     - Pan-Tompkins QRS energy detector with adaptive thresholding, refractory lockout, and sub-sample R-peak snapping.

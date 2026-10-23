@@ -28,6 +28,7 @@
 
 <p align="center">
   <a href="#-quick-download"><b>📥 Download App</b></a> &nbsp;•&nbsp;
+  <a href="docs/wiki/Home.md"><b>📖 Visual Tutorial & Wiki</b></a> &nbsp;•&nbsp;
   <a href="#about"><b>About</b></a> &nbsp;•&nbsp;
   <a href="#-key-features"><b>Key Features</b></a> &nbsp;•&nbsp;
   <a href="#-running--building-locally"><b>Build from Source</b></a> &nbsp;•&nbsp;
@@ -38,6 +39,8 @@
 ---
 
 ### 📥 Quick Download
+
+> 📖 **Comprehensive Visual Tutorial:** New to sleep scoring or CCS Sleep Studio? Read our step-by-step **[Visual User Guide & Tutorial Wiki](docs/wiki/Home.md)** covering installation, AASM montage setup, AI autoscoring, manual event tagging, automated arrhythmia analysis, and publication reports.
 
 Pre-built standalone desktop installers and application bundles are published through GitHub Releases:
 

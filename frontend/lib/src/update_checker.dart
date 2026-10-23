@@ -762,7 +762,7 @@ fi
         ],
       ),
       content: SizedBox(
-        width: 580,
+        width: 640,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -775,26 +775,28 @@ fi
                 color: info.hasUpdate ? Colors.purple : Colors.black,
               ),
             ),
-            const Divider(height: 24),
+            const Divider(height: 20),
             if (info.hasUpdate) ...[
               const Text(
                 'Release Notes:',
-                style: TextStyle(fontWeight: FontWeight.bold),
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
               ),
               const SizedBox(height: 8),
               Container(
-                height: 160,
+                height: 240,
                 width: double.infinity,
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
+                  color: Colors.grey.shade50,
                   border: Border.all(color: Colors.grey.shade300),
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(6),
                 ),
-                child: SingleChildScrollView(
-                  child: Text(
-                    info.releaseNotes,
-                    style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                child: Scrollbar(
+                  thumbVisibility: true,
+                  child: SingleChildScrollView(
+                    child: ReleaseNotesMarkdownView(
+                      text: info.releaseNotes,
+                    ),
                   ),
                 ),
               ),
@@ -863,5 +865,227 @@ fi
         Process.run('xdg-open', [url]);
       }
     } catch (_) {}
+  }
+}
+
+/// A lightweight, dedicated Markdown-to-Widget parser for release notes
+/// supporting headings, lists, bold/italic, inline code, and Unicode math formulas.
+class ReleaseNotesMarkdownView extends StatelessWidget {
+  const ReleaseNotesMarkdownView({super.key, required this.text});
+
+  final String text;
+
+  static String _cleanMathAndLatex(String input) {
+    var s = input;
+    // Common LaTeX replacements
+    s = s.replaceAll(r'\ge', '≥');
+    s = s.replaceAll(r'\le', '≤');
+    s = s.replaceAll(r'\mu', 'μ');
+    s = s.replaceAll(r'\pm', '±');
+    s = s.replaceAll(r'\times', '×');
+    s = s.replaceAll(r'\approx', '≈');
+    s = s.replaceAll(r'\rightarrow', '→');
+    s = s.replaceAll(r'\to', '→');
+    s = s.replaceAll(r'\Delta', 'Δ');
+
+    // Replace \text{...} with inner content
+    final textRegex = RegExp(r'\\text\{([^}]+)\}');
+    s = s.replaceAllMapped(textRegex, (m) => m.group(1) ?? '');
+
+    // Replace $math$ with cleaned math
+    final mathRegex = RegExp(r'\$([^$]+)\$');
+    s = s.replaceAllMapped(mathRegex, (m) => m.group(1) ?? '');
+
+    return s;
+  }
+
+  static List<InlineSpan> _parseInlineSpans(String text, {TextStyle? baseStyle}) {
+    final spans = <InlineSpan>[];
+    final cleaned = _cleanMathAndLatex(text);
+
+    // Regex to match **bold**, *italic*, `code`
+    final pattern = RegExp(r'(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)');
+    var lastIndex = 0;
+
+    for (final match in pattern.allMatches(cleaned)) {
+      if (match.start > lastIndex) {
+        spans.add(TextSpan(
+          text: cleaned.substring(lastIndex, match.start),
+          style: baseStyle,
+        ));
+      }
+
+      final token = match.group(0)!;
+      if (token.startsWith('**') && token.endsWith('**')) {
+        spans.add(TextSpan(
+          text: token.substring(2, token.length - 2),
+          style: (baseStyle ?? const TextStyle()).copyWith(
+            fontWeight: FontWeight.bold,
+            color: Colors.black87,
+          ),
+        ));
+      } else if (token.startsWith('*') && token.endsWith('*')) {
+        spans.add(TextSpan(
+          text: token.substring(1, token.length - 1),
+          style: (baseStyle ?? const TextStyle()).copyWith(
+            fontStyle: FontStyle.italic,
+          ),
+        ));
+      } else if (token.startsWith('`') && token.endsWith('`')) {
+        spans.add(WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            decoration: BoxDecoration(
+              color: Colors.purple.shade50,
+              borderRadius: BorderRadius.circular(3),
+              border: Border.all(color: Colors.purple.shade200, width: 0.5),
+            ),
+            child: Text(
+              token.substring(1, token.length - 1),
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: (baseStyle?.fontSize ?? 12) * 0.9,
+                color: Colors.purple.shade900,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ));
+      }
+      lastIndex = match.end;
+    }
+
+    if (lastIndex < cleaned.length) {
+      spans.add(TextSpan(
+        text: cleaned.substring(lastIndex),
+        style: baseStyle,
+      ));
+    }
+
+    return spans;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lines = text.split('\n');
+    final widgets = <Widget>[];
+
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i].trimRight();
+      final trimmed = line.trim();
+
+      if (trimmed.isEmpty) {
+        widgets.add(const SizedBox(height: 6));
+        continue;
+      }
+
+      if (trimmed.startsWith('# ')) {
+        widgets.add(Padding(
+          padding: const EdgeInsets.only(top: 10, bottom: 4),
+          child: Text(
+            trimmed.substring(2).trim(),
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF4A148C),
+            ),
+          ),
+        ));
+      } else if (trimmed.startsWith('## ')) {
+        widgets.add(Padding(
+          padding: const EdgeInsets.only(top: 10, bottom: 4),
+          child: Text(
+            trimmed.substring(3).trim(),
+            style: const TextStyle(
+              fontSize: 14.5,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF4A148C),
+            ),
+          ),
+        ));
+      } else if (trimmed.startsWith('### ')) {
+        widgets.add(Padding(
+          padding: const EdgeInsets.only(top: 8, bottom: 4),
+          child: Text(
+            trimmed.substring(4).trim(),
+            style: const TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
+          ),
+        ));
+      } else if (trimmed.startsWith('#### ')) {
+        widgets.add(Padding(
+          padding: const EdgeInsets.only(top: 6, bottom: 3),
+          child: Text(
+            trimmed.substring(5).trim(),
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+              color: Colors.purple.shade800,
+            ),
+          ),
+        ));
+      } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+        final content = trimmed.substring(2).trim();
+        final indentLevel = (line.length - line.trimLeft().length) ~/ 2;
+        widgets.add(Padding(
+          padding: EdgeInsets.only(left: 6.0 + indentLevel * 10.0, bottom: 3),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 5, right: 6),
+                child: Container(
+                  width: 4,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.purple.shade700,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Text.rich(
+                  TextSpan(
+                    children: _parseInlineSpans(
+                      content,
+                      baseStyle: const TextStyle(
+                        fontSize: 12,
+                        height: 1.35,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ));
+      } else {
+        widgets.add(Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Text.rich(
+            TextSpan(
+              children: _parseInlineSpans(
+                trimmed,
+                baseStyle: const TextStyle(
+                  fontSize: 12,
+                  height: 1.35,
+                  color: Colors.black87,
+                ),
+              ),
+            ),
+          ),
+        ));
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: widgets,
+    );
   }
 }

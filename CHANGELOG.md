@@ -4,6 +4,19 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.50.0]
+*   **In-App Rich Markdown & Scientific Math Release Notes Viewer:**
+    - Integrated native markdown parsing via `ReleaseNotesMarkdownView` in the application update dialog.
+    - Clean hierarchy formatting for `#`, `##`, `###`, `####` headers, multi-level bulleted lists, and numbered items.
+    - Full inline formatting support for **bold**, *italic*, and highlighted `code` badges.
+    - Automated LaTeX math formula translation into clean Unicode scientific symbols ($\ge$, $\le$, $\mu$, $\pm$, $\times$, $\approx$, $\rightarrow$, $\Delta$, `\text{...}` $\to$ $≥$, $≤$, $μ$, $±$, $×$, $≈$, $→$, $Δ$, $\text{ms}$, $\text{bpm}$, $\mu\text{V}$).
+    - Expanded update dialog width to 640px and release notes viewport height to 240px with a persistent scrollbar thumb.
+*   **Comprehensive Visual User Guide & Tutorial Wiki:**
+    - Authored an 8-chapter comprehensive visual tutorial designed for non-technical clinicians, researchers, and sleep technicians.
+    - Covers installation (macOS Gatekeeper bypass, Windows installer, Linux), the 6-step workflow bar, waveform tools (time grid, measurement caliper, single-point markers, channel solo, font scaling), manual scoring (AASM rules W/N1/N2/N3/REM, discrete tagging, typable shortcuts `T` and `Shift+M`), automated cardiac/arrhythmia analysis, advanced metrics, and troubleshooting.
+    - Published directly in `docs/wiki/` and synced with `wiki/` for GitHub Wiki readiness.
+    - Added quick-start tutorial references to `README.md`.
+
 ## [1.49.0]
 *   **Automated AASM Cardiac and Arrhythmia Event Analysis:**
     - Integrated automated clinical ECG analysis following AASM Scoring Manual (Section VIII: Cardiac Rules).

@@ -162,7 +162,14 @@ Future<String> compileRegionalCsvFiles(
     }
 
     for (final row in parsed) {
-      for (final key in row.keys) {
+      final processedRow = Map<String, String>.from(row);
+      // Standardize Chan column to canonical 10-10 format and strip EEG prefixes so cohorts with
+      // legacy T3/T4/T5/T6 and modern T7/T8/P7/P8 seamlessly merge into unified rows.
+      if (processedRow.containsKey('Chan')) {
+        final rawChan = processedRow['Chan'] ?? '';
+        processedRow['Chan'] = standardizeChan1010(rawChan);
+      }
+      for (final key in processedRow.keys) {
         if (!headers.contains(key)) headers.add(key);
       }
       for (final compKey in companionSummary.keys) {
@@ -176,7 +183,7 @@ Future<String> compileRegionalCsvFiles(
         'Recording Date': recordingDate,
         if (meta != null)
           for (final e in meta.entries) metaHeader[e.key] ?? e.key: e.value,
-        ...row,
+        ...processedRow,
         ...companionSummary,
       });
     }
@@ -418,3 +425,29 @@ String _escapeCsv(String value) {
   if (!value.contains(RegExp(r'[",\r\n]'))) return value;
   return '"${value.replaceAll('"', '""')}"';
 }
+
+/// Normalizes a channel or region name to canonical 10-10 nomenclature (e.g. T3->T7, T4->T8, T5->P7, T6->P8)
+/// while stripping redundant EEG/POL prefixes and preserving anatomical regional names.
+String standardizeChan1010(String chan) {
+  var c = chan.trim();
+  if (c.isEmpty) return c;
+  const anatomical = {'central', 'frontal', 'temporal', 'parietal', 'occipital', 'nan'};
+  if (anatomical.contains(c.toLowerCase())) {
+    return c[0].toUpperCase() + c.substring(1).toLowerCase();
+  }
+  if (c.toUpperCase().startsWith('EEG ')) {
+    c = c.substring(4).trim();
+  } else if (c.toUpperCase().startsWith('POL ')) {
+    c = c.substring(4).trim();
+  }
+  c = c.replaceAll(RegExp(r'(-Ref|-REF|\s*Ref)$', caseSensitive: false), '').trim();
+  final upper = c.toUpperCase();
+  const aliasMap = {
+    'T3': 'T7',
+    'T4': 'T8',
+    'T5': 'P7',
+    'T6': 'P8',
+  };
+  return aliasMap[upper] ?? upper;
+}
+

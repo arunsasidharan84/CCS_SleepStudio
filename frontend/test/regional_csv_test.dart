@@ -117,5 +117,41 @@ void main() {
     expect(compiled, contains('PLM_PLMS_severity'));
     expect(compiled, contains('Severe'));
   });
+
+  test('standardizeChan1010 harmonizes 10-20 to modern 10-10 channel names', () {
+    expect(standardizeChan1010('EEG T3'), 'T7');
+    expect(standardizeChan1010('EEG T4'), 'T8');
+    expect(standardizeChan1010('EEG T5'), 'P7');
+    expect(standardizeChan1010('EEG T6'), 'P8');
+    expect(standardizeChan1010('T3'), 'T7');
+    expect(standardizeChan1010('T5-Ref'), 'P7');
+    expect(standardizeChan1010('EEG C3'), 'C3');
+    expect(standardizeChan1010('Central'), 'Central');
+    expect(standardizeChan1010('Frontal'), 'Frontal');
+  });
+
+  test('compileRegionalCsvFiles harmonizes legacy and modern channel rows', () async {
+    final directory = await Directory.systemTemp.createTemp('analyse_harmonize_');
+    final oldCsv = await File(
+      '${directory.path}/rec_old_analyse_channel.csv',
+    ).writeAsString('Chan,power\nEEG T3,12.5\nEEG T5,14.2\nEEG C3,20.1\n');
+    final newCsv = await File(
+      '${directory.path}/rec_new_analyse_channel.csv',
+    ).writeAsString('Chan,power\nT7,11.8\nP7,13.9\nC3,19.5\n');
+
+    final compiled = await compileRegionalCsvFiles([oldCsv.path, newCsv.path]);
+    expect(compiled, contains('rec_old_analyse_channel.csv'));
+    expect(compiled, contains('rec_new_analyse_channel.csv'));
+    // Verify that EEG T3 was standardized to T7 and EEG T5 was standardized to P7
+    expect(compiled, contains(',T7,12.5'));
+    expect(compiled, contains(',P7,14.2'));
+    expect(compiled, contains(',C3,20.1'));
+    expect(compiled, contains(',T7,11.8'));
+    expect(compiled, contains(',P7,13.9'));
+    expect(compiled, contains(',C3,19.5'));
+    expect(compiled.contains('EEG T3'), isFalse);
+    expect(compiled.contains('EEG T5'), isFalse);
+  });
 }
+
 

@@ -358,7 +358,20 @@ pub fn compile(
     }
 
     if per_channel {
-        return channels;
+        let mut cleaned_channels = BTreeMap::new();
+        for (chan, row) in channels {
+            let key = if let Some(map) = custom_regions {
+                map.get(&chan)
+                    .or_else(|| map.get(&chan.to_ascii_uppercase()))
+                    .cloned()
+                    .unwrap_or_else(|| crate::cleaning::montage::canonical_channel_name(&chan))
+            } else {
+                crate::cleaning::montage::canonical_channel_name(&chan)
+            };
+            let key = if key.is_empty() { chan } else { key.to_ascii_uppercase() };
+            cleaned_channels.insert(key, row);
+        }
+        return cleaned_channels;
     }
 
     let resolve_region = |channel: &str| -> String {

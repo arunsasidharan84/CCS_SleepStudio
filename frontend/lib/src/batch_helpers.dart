@@ -482,12 +482,41 @@ Future<List<String>?> showChannelSelectionDialog({
         .trim();
   }
 
-  // Normalize initial selections to match available channels
+  // 10-20 to modern 10-10 canonical mapping
+  String to1010Canonical(String ch) {
+    final clean = cleanName(ch);
+    final upper = clean.toUpperCase();
+    const legacyToModern = {
+      'T3': 'T7',
+      'T4': 'T8',
+      'T5': 'P7',
+      'T6': 'P8',
+    };
+    return legacyToModern[upper] ?? clean;
+  }
+
+  String? get1010ModernAlias(String ch) {
+    final upper = cleanName(ch).toUpperCase();
+    const legacyToModern = {
+      'T3': 'T7',
+      'T4': 'T8',
+      'T5': 'P7',
+      'T6': 'P8',
+    };
+    return legacyToModern[upper];
+  }
+
+  // Normalize initial selections to match available channels with 10-10 alias support
   for (final sel in initialSelectedChannels) {
+    final selClean = cleanName(sel).toLowerCase();
+    final selCanon = to1010Canonical(sel).toLowerCase();
     for (final avail in availableChannels) {
+      final availClean = cleanName(avail).toLowerCase();
+      final availCanon = to1010Canonical(avail).toLowerCase();
       if (avail.toLowerCase() == sel.toLowerCase() ||
           avail.toLowerCase().replaceAll(' ', '') == sel.toLowerCase().replaceAll(' ', '') ||
-          cleanName(avail).toLowerCase() == sel.toLowerCase()) {
+          availClean == selClean ||
+          availCanon == selCanon) {
         selected.add(avail);
         if (singleSelect) break;
       }
@@ -496,6 +525,7 @@ Future<List<String>?> showChannelSelectionDialog({
   }
 
   String filterQuery = '';
+  bool use1010Standard = true;
 
   return showDialog<List<String>>(
     context: context,
@@ -504,9 +534,17 @@ Future<List<String>?> showChannelSelectionDialog({
         builder: (context, setState) {
           final displayedChannels = filterQuery.isEmpty
               ? availableChannels
-              : availableChannels
-                  .where((c) => c.toLowerCase().contains(filterQuery.toLowerCase()))
-                  .toList();
+              : availableChannels.where((c) {
+                  final query = filterQuery.toLowerCase();
+                  if (c.toLowerCase().contains(query)) return true;
+                  final clean = cleanName(c).toLowerCase();
+                  if (clean.contains(query)) return true;
+                  final modern = get1010ModernAlias(c)?.toLowerCase();
+                  if (modern != null && modern.contains(query)) return true;
+                  final canon = to1010Canonical(c).toLowerCase();
+                  if (canon.contains(query)) return true;
+                  return false;
+                }).toList();
 
           return AlertDialog(
             title: Row(
@@ -635,6 +673,7 @@ Future<List<String>?> showChannelSelectionDialog({
                                 children: displayedChannels.map((channel) {
                                   final isSel = selected.contains(channel);
                                   final isEeg = isLikelyEegChannel(channel);
+                                  final modernAlias = get1010ModernAlias(channel);
                                   return FilterChip(
                                     label: Row(
                                       mainAxisSize: MainAxisSize.min,
@@ -646,7 +685,26 @@ Future<List<String>?> showChannelSelectionDialog({
                                             color: isSel ? Colors.blue.shade900 : Colors.black87,
                                           ),
                                         ),
-                                        if (isEeg) ...[
+                                        if (modernAlias != null) ...[
+                                          const SizedBox(width: 4),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                            decoration: BoxDecoration(
+                                              color: isSel ? Colors.teal.shade200 : Colors.teal.shade50,
+                                              borderRadius: BorderRadius.circular(3),
+                                              border: Border.all(color: Colors.teal.shade300, width: 0.5),
+                                            ),
+                                            child: Text(
+                                              modernAlias,
+                                              style: TextStyle(
+                                                fontSize: 9,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.teal.shade900,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                        if (isEeg && modernAlias == null) ...[
                                           const SizedBox(width: 4),
                                           Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
@@ -685,6 +743,30 @@ Future<List<String>?> showChannelSelectionDialog({
                             ),
                     ),
                   ),
+                  const SizedBox(height: 8),
+                  InkWell(
+                    onTap: () => setState(() => use1010Standard = !use1010Standard),
+                    borderRadius: BorderRadius.circular(4),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Checkbox(
+                            value: use1010Standard,
+                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
+                            onChanged: (val) => setState(() => use1010Standard = val ?? true),
+                          ),
+                          const SizedBox(width: 4),
+                          const Text(
+                            'Standardize to 10-10 names (T3→T7, T4→T8, T5→P7, T6→P8, clean prefix)',
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Colors.black87),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -701,6 +783,9 @@ Future<List<String>?> showChannelSelectionDialog({
                 onPressed: () {
                   // For channels that have an alias bracket e.g. "EEG X1 [EOG1]", extract the primary or alias
                   String cleanResult(String ch) {
+                    if (use1010Standard) {
+                      return to1010Canonical(ch);
+                    }
                     final bracket = RegExp(r'\[(.*?)\]').firstMatch(ch);
                     if (bracket != null && bracket.group(1)!.trim().isNotEmpty) {
                       return bracket.group(1)!.trim();

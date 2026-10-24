@@ -4,6 +4,21 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.50.1]
+*   **Restored Multi-Channel Selection for CAP EEG Analysis:**
+    - Restored multi-channel selection support (`singleSelect: false`) for the CAP EEG channel picker across both the PSG polygraphy workflow and the batch feature extraction cards.
+    - Allows providing multiple comma-separated priority candidate channels (e.g. `C4, C3, CZ`) for automatic fallback across cohort recordings.
+*   **10-20 to 10-10 Channel Nomenclature Harmonization:**
+    - Interactive Channel Picker:
+      - Channel chips with legacy 10-20 names display modern 10-10 badges (`EEG T3 [T7]`, `EEG T4 [T8]`, `EEG T5 [P7]`, `EEG T6 [P8]`).
+      - Bidirectional alias search: searching `T7` matches `EEG T3`, searching `P7` matches `EEG T5`, searching `T8` matches `EEG T4`, searching `P8` matches `EEG T6`.
+      - Added `[✔] Standardize to 10-10 names (T3→T7, T4→T8, T5→P7, T6→P8, clean prefix)` toggle to output clean prefix-free standard names.
+    - Master Sheet Compiler:
+      - `compileRegionalCsvFiles` automatically standardizes the `Chan` column across all input CSVs, mapping legacy `T3/T4/T5/T6` to modern `T7/T8/P7/P8` and stripping `EEG `/`POL ` prefixes.
+      - Cohorts containing both old and new montage conventions merge seamlessly into unified rows without splitting.
+    - AnalyseNidra Engine:
+      - Per-channel extraction mode automatically canonicalizes channel keys to uppercase 10-10 names (`T7, T8, P7, P8`, `C3, C4...`), eliminating hardware prefixes and honoring custom region maps when specified.
+
 ## [1.50.0]
 *   **In-App Rich Markdown & Scientific Math Release Notes Viewer:**
     - Integrated native markdown parsing via `ReleaseNotesMarkdownView` in the application update dialog.

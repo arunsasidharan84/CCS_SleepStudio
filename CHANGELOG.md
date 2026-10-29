@@ -4,6 +4,14 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.50.2]
+*   **Prevent Batch Metadata Key Column Collisions & Low-Cardinality Collapsing:**
+    - **High-Cardinality Heuristic in `guessKeyColumn`**: Evaluates distinct value uniqueness ratio across metadata rows, automatically penalizing categorical columns (`groupID`, `ageID`, `Gender`, `Status`, `Slept_well`) from being selected as primary matching keys.
+    - **Distinct Subject Match Scoring**: Evaluates candidate columns against cohort recordings by the number of *distinct metadata rows matched*, ensuring unique identifier columns (`napID`, `Subject_Code`, `subject_id`) decisively win over categorical grouping columns that collapse an entire cohort onto 1 or 2 rows.
+    - **Delimiter-Bounded Token Matching in `matchRecording`**: Prioritizes delimiter-bounded token matches (e.g. `Nap-122` bounded by `_` or `-` in recording filenames) with higher scoring, preventing short categorical strings (like `CNT` or `MCI`) from capturing unrelated files via greedy substring containment.
+    - **Numeric Substring Safeguard**: Restricts purely numeric keys (e.g. `Sl.No.`) from greedy substring matching to avoid accidental collisions with dates, timestamps, or hardware indices.
+
+
 ## [1.50.1]
 *   **Restored Multi-Channel Selection for CAP EEG Analysis:**
     - Restored multi-channel selection support (`singleSelect: false`) for the CAP EEG channel picker across both the PSG polygraphy workflow and the batch feature extraction cards.

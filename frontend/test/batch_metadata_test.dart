@@ -90,4 +90,41 @@ void main() {
     expect(row[header.indexOf('Group')], 'Active');
     expect(row[header.indexOf('Power')], '1.5');
   });
+
+  test('guessKeyColumn rejects low-cardinality groupID/ageID and picks specific identifier napID', () async {
+    final csv = File('${dir.path}/cohort_meta.csv')
+      ..writeAsStringSync(
+        'Sl.No.,groupID,ageID,napID,Subject_Code,Subject_Name,Age,Gender\n'
+        '1,CNT,YNG,Nap-002,CNT_YNG_Nap-002,Rahul,34,Male\n'
+        '2,CNT,MID,Nap-005,CNT_MID_Nap-005,Jini,39,Female\n'
+        '3,CNT,MID,Nap-122,CNT_MID_Nap-122,Rahmath,45,Female\n'
+        '4,MCI,OLD,Nap-042,MCI_OLD_Nap-042,Channabasappa,68,Male\n'
+        '5,MCI,OLD,Nap-088,MCI_OLD_Nap-088,Suresh,71,Male\n',
+      );
+    final t = await readBatchMetadataFile(csv.path);
+    final recordings = [
+      '/nas/CNT_YNG_Nap-002_clean.edf',
+      '/nas/CNT_MID_ASN_Nap-005_clean.edf',
+      '/nas/CNT_MID_EX_Nap-122_D_FA73121K_1-1+.edf',
+      '/nas/MCI_OLD_Nap-042_clean.edf',
+      '/nas/MCI_OLD_Nap-088_clean.edf',
+    ];
+
+    final guessedKey = guessKeyColumn(t.headers, t.rows, recordings);
+    expect(guessedKey, 'napID');
+
+    t.keyColumn = guessedKey;
+    final match122 = t.lookup('/nas/CNT_MID_EX_Nap-122_D_FA73121K_1-1+.edf');
+    expect(match122, isNotNull);
+    expect(match122!['Subject_Name'], 'Rahmath');
+    expect(match122['napID'], 'Nap-122');
+
+    final match002 = t.lookup('/nas/CNT_YNG_Nap-002_clean.edf');
+    expect(match002, isNotNull);
+    expect(match002!['Subject_Name'], 'Rahul');
+
+    final match042 = t.lookup('/nas/MCI_OLD_Nap-042_clean.edf');
+    expect(match042, isNotNull);
+    expect(match042!['Subject_Name'], 'Channabasappa');
+  });
 }

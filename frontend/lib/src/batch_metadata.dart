@@ -63,12 +63,22 @@ class BatchMetadataTable {
       } else if (folders.contains(key)) {
         score = 900 - folders.indexOf(key);
         h = 'folder name';
-      } else if (key.length >= 3 && stem.contains(key)) {
-        score = 500 + key.length;
-        h = 'part of file name';
-      } else if (key.length >= 3 && folders.any((f) => f.contains(key))) {
-        score = 300 + key.length;
-        h = 'part of folder name';
+      } else {
+        final isStemToken = RegExp('(^|[^a-zA-Z0-9])${RegExp.escape(key)}([^a-zA-Z0-9]|\$)').hasMatch(stem);
+        if (key.length >= 3 && isStemToken) {
+          score = 700 + key.length * 2;
+          h = 'part of file name';
+        } else if (key.length >= 3 && !RegExp(r'^\d+$').hasMatch(key) && stem.contains(key)) {
+          score = 400 + key.length;
+          h = 'part of file name';
+        } else if (key.length >= 3 &&
+            folders.any((f) => RegExp('(^|[^a-zA-Z0-9])${RegExp.escape(key)}([^a-zA-Z0-9]|\$)').hasMatch(f))) {
+          score = 500 + key.length;
+          h = 'part of folder name';
+        } else if (key.length >= 3 && !RegExp(r'^\d+$').hasMatch(key) && folders.any((f) => f.contains(key))) {
+          score = 300 + key.length;
+          h = 'part of folder name';
+        }
       }
       if (score > bestScore) {
         bestScore = score;
@@ -105,20 +115,105 @@ String normalizeRecordingKey(String name) {
   return s.trim();
 }
 
-/// Suggests the key column: the one whose values match the most recordings.
+/// Suggests the key column: the one with distinct subject identifiers that match the most recordings.
 String guessKeyColumn(List<String> headers, List<Map<String, String>> rows, List<String> recordings) {
   if (headers.isEmpty) return '';
+  if (rows.isEmpty) return headers.first;
+
+  // Regex patterns for identifier names vs. categorical/grouping names
+  final isCategoricalName = RegExp(
+    r'\b(group|cohort|arm|treatment|condition|gender|sex|status|stage|age|date|time|site|center|device|note|remark|comment|visit|education|slept)\b',
+    caseSensitive: false,
+  );
+  final isCategoricalId = RegExp(
+    r'^(group|cohort|arm|gender|sex|status|stage|age|date|site)[_\s-]?id$',
+    caseSensitive: false,
+  );
+  final isStrongKeyName = RegExp(
+    r'^(file|filename|filepath|record|recording|edf|eeg|subject|participant|patient|subject[_\s-]?id|participant[_\s-]?id|patient[_\s-]?id|record[_\s-]?id|file[_\s-]?id|nap[_\s-]?id)$',
+    caseSensitive: false,
+  );
+  final isWeakKeyName = RegExp(
+    r'(file|record|recording|edf|eeg|subject|participant|patient|nap)',
+    caseSensitive: false,
+  );
+
   var best = headers.first;
-  var bestHits = -1;
+  var bestScore = -1000.0;
+
   for (final h in headers) {
-    final t = BatchMetadataTable(sourcePath: '', headers: headers, rows: rows, keyColumn: h);
-    final hits = recordings.where((r) => t.lookup(r) != null).length;
-    final nameBonus = RegExp(r'file|record|edf|eeg|subject|id', caseSensitive: false).hasMatch(h) ? 1 : 0;
-    if (hits * 2 + nameBonus > bestHits) {
-      bestHits = hits * 2 + nameBonus;
+    final trimmed = h.trim();
+    if (trimmed.isEmpty) continue;
+
+    // 1. Uniqueness / Cardinality check
+    final nonBlankValues = rows.map((r) => (r[h] ?? '').trim()).where((s) => s.isNotEmpty).toList();
+    if (nonBlankValues.isEmpty) continue;
+
+    final uniqueValues = nonBlankValues.map(normalizeRecordingKey).where((s) => s.isNotEmpty).toSet();
+    final uniquenessRatio = uniqueValues.length / nonBlankValues.length;
+
+    // Categorical columns with very low cardinality (e.g. groupID with 2 values across 100 rows)
+    // must never be chosen as primary keys.
+    final isLowCardinality = nonBlankValues.length >= 4 && (uniqueValues.length <= 3 || uniquenessRatio < 0.20);
+    final isCategorical = isCategoricalName.hasMatch(trimmed) || isCategoricalId.hasMatch(trimmed);
+
+    // 2. Name bonus / penalty
+    double nameScore = 0.0;
+    if (isStrongKeyName.hasMatch(trimmed)) {
+      nameScore += 10.0;
+    } else if (isWeakKeyName.hasMatch(trimmed) && !isCategorical) {
+      nameScore += 5.0;
+    }
+    if (isCategorical) {
+      nameScore -= 15.0;
+    }
+    if (trimmed.toLowerCase() == 'sl.no.' || trimmed.toLowerCase() == 'sl no' || trimmed.toLowerCase() == 'sno') {
+      nameScore -= 5.0; // Row numbers are not file keys
+    }
+
+    // 3. Matching recordings
+    int matchCount = 0;
+    final matchedRows = <int>{};
+    if (recordings.isNotEmpty) {
+      final t = BatchMetadataTable(sourcePath: '', headers: headers, rows: rows, keyColumn: h);
+      for (final r in recordings) {
+        final match = t.matchRecording(r);
+        if (match != null) {
+          matchCount++;
+          final idx = rows.indexOf(match.row);
+          if (idx >= 0) matchedRows.add(idx);
+        }
+      }
+    }
+
+    // 4. Combined scoring:
+    // Distinct matched rows is the single most important metric: each recording should map to
+    // a unique subject, not 100 recordings collapsing onto 1 or 2 rows.
+    final distinctMatches = matchedRows.length;
+    double score;
+
+    if (recordings.isNotEmpty) {
+      if (isLowCardinality && distinctMatches <= 3) {
+        // Severe penalty for low-cardinality collapsing columns
+        score = -500.0 + distinctMatches;
+      } else {
+        score = (distinctMatches * 20.0) + (matchCount * 2.0) + (uniquenessRatio * 15.0) + nameScore;
+      }
+    } else {
+      // No recordings loaded yet: rely on column name and uniqueness
+      if (isLowCardinality) {
+        score = -500.0;
+      } else {
+        score = (uniquenessRatio * 20.0) + nameScore;
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
       best = h;
     }
   }
+
   return best;
 }
 

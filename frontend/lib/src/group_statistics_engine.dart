@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'version.dart';
 
 /// Statistical distributions and mathematical functions implemented in pure Dart.
 class StatMath {
@@ -946,6 +947,8 @@ class GroupStatsEngine {
       outDir.createSync(recursive: true);
     }
 
+    final appVer = await getAppVersionString();
+
     // Write CSV files
     final summaryCsvFile = File('${outDir.path}/GroupStats_Summary.csv');
     final posthocCsvFile = File('${outDir.path}/GroupStats_PostHoc.csv');
@@ -953,31 +956,31 @@ class GroupStatsEngine {
 
     // Summary CSV
     final sumBuf = StringBuffer();
-    sumBuf.writeln('Metric,Model_Type,Factor_Term,F_Stat,p_Value,df_Num,df_Denom,Partial_Eta_Sq,N_Obs,N_Subjects');
+    sumBuf.writeln('Metric,Model_Type,Factor_Term,F_Stat,p_Value,df_Num,df_Denom,Partial_Eta_Sq,N_Obs,N_Subjects,App_Version');
     for (final res in resultsList) {
       final m = res['metric'];
       final mType = res['model_type'];
       final nObs = res['n_obs'];
       final nSubj = res['n_subjects'];
       for (final eff in (res['model_effects'] as List<Map<String, dynamic>>)) {
-        sumBuf.writeln('"$m","$mType","${eff['term']}",${eff['f_stat']},${eff['p_value']},${eff['df_num']},${eff['df_denom']},${eff['eta_sq']},$nObs,$nSubj');
+        sumBuf.writeln('"$m","$mType","${eff['term']}",${eff['f_stat']},${eff['p_value']},${eff['df_num']},${eff['df_denom']},${eff['eta_sq']},$nObs,$nSubj,"$appVer"');
       }
     }
     await summaryCsvFile.writeAsString(sumBuf.toString());
 
     // Post-hoc CSV
     final postBuf = StringBuffer();
-    postBuf.writeln('Metric,Comparison,Group_A,Group_B,Mean_A,Mean_B,Diff,SE,t_Stat,df,p_Raw,p_FDR,Cohen_d,Significant');
+    postBuf.writeln('Metric,Comparison,Group_A,Group_B,Mean_A,Mean_B,Diff,SE,t_Stat,df,p_Raw,p_FDR,Cohen_d,Significant,App_Version');
     for (final ph in allPosthocList) {
-      postBuf.writeln('"${ph['metric']}","${ph['comparison']}","${ph['group_a']}","${ph['group_b']}",${ph['mean_a']},${ph['mean_b']},${ph['diff']},${ph['se']},${ph['t_stat']},${ph['df']},${ph['p_raw']},${ph['p_fdr']},${ph['cohen_d']},${ph['significant']}');
+      postBuf.writeln('"${ph['metric']}","${ph['comparison']}","${ph['group_a']}","${ph['group_b']}",${ph['mean_a']},${ph['mean_b']},${ph['diff']},${ph['se']},${ph['t_stat']},${ph['df']},${ph['p_raw']},${ph['p_fdr']},${ph['cohen_d']},${ph['significant']},"$appVer"');
     }
     await posthocCsvFile.writeAsString(postBuf.toString());
 
     // Descriptives CSV
     final descBuf = StringBuffer();
-    descBuf.writeln('Metric,Group,Subgroup,N,Mean,Std,SEM,Median,IQR,Q1,Q3,Min,Max');
+    descBuf.writeln('Metric,Group,Subgroup,N,Mean,Std,SEM,Median,IQR,Q1,Q3,Min,Max,App_Version');
     for (final d in allDescriptivesList) {
-      descBuf.writeln('"${d['metric']}","${d['group']}","${d['subgroup'] ?? 'ALL'}",${d['n']},${d['mean']},${d['std']},${d['sem']},${d['median']},${d['iqr']},${d['q1']},${d['q3']},${d['min']},${d['max']}');
+      descBuf.writeln('"${d['metric']}","${d['group']}","${d['subgroup'] ?? 'ALL'}",${d['n']},${d['mean']},${d['std']},${d['sem']},${d['median']},${d['iqr']},${d['q1']},${d['q3']},${d['min']},${d['max']},"$appVer"');
     }
     await descriptivesCsvFile.writeAsString(descBuf.toString());
 

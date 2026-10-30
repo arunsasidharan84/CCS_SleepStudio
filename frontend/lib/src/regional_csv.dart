@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'batch_metadata.dart';
 import 'edf_loader.dart';
+import 'version.dart';
 
 List<String> parseCsvLine(String line) {
   final fields = <String>[];
@@ -64,11 +65,13 @@ Future<List<String>> regionalCsvFilesWithoutData(List<String> paths) async {
 /// Compiles regional CSVs into one master sheet.
 ///
 /// With [metadata], each row gets the matching metadata columns (matched on
+/// With [metadata], each row gets the matching metadata columns (matched on
 /// the recording in [recordingPaths] when known, else on the CSV's name).
 Future<String> compileRegionalCsvFiles(
   List<String> paths, {
   BatchMetadataTable? metadata,
   Map<String, String> recordingPaths = const {},
+  String? appVersion,
 }) async {
   if (paths.isEmpty) {
     throw ArgumentError('Select at least one AnalyseNidra regional CSV file.');
@@ -79,6 +82,7 @@ Future<String> compileRegionalCsvFiles(
     'Subject Identifier',
     'Subject Details',
     'Recording Date',
+    'App Version',
   ];
   final headers = <String>[...fixed];
   final metaHeader = <String, String>{};
@@ -89,6 +93,14 @@ Future<String> compileRegionalCsvFiles(
       headers.add(out);
     }
   }
+
+  String resolvedAppVersion = (appVersion != null && appVersion.trim().isNotEmpty)
+      ? appVersion.trim()
+      : '';
+  if (resolvedAppVersion.isEmpty) {
+    resolvedAppVersion = await getAppVersionString();
+  }
+
   final rows = <Map<String, String>>[];
 
   for (final path in paths) {
@@ -157,8 +169,12 @@ Future<String> compileRegionalCsvFiles(
 
     // Also persist companion metrics directly into the individual regional CSV
     // so standalone inspections of *_analyse_regional.csv contain them.
-    if (companionSummary.isNotEmpty) {
-      await updateRegionalCsvWithCapMetrics(file, companionSummary);
+    if (companionSummary.isNotEmpty || resolvedAppVersion.isNotEmpty) {
+      await updateRegionalCsvWithCapMetrics(
+        file,
+        companionSummary,
+        appVersion: resolvedAppVersion,
+      );
     }
 
     for (final row in parsed) {
@@ -175,6 +191,9 @@ Future<String> compileRegionalCsvFiles(
       for (final compKey in companionSummary.keys) {
         if (!headers.contains(compKey)) headers.add(compKey);
       }
+      final rowAppVer = (processedRow['App Version'] ?? '').isNotEmpty
+          ? processedRow['App Version']!
+          : resolvedAppVersion;
       rows.add({
         'source_file': file.uri.pathSegments.last,
         'source_path': file.absolute.path,
@@ -185,6 +204,7 @@ Future<String> compileRegionalCsvFiles(
           for (final e in meta.entries) metaHeader[e.key] ?? e.key: e.value,
         ...processedRow,
         ...companionSummary,
+        'App Version': rowAppVer,
       });
     }
   }
@@ -272,20 +292,22 @@ Map<String, String> extractCompanionJsonSummary(
   return summary;
 }
 
-/// Injects or updates companion CAP metrics directly into a regional CSV file.
+/// Injects or updates companion CAP metrics and app version directly into a regional CSV file.
 Future<void> updateRegionalCsvWithCapMetrics(
   File file,
-  Map<String, String> capSummary,
-) async {
-  updateRegionalCsvWithCapMetricsSync(file, capSummary);
+  Map<String, String> capSummary, {
+  String? appVersion,
+}) async {
+  updateRegionalCsvWithCapMetricsSync(file, capSummary, appVersion: appVersion);
 }
 
-/// Synchronously injects or updates companion CAP metrics directly into a regional CSV file.
+/// Synchronously injects or updates companion CAP metrics and app version directly into a regional CSV file.
 void updateRegionalCsvWithCapMetricsSync(
   File file,
-  Map<String, String> capSummary,
-) {
-  if (capSummary.isEmpty || !file.existsSync()) return;
+  Map<String, String> capSummary, {
+  String? appVersion,
+}) {
+  if ((capSummary.isEmpty && (appVersion == null || appVersion.isEmpty)) || !file.existsSync()) return;
   try {
     final raw = file.readAsStringSync();
     final parsed = parseCsvTable(raw);
@@ -296,10 +318,17 @@ void updateRegionalCsvWithCapMetricsSync(
     for (final k in capSummary.keys) {
       if (!newHeaders.contains(k)) newHeaders.add(k);
     }
+    if (appVersion != null && appVersion.isNotEmpty && !newHeaders.contains('App Version')) {
+      newHeaders.add('App Version');
+    }
 
     final buf = StringBuffer()..writeln(newHeaders.map(_escapeCsv).join(','));
     for (final row in parsed) {
-      final combined = {...row, ...capSummary};
+      final combined = {
+        ...row,
+        ...capSummary,
+        if (appVersion != null && appVersion.isNotEmpty) 'App Version': appVersion,
+      };
       buf.writeln(newHeaders.map((h) => _escapeCsv(combined[h] ?? '')).join(','));
     }
     file.writeAsStringSync(buf.toString());

@@ -13,6 +13,7 @@ import 'package:flutter/rendering.dart';
 import 'autoscore_command.dart';
 import 'models.dart';
 import 'scoring_io.dart';
+import 'version.dart';
 
 /// The five scored stages in the order used by the confusion matrix.
 const kCompareStages = [
@@ -343,16 +344,17 @@ class _MultiScoringCompareDialogState extends State<MultiScoringCompareDialog> {
       allowedExtensions: ['csv'],
     );
     if (out == null) return;
+    final appVer = await getAppVersionString();
     final ref = _entries[_reference];
     final b = StringBuffer(
-      'Reference,Scoring,Compared_epochs,Accuracy_pct,Cohens_kappa,Macro_F1,TST_min,'
+      'Reference,Scoring,App_Version,Compared_epochs,Accuracy_pct,Cohens_kappa,Macro_F1,TST_min,'
       'F1_W,F1_N1,F1_N2,F1_N3,F1_REM,Verdict\n',
     );
     String q(String s) => '"${s.replaceAll('"', '""')}"';
     String f(double v, [int d = 3]) => v.isNaN ? '' : v.toStringAsFixed(d);
     for (final (i, a) in ranked) {
       b.write(
-        '${q(ref.label)},${q(_entries[i].label)},${a.comparedEpochs},${f(a.accuracy * 100, 1)},'
+        '${q(ref.label)},${q(_entries[i].label)},${q(appVer)},${a.comparedEpochs},${f(a.accuracy * 100, 1)},'
         '${f(a.kappa)},${f(a.macroF1)},${f(a.tstMinutes, 1)},'
         '${kCompareStages.map((s) => f(a.f1[s] ?? double.nan)).join(',')},${a.verdict}\n',
       );

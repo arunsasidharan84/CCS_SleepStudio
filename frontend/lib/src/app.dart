@@ -45,6 +45,7 @@ import 'legacy_file_migration.dart';
 import 'rem_detection.dart';
 import 'cardiac_analysis.dart';
 import 'pattern_search.dart';
+import 'version.dart';
 
 const double _plotLeftPadding = 90.0;
 const bool buildLite = bool.fromEnvironment('LITE_BUILD', defaultValue: false);
@@ -226,16 +227,12 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
   Future<void> _loadAppVersion() async {
     try {
-      final info = await PackageInfo.fromPlatform();
+      final v = await getAppVersionString();
       if (!mounted) return;
       setState(() {
-        _appVersion =
-            'v${info.version}'
-            '${info.buildNumber.isEmpty ? '' : ' (build ${info.buildNumber})'}';
+        _appVersion = v;
       });
-    } on MissingPluginException {
-      // Package metadata is unavailable in widget tests without a host runner.
-    }
+    } catch (_) {}
   }
 
   Future<void> _checkForUpdatesAtStartup() async {
@@ -3078,6 +3075,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
                   existingRegionalFiles,
                   metadata: _batchMetadata,
                   recordingPaths: _regionalRecordingMap(),
+                  appVersion: _appVersion,
                 );
                 await File(masterCsvPath).writeAsString(compiled);
                 if (mounted) {
@@ -3307,6 +3305,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         paths,
         metadata: _batchMetadata,
         recordingPaths: _regionalRecordingMap(),
+        appVersion: _appVersion,
       );
       await File(outputPath).writeAsString(compiled);
       _setStatus(
@@ -3854,8 +3853,9 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     _setStatus('Running batch scoring comparison for ${_batchComparisonPairs.length} pair(s)…');
 
     final csvRows = <String>[];
+    final appVer = _appVersion.isNotEmpty ? _appVersion : 'v$kAppVersionFallback';
     csvRows.add(
-      'Reference_File,Comparison_File,Total_Epochs,Matched_Epochs,'
+      'Reference_File,Comparison_File,App_Version,Total_Epochs,Matched_Epochs,'
       'Overall_Agreement_Pct,Cohens_Kappa,Kappa_Strength,'
       'Wake_F1,N1_F1,N2_F1,N3_F1,REM_F1,'
       'Wake_Sensitivity,N1_Sensitivity,N2_Sensitivity,N3_Sensitivity,REM_Sensitivity',
@@ -3986,7 +3986,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
         final baseB = File(fileB).uri.pathSegments.last;
 
         csvRows.add(
-          '$baseA,$baseB,${metrics.totalEpochs},${metrics.comparedEpochs},'
+          '$baseA,$baseB,$appVer,${metrics.totalEpochs},${metrics.comparedEpochs},'
           '${metrics.overallAgreement.toStringAsFixed(2)},${metrics.cohensKappa.toStringAsFixed(4)},${metrics.kappaStrength},'
           '${(f1[SleepStage.wake] ?? 0).toStringAsFixed(3)},${(f1[SleepStage.n1] ?? 0).toStringAsFixed(3)},'
           '${(f1[SleepStage.n2] ?? 0).toStringAsFixed(3)},${(f1[SleepStage.n3] ?? 0).toStringAsFixed(3)},'
@@ -10202,6 +10202,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
           usable,
           metadata: _batchMetadata,
           recordingPaths: recordingFor,
+          appVersion: _appVersion,
         );
         await File(master).writeAsString(compiledContent);
         // Also produce companion PSG summary if polygraphy reports were present
@@ -10312,9 +10313,11 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
 
       final meta = _batchMetadata;
       final metaRow = meta?.lookup(path);
+      final appVer = _appVersion.isNotEmpty ? _appVersion : 'v$kAppVersionFallback';
       rows.add([
         path,
         r.scoring,
+        appVer,
         if (meta != null)
           for (final h in meta.headers) metaRow?[h] ?? '',
         for (final c in _kBatchPsgColumns) cell(c.$1, c.$2, c.$3),
@@ -10327,6 +10330,7 @@ class _CCSSleepStudioHomeState extends State<CCSSleepStudioHome>
     final header = [
       'recording',
       'scoring',
+      'App_Version',
       if (_batchMetadata != null) ..._batchMetadata!.headers,
       for (final c in _kBatchPsgColumns)
         c.$1 == 'cap'
@@ -19360,6 +19364,7 @@ class _BatchPsgDialogState extends State<_BatchPsgDialog> {
   Future<void> _run() async {
     final exe = detectAnalyseNidraExecutable();
     final cfg = widget.settings;
+    final appVer = await getAppVersionString();
     final started = DateTime.now();
     final results = <BatchFileResult>[];
     final rows = <List<String>>[];
@@ -19486,6 +19491,7 @@ class _BatchPsgDialogState extends State<_BatchPsgDialog> {
       rows.add([
         path,
         scoring ?? '',
+        appVer,
         if (meta != null)
           for (final h in meta.headers) metaRow?[h] ?? '',
         for (final c in _kBatchPsgColumns) cell(c.$1, c.$2, c.$3),
@@ -19506,6 +19512,7 @@ class _BatchPsgDialogState extends State<_BatchPsgDialog> {
       final header = [
         'recording',
         'scoring',
+        'App_Version',
         if (widget.settings.metadata != null) ...widget.settings.metadata!.headers,
         for (final c in _kBatchPsgColumns)
           c.$1 == 'cap'

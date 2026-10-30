@@ -4,6 +4,15 @@ All notable changes to **CCS Sleep Studio** are documented in this file.
 
 ---
 
+## [1.50.3]
+*   **App Version Traceability in All CSV Exports:**
+    - Embedded `App Version` column across all compiled master sheets (`AnalyseNidra_channel_master_sheet_*.csv`, `AnalyseNidra_regional_master_sheet_*.csv`) alongside `Recording Date` for complete auditability and long-term traceback.
+    - Added version provenance logging to PSG batch summaries (`psg_batch_summary_*.csv`), Batch Scoring Comparison Master tables (`Batch_Scoring_Comparison_Master_*.csv`), hypnogram comparison exports (`scoring_comparison.csv`), and group statistical reports (`GroupStats_Summary.csv`, `GroupStats_PostHoc.csv`, `GroupStats_Descriptives.csv`).
+    - Individual regional and channel CSVs automatically record the version upon collation and companion metrics injection.
+*   **Batch Macro Architecture & Feature Collation Integrity:**
+    - Ensured complete macro sleep parameter consistency (TRT, TST, WASO, SOL, Sleep Efficiency, stage durations W, N1, N2, N3, REM) across pipeline collation workflows.
+    - Verified strict isolation between cohort demographic metadata lookups and raw hypnogram sleep architecture metrics to prevent unintended column overwrites.
+
 ## [1.50.2]
 *   **Prevent Batch Metadata Key Column Collisions & Low-Cardinality Collapsing:**
     - **High-Cardinality Heuristic in `guessKeyColumn`**: Evaluates distinct value uniqueness ratio across metadata rows, automatically penalizing categorical columns (`groupID`, `ageID`, `Gender`, `Status`, `Slept_well`) from being selected as primary matching keys.

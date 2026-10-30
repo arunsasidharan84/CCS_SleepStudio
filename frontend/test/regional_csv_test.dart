@@ -24,14 +24,15 @@ void main() {
     expect(
       compiled,
       contains(
-        'source_file,source_path,Subject Identifier,Subject Details,Recording Date,Chan,N2_ACW',
+        'source_file,source_path,Subject Identifier,Subject Details,Recording Date,App Version,Chan,N2_ACW',
       ),
     );
     expect(compiled, contains('first.csv'));
     expect(
       compiled,
-      contains('second.csv,${second.absolute.path},,,,Frontal,0.18'),
+      contains('second.csv,${second.absolute.path},,,,'),
     );
+    expect(compiled, contains('Frontal,0.18'));
   });
 
   test('resolves regional CSV source path to matching EDF path', () async {
